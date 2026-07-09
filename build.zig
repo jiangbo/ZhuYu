@@ -68,7 +68,7 @@ fn createShader(
 ) !*std.Build.Module {
     return try sk.shdc.createModule(b, "shader", sokolModule, .{
         .shdc_dep = sokol.builder.dependency("shdc", .{}),
-        .input = "src/shader/quad.glsl",
+        .input = "src/internal/quad.glsl",
         .output = "quad.glsl.zig",
         .slang = .{
             .glsl410 = true,
