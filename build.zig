@@ -1,6 +1,31 @@
 const std = @import("std");
 const sk = @import("sokol");
 
+pub const EmLinkOptions = sk.EmLinkOptions;
+
+pub const defaultEmLinkOptions: EmLinkOptions = .{
+    .target = undefined,
+    .optimize = undefined,
+    .lib_main = undefined,
+    .emsdk = undefined,
+    .shell_file_path = null,
+};
+
+pub const App = struct {
+    module: *std.Build.Module,
+    artifact: *std.Build.Step.Compile,
+};
+
+pub const AppOption = struct {
+    name: []const u8,
+    root_source_file: std.Build.LazyPath,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zhuyu: *std.Build.Dependency,
+    imports: []const std.Build.Module.Import = &.{},
+    em_link: EmLinkOptions = defaultEmLinkOptions,
+};
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -48,17 +73,83 @@ pub fn build(b: *std.Build) !void {
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
-// Web 链接需要的 zhu 参数。
-pub fn webArgs(
+// 添加一个使用 ZhuYu 的应用目标。
+pub fn addApp(b: *std.Build, options: AppOption) !App {
+    const mod = b.createModule(.{
+        .root_source_file = options.root_source_file,
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = options.imports,
+    });
+
+    if (!options.target.result.cpu.arch.isWasm()) {
+        return addNativeApp(b, options, mod);
+    }
+
+    return try addWebApp(b, options, mod);
+}
+
+fn addNativeApp(
     b: *std.Build,
-    zhu: *std.Build.Dependency,
-) ![]const []const u8 {
-    const args = try b.allocator.alloc([]const u8, 4);
-    args[0] = "--js-library";
-    args[1] = zhu.path("src/internal/em.js").getPath(b);
-    args[2] = "--pre-js";
-    args[3] = try emJsCacheStamp(b);
-    return args;
+    options: AppOption,
+    mod: *std.Build.Module,
+) App {
+    const exe = b.addExecutable(.{
+        .name = options.name,
+        .root_module = mod,
+    });
+    if (options.optimize != .Debug) exe.subsystem = .Windows;
+
+    b.installArtifact(exe);
+
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run.addArgs(args);
+    b.step("run", "Run the app").dependOn(&run.step);
+
+    return .{ .module = mod, .artifact = exe };
+}
+
+fn addWebApp(
+    b: *std.Build,
+    options: AppOption,
+    mod: *std.Build.Module,
+) !App {
+    const sokol = options.zhuyu.builder.dependency("sokol", .{
+        .target = options.target,
+        .optimize = options.optimize,
+    });
+    const emsdk = sokol.builder.dependency("emsdk", .{});
+    const emsdkStep = sk.emSdkInstallStep(b, emsdk, .{});
+    b.step("install-emsdk", "install emsdk").dependOn(emsdkStep);
+
+    const lib = b.addLibrary(.{
+        .name = options.name,
+        .root_module = mod,
+    });
+
+    var emLink = options.em_link;
+    emLink.target = options.target;
+    emLink.optimize = options.optimize;
+    emLink.lib_main = lib;
+    emLink.emsdk = emsdk;
+
+    const extraArgs = try b.allocator.alloc(
+        []const u8,
+        emLink.extra_args.len + 4,
+    );
+    @memcpy(extraArgs[0..emLink.extra_args.len], emLink.extra_args);
+    extraArgs[emLink.extra_args.len + 0] = "--js-library";
+    extraArgs[emLink.extra_args.len + 1] =
+        options.zhuyu.path("src/internal/em.js").getPath(b);
+    extraArgs[emLink.extra_args.len + 2] = "--pre-js";
+    extraArgs[emLink.extra_args.len + 3] = try emJsCacheStamp(b);
+    emLink.extra_args = extraArgs;
+
+    const linkStep = try sk.emLinkStep(b, emLink);
+    b.getInstallStep().dependOn(&linkStep.step);
+
+    return .{ .module = mod, .artifact = lib };
 }
 
 fn createShader(
