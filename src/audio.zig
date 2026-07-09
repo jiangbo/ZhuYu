@@ -1,6 +1,7 @@
 const std = @import("std");
 const sk = @import("sokol");
 const assets = @import("assets.zig");
+const memory = @import("internal/memory.zig");
 const stbAudio = @import("internal/c.zig").stbAudio;
 
 var mutex: std.Io.Mutex = .init;
@@ -16,7 +17,7 @@ pub fn init(sampleRate: u32, soundBuffer: []Sound) void {
         .sample_rate = @intCast(sampleRate),
         .stream_cb = audioCallback,
         .logger = .{ .func = sk.log.func },
-        .allocator = @bitCast(assets.memory.skAllocator),
+        .allocator = @bitCast(memory.skAllocator),
     });
 }
 

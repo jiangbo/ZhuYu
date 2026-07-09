@@ -7,6 +7,7 @@ const batch = @import("batch.zig");
 const camera = @import("camera.zig");
 const graphics = @import("graphics.zig");
 const input = @import("input.zig");
+const memory = @import("internal/memory.zig");
 const text = @import("text.zig");
 const window = @import("window.zig");
 
@@ -28,8 +29,8 @@ pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
     if (file.parsed == null and !file.reload()) {
         std.debug.panic("zon load failed: {s}", .{path});
     }
-    const result = zonMap.getOrPut(assets.memory.allocator.raw, //
-        path) catch assets.memory.oom();
+    const result = zonMap.getOrPut(memory.allocator.raw, path) //
+        catch memory.oom();
     if (!result.found_existing) {
         result.value_ptr.* = .{
             .path = path,
@@ -59,7 +60,7 @@ pub fn reloadZon() void {
 pub fn deinit() void {
     var iterator = zonMap.valueIterator();
     while (iterator.next()) |entry| entry.deinit();
-    zonMap.deinit(assets.memory.allocator.raw);
+    zonMap.deinit(memory.allocator.raw);
 }
 
 const ZonEntry = struct {
@@ -145,8 +146,8 @@ pub fn draw(rows: []const Row) void {
         batch.vertices.items.len,
     }, "文字 {}", .{graphics.stats.text});
     writeFormatLine(&writer, "内存", "使用 {} KB", .{
-        assets.memory.counter.used / 1024,
-    }, "最高 {} KB", .{assets.memory.counter.max / 1024});
+        memory.counter.used / 1024,
+    }, "最高 {} KB", .{memory.counter.max / 1024});
     writeFormatLine(&writer, "鼠标", "{d:.1}, {d:.1}", .{
         input.mouse.raw.x,
         input.mouse.raw.y,

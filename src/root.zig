@@ -21,6 +21,8 @@ pub const extend = struct {
     pub const tiled = @import("extend/tiled.zig");
 };
 
+const memory = @import("internal/memory.zig");
+
 pub const Timer = math.Timer;
 pub const Image = graphics.Image;
 pub const NineImage = graphics.NineImage;
@@ -30,7 +32,7 @@ pub const Rect = math.Rect;
 pub const Color = graphics.Color;
 pub const Animation = graphics.Animation;
 pub const EnumAnimation = graphics.EnumAnimation;
-pub const Allocator = assets.memory.OomAllocator;
+pub const Allocator = memory.OomAllocator;
 
 comptime {
     _ = @import("internal/c.zig");
@@ -40,8 +42,23 @@ pub const clamp = std.math.clamp;
 pub const format = text.format;
 pub const formatZ = text.formatZ;
 pub const getImage = assets.getImageByPath;
-pub const oom = assets.memory.oom;
+pub const oom = memory.oom;
 
 pub const testing = struct {
     pub const allocator: Allocator = .{ .raw = std.testing.allocator };
 };
+
+test "compile zhu modules" {
+    std.testing.refAllDecls(window);
+    std.testing.refAllDecls(assets);
+    std.testing.refAllDecls(audio);
+    std.testing.refAllDecls(graphics);
+    std.testing.refAllDecls(debug);
+    std.testing.refAllDecls(batch);
+    std.testing.refAllDecls(camera);
+    std.testing.refAllDecls(math);
+    std.testing.refAllDecls(input);
+    std.testing.refAllDecls(widget);
+    std.testing.refAllDecls(text);
+    std.testing.refAllDecls(extend.tiled);
+}

@@ -7,6 +7,7 @@ const assets = @import("assets.zig");
 const camera = @import("camera.zig");
 const em = @import("internal/c.zig").em;
 const input = @import("input.zig");
+const memory = @import("internal/memory.zig");
 const text = @import("text.zig");
 
 pub const Event = sk.app.Event;
@@ -66,7 +67,7 @@ pub fn run(io_: std.Io, gpa: std.mem.Allocator, info: Info) void {
         .event_cb = windowEvent,
         .frame_cb = windowFrame,
         .cleanup_cb = windowDeinit,
-        .allocator = @bitCast(assets.memory.skAllocator),
+        .allocator = @bitCast(memory.skAllocator),
         .high_dpi = true,
     });
 }
@@ -76,10 +77,10 @@ export fn windowInit() void {
     sk.gfx.setup(.{
         .environment = sk.glue.environment(),
         .logger = .{ .func = sk.log.func },
-        .allocator = assets.memory.skAllocator,
+        .allocator = memory.skAllocator,
     });
     math.random.init(sk.time.now());
-    call(root, "init", .{assets.memory.allocator});
+    call(root, "init", .{memory.allocator});
 }
 
 pub var mouse: math.Vector = .zero;
@@ -138,7 +139,7 @@ export fn windowFrame() void {
 }
 
 export fn windowDeinit() void {
-    call(root, "deinit", .{assets.memory.allocator});
+    call(root, "deinit", .{memory.allocator});
     sk.gfx.shutdown();
     assets.deinit();
 }
@@ -199,7 +200,7 @@ pub fn Zon(comptime T: type) type {
 pub const ZonOption = struct { ignore: bool = false };
 // 读取 ZON 文件，返回带 arena 生命周期的包装对象。
 pub fn readZon(T: type, path: [:0]const u8, ops: ZonOption) !Zon(T) {
-    const gpa = assets.memory.allocator.raw;
+    const gpa = memory.allocator.raw;
     const source = try readAll(gpa, path);
     defer gpa.free(source);
 
@@ -217,7 +218,7 @@ pub fn readZon(T: type, path: [:0]const u8, ops: ZonOption) !Zon(T) {
 }
 
 pub fn saveZon(path: [:0]const u8, value: anytype) !void {
-    const gpa = assets.memory.allocator.raw;
+    const gpa = memory.allocator.raw;
     var writer: std.Io.Writer.Allocating = .init(gpa);
     defer writer.deinit();
 
@@ -309,6 +310,6 @@ pub fn useWindowIcon(path: [:0]const u8) void {
 
 pub fn drawCenter(str: text.String, y: f32, option: text.Option) void {
     const textSize = text.measure(str, option);
-    const pos = size.mul(.init(0.5, y)).sub(.xy(textSize.x / 2, 0));
+    const pos = size.mul(.xy(0.5, y)).sub(.xy(textSize.x / 2, 0));
     text.draw(str, pos, option);
 }

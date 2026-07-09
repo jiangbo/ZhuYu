@@ -5,7 +5,7 @@ const c = @import("internal/c.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const png = @import("internal/png.zig");
-pub const memory = @import("internal/memory.zig");
+const memory = @import("internal/memory.zig");
 
 const oom = memory.oom;
 const Image = graphics.Image;
