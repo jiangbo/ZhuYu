@@ -32,6 +32,10 @@ pub const Animation = graphics.Animation;
 pub const EnumAnimation = graphics.EnumAnimation;
 pub const Allocator = assets.memory.OomAllocator;
 
+comptime {
+    _ = @import("internal/c.zig");
+}
+
 pub const clamp = std.math.clamp;
 pub const format = text.format;
 pub const formatZ = text.formatZ;
