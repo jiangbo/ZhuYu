@@ -1,0 +1,23 @@
+.{
+    .name = .zhuyu,
+    .version = "0.1.0",
+    .fingerprint = 0x77a3d2846158853,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .sokol = .{
+            .url = "git+https://github.com/floooh/sokol-zig#f9b2aa8fc0b0e78c946299e7b418fd04a9ef3559",
+            .hash = "sokol-0.1.0-pb1HK4RrNwA1QTln_ZtLaEBne8Dn6zgZH4UVA45cGdnM",
+        },
+        .stb = .{
+            .url = "git+https://github.com/nothings/stb#31c1ad37456438565541f4919958214b6e762fb4",
+            .hash = "N-V-__8AAN1DTgAKvlSQnjJwSg4ZY2JP5OHmzKOcA4BewA4Y",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
+}
