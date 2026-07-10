@@ -134,17 +134,12 @@ fn addWebApp(
     emLink.lib_main = lib;
     emLink.emsdk = emsdk;
 
-    const extraArgs = try b.allocator.alloc(
-        []const u8,
-        emLink.extra_args.len + 4,
-    );
-    @memcpy(extraArgs[0..emLink.extra_args.len], emLink.extra_args);
-    extraArgs[emLink.extra_args.len + 0] = "--js-library";
-    extraArgs[emLink.extra_args.len + 1] =
-        options.zhuyu.path("src/internal/em.js").getPath(b);
-    extraArgs[emLink.extra_args.len + 2] = "--pre-js";
-    extraArgs[emLink.extra_args.len + 3] = try emJsCacheStamp(b);
-    emLink.extra_args = extraArgs;
+    // 加入引擎使用的 JavaScript 库，并保留应用自己的库。
+    const len = emLink.js_libraries.len;
+    const jsLibraries = try b.allocator.alloc(std.Build.LazyPath, len + 1);
+    @memcpy(jsLibraries[0..len], emLink.js_libraries);
+    jsLibraries[len] = options.zhuyu.path("src/internal/em.js");
+    emLink.js_libraries = jsLibraries;
 
     const linkStep = try sk.emLinkStep(b, emLink);
     b.getInstallStep().dependOn(&linkStep.step);
@@ -170,19 +165,4 @@ fn createShader(
         },
         .reflection = true,
     });
-}
-
-// 让 em.js 内容变化体现在 emcc 参数里，避免 Zig 缓存复用旧输出。
-fn emJsCacheStamp(b: *std.Build) ![]const u8 {
-    const bytes = @embedFile("src/internal/em.js");
-    const hash = std.hash.Wyhash.hash(0, bytes);
-    const stamp = b.pathFromRoot(b.fmt(".zig-cache/zhu-em-js-{x}.js", .{hash}));
-
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(b.graph.io, b.pathFromRoot(".zig-cache"));
-    try cwd.writeFile(b.graph.io, .{
-        .sub_path = stamp,
-        .data = "// zhu em.js cache stamp\n",
-    });
-    return stamp;
 }
