@@ -26,6 +26,7 @@ pub const Page = struct {
 
 pub const Char = struct {
     id: u32,
+    advance: f32,
     rect: math.Rect,
     offset: Vector2,
 };
@@ -36,7 +37,6 @@ var font: Font = undefined;
 var images: [8]Image = undefined;
 var invalidGlyph: Glyph = undefined;
 var fontScale: f32 = undefined;
-var halfAdvance: f32 = undefined; // 英文只需要前进半个距离
 
 pub fn init(zon: Font) void {
     std.debug.assert(zon.images.len == zon.pages.len);
@@ -55,7 +55,6 @@ pub fn init(zon: Font) void {
         images[i] = assets.getImage(assets.id(path)).?;
     }
     invalidGlyph = searchGlyph('?').?;
-    halfAdvance = font.size / 2;
     changeFontSize(font.size);
 }
 
@@ -152,7 +151,8 @@ fn layout(
             continue;
         }
 
-        const advance = charAdvance(code, scale.x);
+        const glyph = findGlyph(code);
+        const advance = glyph.char.advance * font.size * scale.x;
         if (width > 0) {
             if (width + option.spacing + advance > option.max) {
                 width, line = .{ 0, line + 1 };
@@ -169,7 +169,6 @@ fn layout(
 
         if (!render) continue;
 
-        const glyph = findGlyph(code);
         const rect = glyph.char.rect;
         if (rect.size.x > 0 and rect.size.y > 0) {
             const charPos = drawPos.add(glyph.char.offset.mul(scale));
@@ -214,11 +213,6 @@ pub fn lineHeight(option: Option) f32 {
 
 pub fn sizeToScale(size: f32) Vector2 {
     return .square(size / (font.size * fontScale));
-}
-
-fn charAdvance(code: u32, scale: f32) f32 {
-    const advance = if (code < 128) halfAdvance else font.size;
-    return advance * scale;
 }
 
 pub fn computeTextCount(text: String) usize {
