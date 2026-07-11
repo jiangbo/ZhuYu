@@ -35,6 +35,7 @@ pub const Option = struct {
 
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
+    scissor: ?math.Rect, // 裁剪区域
     draw: DrawCommand, // 绘制命令
 };
 
@@ -91,6 +92,12 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     commands.appendAssumeCapacity(.{
         .target = .{ .color = color, .pass = pass },
     });
+}
+
+// 设置逻辑坐标裁剪区域，null 恢复当前视口。
+pub fn useScissor(rect: ?math.Rect) void {
+    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    commands.appendAssumeCapacity(.{ .scissor = rect });
 }
 
 fn uploadVertices() void {
@@ -286,16 +293,18 @@ pub fn flush() void {
 
     uploadVertices();
     var activePass, var flipY = .{ false, false };
+    var viewport: math.Rect = undefined;
     for (commands.items) |cmd| {
         switch (cmd) {
             .target => |target| {
                 if (activePass) graphics.endPass();
                 flipY = target.pass.target != null and
                     !sk.gfx.queryFeatures().origin_top_left;
-                graphics.beginPass(target.color, target.pass);
+                viewport = graphics.beginPass(target.color, target.pass);
                 drawState.pipeline = .{};
                 activePass = true;
             },
+            .scissor => |rect| applyScissor(rect, viewport, drawState.size),
             .draw => |draw| doDraw(draw, flipY),
         }
     }
@@ -306,10 +315,18 @@ pub fn endDraw() void {
 
     switch (commands.items[commands.items.len - 1]) {
         .draw => |draw| if (draw.end == 0) flush(),
-        .target => flush(),
+        .target, .scissor => flush(),
     }
     graphics.endPass();
     graphics.commit();
+}
+
+fn applyScissor(rect: ?math.Rect, view: math.Rect, size: Vector2) void {
+    const area = rect orelse math.Rect.init(.zero, size);
+    const ratio = view.size.div(size);
+    const pos = view.min.add(area.min.mul(ratio));
+    const clip = area.size.mul(ratio);
+    sk.gfx.applyScissorRectf(pos.x, pos.y, clip.x, clip.y, true);
 }
 
 fn doDraw(cmd: DrawCommand, flipY: bool) void {

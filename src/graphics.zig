@@ -263,7 +263,7 @@ pub const RenderPass = struct {
     viewport: ?math.Rect = null,
 };
 
-pub fn beginPass(color: Color, renderPass: RenderPass) void {
+pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
     var action = sk.gfx.PassAction{};
     action.colors[0] = .{
         .load_action = .CLEAR,
@@ -285,6 +285,7 @@ pub fn beginPass(color: Color, renderPass: RenderPass) void {
     const view = viewport.?;
     sk.gfx.applyViewportf(view.min.x, view.min.y, //
         view.size.x, view.size.y, true);
+    return view;
 }
 
 pub const endPass = sk.gfx.endPass;
