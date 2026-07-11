@@ -60,6 +60,7 @@ var vertexHandle: sk.gfx.Buffer = undefined;
 var pipeline: sk.gfx.Pipeline = undefined;
 var sampler: sk.gfx.Sampler = undefined;
 var drawState: DrawCommand = undefined;
+var flushed = false;
 
 pub fn init(vertex: []Vertex, cmds: []Command) void {
     vertices = .initBuffer(vertex);
@@ -67,7 +68,7 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
     if (@import("builtin").is_test) return;
 
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
-    pipeline = createQuadPipeline(shaderDesc);
+    pipeline = createPipeline(shaderDesc);
     sampler = sk.gfx.makeSampler(.{});
     vertexHandle = sk.gfx.makeBuffer(.{
         .size = @sizeOf(Vertex) * vertex.len,
@@ -79,6 +80,7 @@ pub fn beginDraw() void {
     graphics.stats = .{};
     vertices.clearRetainingCapacity();
     commands.clearRetainingCapacity();
+    flushed = false;
     drawState = .{
         .camera = camera.main,
         .size = camera.size,
@@ -100,6 +102,16 @@ pub fn useScissor(rect: ?math.Rect) void {
     commands.appendAssumeCapacity(.{ .scissor = rect });
 }
 
+pub fn usePipeline(value: ?sk.gfx.Pipeline) void {
+    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    drawState.pipeline = value orelse pipeline;
+}
+
+pub fn useSampler(value: ?sk.gfx.Sampler) void {
+    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    drawState.sampler = value orelse sampler;
+}
+
 fn uploadVertices() void {
     if (vertices.items.len == 0) return;
     const buffer = sk.gfx.asRange(vertices.items);
@@ -109,7 +121,7 @@ fn uploadVertices() void {
 fn currentDraw() ?*DrawCommand {
     if (commands.items.len == 0) return null;
     switch (commands.items[commands.items.len - 1]) {
-        .draw => |*draw| return draw,
+        .draw => |*draw| return if (draw.end != 0) null else draw,
         else => return null,
     }
 }
@@ -308,15 +320,13 @@ pub fn flush() void {
             .draw => |draw| doDraw(draw, flipY),
         }
     }
+    flushed = true;
 }
 
 pub fn endDraw() void {
     std.debug.assert(commands.items.len != 0);
 
-    switch (commands.items[commands.items.len - 1]) {
-        .draw => |draw| if (draw.end == 0) flush(),
-        .target, .scissor => flush(),
-    }
+    if (!flushed) flush();
     graphics.endPass();
     graphics.commit();
 }
@@ -363,7 +373,7 @@ fn doDraw(cmd: DrawCommand, flipY: bool) void {
     sk.gfx.draw(0, 4, @intCast(cmd.end - cmd.start));
 }
 
-fn createQuadPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
+pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     var vertexLayout = sk.gfx.VertexLayoutState{};
 
     vertexLayout.attrs[0].format = .FLOAT2;
