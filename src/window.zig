@@ -34,8 +34,7 @@ pub const Info = struct {
 pub var size: math.Vector = .zero;
 pub var clientSize: math.Vector = .zero;
 pub var viewRect: math.Rect = undefined;
-pub var alignment: math.Vector2 = .center; // 默认居中
-var scaleEnum: ScaleEnum = .stretch; // 当前缩放模式
+pub var info: Info = undefined; // 当前窗口配置
 var io: std.Io = undefined;
 
 pub extern "Imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
@@ -45,15 +44,13 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 }
 
 const root = @import("root");
-pub fn run(io_: std.Io, gpa: std.mem.Allocator, info: Info) void {
+pub fn run(io_: std.Io, gpa: std.mem.Allocator, info_: Info) void {
     sk.time.setup();
+    memory.init(gpa);
+    info = info_;
     size = info.logicSize orelse info.size;
-    camera.init(size);
     viewRect = .init(.zero, size);
-    alignment = info.alignment;
-    scaleEnum = info.scaleEnum;
     io = io_;
-    assets.init(io, gpa, info.maxFileSize);
 
     if (info.disableIME and builtin.os.tag == .windows) {
         _ = ImmDisableIME(-1);
@@ -79,6 +76,8 @@ export fn windowInit() void {
         .logger = .{ .func = sk.log.func },
         .allocator = memory.skAllocator,
     });
+    assets.init(io, info.maxFileSize);
+    camera.init(size);
     math.random.init(sk.time.now());
     call(root, "init", .{memory.allocator});
 }
@@ -101,29 +100,27 @@ export fn windowEvent(event: ?*const Event) void {
 pub fn computeViewRect() void {
     clientSize = .xy(sk.app.widthf(), sk.app.heightf());
     const ratio = clientSize.div(size);
-    switch (scaleEnum) {
-        .none => {
-            viewRect = .init(clientSize.sub(size).mul(alignment), size);
-        },
-        .stretch => viewRect = .init(.zero, clientSize),
-        .fit => {
+    viewRect = switch (info.scaleEnum) {
+        .none => .init(clientSize.sub(size).mul(info.alignment), size),
+        .stretch => .init(.zero, clientSize),
+        .fit => blk: {
             const minSize = size.scale(@min(ratio.x, ratio.y));
-            const position = clientSize.sub(minSize).mul(alignment);
-            viewRect = .init(position, minSize);
+            const position = clientSize.sub(minSize).mul(info.alignment);
+            break :blk .init(position, minSize);
         },
-        .fill => {
+        .fill => blk: {
             const maxSize = size.scale(@max(ratio.x, ratio.y));
-            const position = clientSize.sub(maxSize).mul(alignment);
-            viewRect = .init(position, maxSize);
+            const position = clientSize.sub(maxSize).mul(info.alignment);
+            break :blk .init(position, maxSize);
         },
-        .integer => {
+        .integer => blk: {
             const scale = @min(ratio.x, ratio.y);
             const usedScale = if (scale < 1) scale else @trunc(scale);
             const intSize = size.scale(usedScale);
-            const position = clientSize.sub(intSize).mul(alignment);
-            viewRect = .init(position, intSize);
+            const position = clientSize.sub(intSize).mul(info.alignment);
+            break :blk .init(position, intSize);
         },
-    }
+    };
     resized = false;
 }
 
@@ -140,8 +137,8 @@ export fn windowFrame() void {
 
 export fn windowDeinit() void {
     call(root, "deinit", .{memory.allocator});
-    sk.gfx.shutdown();
     assets.deinit();
+    sk.gfx.shutdown();
 }
 
 pub fn timestamp() std.Io.Timestamp {

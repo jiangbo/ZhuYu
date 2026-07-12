@@ -9,6 +9,8 @@ const memory = @import("internal/memory.zig");
 
 const oom = memory.oom;
 const Image = graphics.Image;
+const Vector2 = graphics.Vector2;
+const Filter = graphics.Filter;
 const Path = [:0]const u8;
 const assetRoot = "assets/";
 
@@ -17,11 +19,19 @@ pub var io: std.Io = undefined;
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 var maxFileSize: usize = 0;
 
-pub fn init(io_: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
+pub fn init(io_: std.Io, maxSize: usize) void {
     io = io_;
-    memory.init(gpa);
     allocator = memory.allocator.raw;
     maxFileSize = maxSize;
+
+    sampler.nearest = sk.gfx.makeSampler(.{
+        .min_filter = .NEAREST,
+        .mag_filter = .NEAREST,
+    });
+    sampler.linear = sk.gfx.makeSampler(.{
+        .min_filter = .LINEAR,
+        .mag_filter = .LINEAR,
+    });
 
     sk.fetch.setup(.{
         .num_lanes = fileBuffer.len,
@@ -35,6 +45,7 @@ pub fn initCaches(allocator_: std.mem.Allocator) void {
     atlas.cache = .empty;
     view.cache, file.cache = .{ .empty, .empty };
     sound.cache, music.cache = .{ .empty, .empty };
+    gpu.pipelines, gpu.shaders = .{ .empty, .empty };
 }
 
 pub fn deinit() void {
@@ -46,14 +57,24 @@ pub fn deinit() void {
     file.deinit();
     if (sk.fetch.valid()) sk.fetch.shutdown();
     for (&fileBuffer) |buf| if (buf.len != 0) allocator.free(buf);
+    gpu.deinit();
+    sk.gfx.destroySampler(sampler.nearest);
+    sk.gfx.destroySampler(sampler.linear);
 }
 
-pub fn loadImage(path: Path, size: graphics.Vector2) Image {
+pub fn loadImage(path: Path, size: Vector2, filter: Filter) Image {
+    const smp = sampler.get(filter);
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
-    if (!entry.found_existing) {
-        const imageView = view.load(path);
-        entry.value_ptr.* = .{ .view = imageView, .size = size };
+    if (entry.found_existing) {
+        std.debug.assert(entry.value_ptr.sampler.id == smp.id);
+        return entry.value_ptr.*;
     }
+
+    entry.value_ptr.* = .{
+        .view = view.load(path),
+        .sampler = smp,
+        .size = size,
+    };
     return entry.value_ptr.*;
 }
 
@@ -70,8 +91,8 @@ pub fn id(name: []const u8) Id {
     return std.hash.Fnv1a_32.hash(name);
 }
 
-pub fn loadAtlas(source: graphics.Atlas) void {
-    atlas.load(source);
+pub fn loadAtlas(source: graphics.Atlas, filter: graphics.Filter) void {
+    atlas.load(source, sampler.get(filter));
 }
 
 pub fn getImage(imageId: Id) ?graphics.Image {
@@ -86,11 +107,48 @@ pub fn putImage(imageId: Id, image: graphics.Image) void {
     imageCache.put(allocator, imageId, image) catch oom();
 }
 
+pub const sampler = struct {
+    pub var nearest: sk.gfx.Sampler = .{}; // 最近邻采样器
+    pub var linear: sk.gfx.Sampler = .{}; // 线性采样器
+
+    // 返回过滤方式对应的采样器。
+    pub fn get(filter: graphics.Filter) sk.gfx.Sampler {
+        return switch (filter) {
+            .nearest => nearest,
+            .linear => linear,
+        };
+    }
+};
+
+pub const gpu = struct {
+    var pipelines: std.ArrayListUnmanaged(sk.gfx.Pipeline) = .empty;
+    var shaders: std.ArrayListUnmanaged(sk.gfx.Shader) = .empty;
+
+    // 登记由引擎统一销毁的流水线。
+    pub fn addPipeline(value: sk.gfx.Pipeline) void {
+        pipelines.append(allocator, value) catch oom();
+    }
+
+    // 登记由引擎统一销毁的着色器。
+    pub fn addShader(value: sk.gfx.Shader) void {
+        shaders.append(allocator, value) catch oom();
+    }
+
+    fn deinit() void {
+        for (pipelines.items) |value| sk.gfx.destroyPipeline(value);
+        pipelines.deinit(allocator);
+
+        for (shaders.items) |value| sk.gfx.destroyShader(value);
+        shaders.deinit(allocator);
+    }
+};
+
 const atlas = struct {
     var cache: std.AutoHashMapUnmanaged(Id, Load) = .empty;
 
     const Load = struct {
         view: sk.gfx.View,
+        sampler: sk.gfx.Sampler,
         size: graphics.Vector2,
         layers: usize,
         loaded: usize = 0,
@@ -99,10 +157,13 @@ const atlas = struct {
 
     const PageIndex = extern struct { atlasId: Id, layer: u32 };
 
-    fn load(source: graphics.Atlas) void {
+    fn load(source: graphics.Atlas, smp: sk.gfx.Sampler) void {
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
-        if (entry.found_existing) return;
+        if (entry.found_existing) {
+            std.debug.assert(entry.value_ptr.sampler.id == smp.id);
+            return;
+        }
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
         imageCache.ensureUnusedCapacity(allocator, len) catch oom();
@@ -112,6 +173,7 @@ const atlas = struct {
         const size: usize = @intFromFloat(source.size.x * source.size.y);
         entry.value_ptr.* = .{
             .view = atlasView,
+            .sampler = smp,
             .size = source.size,
             .layers = pageCount,
             .data = allocator.alloc(u8, size * 4 * pageCount) catch oom(),
@@ -124,6 +186,7 @@ const atlas = struct {
             _ = file.load(path, @bitCast(pageIndex), handler);
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
+                .sampler = smp,
                 .layer = @floatFromInt(i),
                 .offset = .zero,
                 .size = source.size,
@@ -133,6 +196,7 @@ const atlas = struct {
         for (source.images) |image| {
             var img = image;
             img.view = atlasView;
+            img.sampler = smp;
             imageCache.putAssumeCapacity(image.view.id, img);
         }
     }

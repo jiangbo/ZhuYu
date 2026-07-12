@@ -4,6 +4,7 @@ const sk = @import("sokol");
 const math = @import("math.zig");
 const shader = @import("shader");
 const graphics = @import("graphics.zig");
+const assets = @import("assets.zig");
 const camera = @import("camera.zig");
 
 const Image = graphics.Image;
@@ -47,18 +48,17 @@ pub const DrawCommand = struct {
     camera: camera.Camera, // 绘制命令相机
     size: Vector2, // 视口大小
     pipeline: sk.gfx.Pipeline, // 渲染流水线
-    sampler: sk.gfx.Sampler, // 采样器
+    sampler: sk.gfx.Sampler = .{}, // 采样器
 };
 
 pub var whiteImage: graphics.Image = undefined;
 pub var circleImage: graphics.Image = undefined;
 
-pub var vertices: std.ArrayList(Vertex) = undefined;
-pub var commands: std.ArrayList(Command) = undefined;
+pub var vertices: std.ArrayList(Vertex) = .empty;
+pub var commands: std.ArrayList(Command) = .empty;
 
 var vertexHandle: sk.gfx.Buffer = undefined;
 var pipeline: sk.gfx.Pipeline = undefined;
-var sampler: sk.gfx.Sampler = undefined;
 var drawState: DrawCommand = undefined;
 var flushed = false;
 
@@ -69,7 +69,6 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
 
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
     pipeline = createPipeline(shaderDesc);
-    sampler = sk.gfx.makeSampler(.{});
     vertexHandle = sk.gfx.makeBuffer(.{
         .size = @sizeOf(Vertex) * vertex.len,
         .usage = .{ .stream_update = true },
@@ -85,7 +84,6 @@ pub fn beginDraw() void {
         .camera = camera.main,
         .size = camera.size,
         .pipeline = pipeline,
-        .sampler = sampler,
     };
 }
 
@@ -103,13 +101,21 @@ pub fn useScissor(rect: ?math.Rect) void {
 }
 
 pub fn usePipeline(value: ?sk.gfx.Pipeline) void {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
-    drawState.pipeline = value orelse pipeline;
+    const next = value orelse pipeline;
+    if (drawState.pipeline.id == next.id) return;
+
+    endCommand();
+    drawState.pipeline = next;
 }
 
-pub fn useSampler(value: ?sk.gfx.Sampler) void {
+// 返回后续绘制命令使用的流水线。
+pub fn queryPipeline() sk.gfx.Pipeline {
+    return drawState.pipeline;
+}
+
+// 结束当前绘制命令，下一次绘制会创建新命令。
+pub fn endCommand() void {
     if (currentDraw()) |draw| draw.end = vertices.items.len;
-    drawState.sampler = value orelse sampler;
 }
 
 fn uploadVertices() void {
@@ -131,6 +137,7 @@ fn addCommand(image: Image) *DrawCommand {
     var draw = drawState;
     draw.start = @intCast(vertices.items.len);
     draw.view = image.view;
+    draw.sampler = image.sampler;
     commands.appendAssumeCapacity(.{ .draw = draw });
     return currentDraw().?;
 }
@@ -385,8 +392,11 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     vertexLayout.attrs[6].format = .FLOAT4;
     vertexLayout.buffers[0].step_func = .PER_INSTANCE;
 
-    return sk.gfx.makePipeline(.{
-        .shader = sk.gfx.makeShader(shaderDesc),
+    const shaderHandle = sk.gfx.makeShader(shaderDesc);
+    assets.gpu.addShader(shaderHandle);
+
+    const result = sk.gfx.makePipeline(.{
+        .shader = shaderHandle,
         .layout = vertexLayout,
         .primitive_type = .TRIANGLE_STRIP,
         .colors = init: {
@@ -401,4 +411,6 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
             break :init c;
         },
     });
+    assets.gpu.addPipeline(result);
+    return result;
 }

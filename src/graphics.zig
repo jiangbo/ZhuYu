@@ -154,8 +154,11 @@ pub fn loopFramesX(comptime count: u8, size: Vector2, d: f32) //
     return result;
 }
 
+pub const Filter = enum { nearest, linear };
+
 pub const Image = struct {
     view: sk.gfx.View = .{},
+    sampler: sk.gfx.Sampler = .{},
     layer: f32 = 0,
     offset: math.Vector2 = .zero,
     size: math.Vector2 = .zero,
@@ -163,12 +166,10 @@ pub const Image = struct {
     pub const empty: Image = .{};
 
     pub fn sub(self: *const Image, subRect: math.Rect) Image {
-        return Image{
-            .view = self.view,
-            .layer = self.layer,
-            .offset = self.offset.add(subRect.min),
-            .size = subRect.size,
-        };
+        var image = self.*;
+        image.offset = self.offset.add(subRect.min);
+        image.size = subRect.size;
+        return image;
     }
 
     pub fn rect(self: *const Image) math.Rect {
@@ -224,7 +225,7 @@ pub const RenderTarget = struct {
     image: Image = .{ .view = .{}, .size = .zero },
 };
 
-pub fn createRenderTarget(size: math.Vector2) RenderTarget {
+pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
     const colorImage = sk.gfx.makeImage(.{
         .usage = .{ .color_attachment = true },
         .width = @intFromFloat(size.x),
@@ -252,9 +253,10 @@ pub fn createRenderTarget(size: math.Vector2) RenderTarget {
     const view = sk.gfx.makeView(.{
         .texture = .{ .image = colorImage },
     });
+    const sampler = assets.sampler.get(filter);
     return .{
         .pass = pass,
-        .image = .{ .view = view, .size = size },
+        .image = .{ .view = view, .sampler = sampler, .size = size },
     };
 }
 

@@ -23,6 +23,12 @@ pub const Row = struct {
     right: []const u8 = "",
 };
 
+const Columns = struct {
+    label: std.Io.Writer,
+    left: std.Io.Writer,
+    right: std.Io.Writer,
+};
+
 // 返回可热重载的 ZON 数据指针。首次调用会从文件读取。
 pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
     const file = ZonFile(T, path);
@@ -114,92 +120,109 @@ pub fn draw(rows: []const Row) void {
     }
     last = frame;
 
-    var buffer: [1000]u8 = undefined;
+    var labelBuffer: [1000]u8 = undefined;
+    var leftBuffer: [1000]u8 = undefined;
+    var rightBuffer: [1000]u8 = undefined;
+    var columns = Columns{
+        .label = .fixed(&labelBuffer),
+        .left = .fixed(&leftBuffer),
+        .right = .fixed(&rightBuffer),
+    };
     const gfxStats = sk.gfx.queryStats();
     const frameStats = gfxStats.prev_frame;
     const totalStats = gfxStats.total;
-    var writer = std.Io.Writer.fixed(&buffer);
-    writeFormatLine(&writer, "后端", "{s}", .{
+    writeFormatLine(&columns, "后端", "{s}", .{
         @tagName(graphics.queryBackend()),
     }, "帧率 {}", .{fps});
-    writeFormatLine(&writer, "帧时", "{d:.2} ms", .{
+    writeFormatLine(&columns, "帧时", "{d:.2} ms", .{
         frameTime,
     }, "用时 {d:.2} ms", .{usedTime});
-    writeFormatLine(&writer, "窗口", "{d:.0}x{d:.0}", .{
+    writeFormatLine(&columns, "窗口", "{d:.0}x{d:.0}", .{
         window.clientSize.x,
         window.clientSize.y,
     }, "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
-    writeFormatLine(&writer, "缩放", "屏幕 {d:.0}%", .{
+    writeFormatLine(&columns, "缩放", "屏幕 {d:.0}%", .{
         sk.app.dpiScale() * 100,
     }, "画面 {d:.0}%", .{
         window.viewRect.size.x / window.size.x * 100,
     });
-    writeFormatLine(&writer, "图形", "纹理 {}", .{
+    writeFormatLine(&columns, "图形", "纹理 {}", .{
         totalStats.images.alive,
     }, "顶点 {} KB", .{frameStats.size_update_buffer / 1024});
     const batchUsed: f32 = @floatFromInt(batch.vertices.items.len);
     const batchCap: f32 = @floatFromInt(batch.vertices.capacity);
-    writeFormatLine(&writer, "绘制", "批次 {}", .{
+    writeFormatLine(&columns, "绘制", "批次 {}", .{
         frameStats.num_draw,
     }, "容量 {d:.0}%", .{batchUsed / batchCap * 100});
-    writeFormatLine(&writer, "对象", "精灵 {}", .{
+    writeFormatLine(&columns, "对象", "精灵 {}", .{
         batch.vertices.items.len,
     }, "文字 {}", .{graphics.stats.text});
-    writeFormatLine(&writer, "内存", "使用 {} KB", .{
+    writeFormatLine(&columns, "内存", "使用 {} KB", .{
         memory.counter.used / 1024,
     }, "最高 {} KB", .{memory.counter.max / 1024});
-    writeFormatLine(&writer, "鼠标", "{d:.1}, {d:.1}", .{
+    writeFormatLine(&columns, "鼠标", "{d:.1}, {d:.1}", .{
         input.mouse.raw.x,
         input.mouse.raw.y,
     }, "{d:.1}, {d:.1}", .{ window.mouse.x, window.mouse.y });
-    writeFormatLine(&writer, "相机", "{d:.1}, {d:.1}", .{
+    writeFormatLine(&columns, "相机", "{d:.1}, {d:.1}", .{
         camera.main.position.x,
         camera.main.position.y,
     }, "{d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
     // 获取当前已加载的资源统计数据
     const assetStats = assets.queryStats();
-    writeFormatLine(&writer, "资源", "文件 {}", .{assetStats.file}, //
+    writeFormatLine(&columns, "资源", "文件 {}", .{assetStats.file}, //
         "图片 {}", .{assetStats.image});
-    writeFormatLine(&writer, "音频", "音乐 {}", .{assetStats.music}, //
+    writeFormatLine(&columns, "音频", "音乐 {}", .{assetStats.music}, //
         "音效 {}", .{assetStats.sound});
-    writeFormatLine(&writer, "音量", "音乐 {d:.0}%", .{
+    writeFormatLine(&columns, "音量", "音乐 {d:.0}%", .{
         audio.musicVolume.load(.acquire) * 100,
     }, "音效 {d:.0}%", .{audio.soundVolume.load(.acquire) * 100});
-    for (rows) |row| writeRow(&writer, row);
-    const debugText = buffer[0 .. writer.end - 1];
+    for (rows) |row| writeRow(&columns, row);
+    const labels = labelBuffer[0 .. columns.label.end - 1];
+    const left = leftBuffer[0 .. columns.left.end - 1];
+    const right = rightBuffer[0 .. columns.right.end - 1];
 
     // 调试面板固定在窗口坐标，绘制后还原当前相机。
     camera.push(.window);
     defer camera.pop();
 
-    const scale = debugTextScale(debugText);
+    const baseOption = text.Option{};
+    const labelSize = text.measure(labels, baseOption);
+    const leftSize = text.measure(left, baseOption);
+    const rightSize = text.measure(right, baseOption);
+    const gap = text.measure("  ", baseOption).x;
+    const contentSize = Vector2.xy(
+        labelSize.x + leftSize.x + rightSize.x + gap * 2,
+        labelSize.y,
+    );
+    const scale = debugTextScale(contentSize);
     const padding = basePadding.scale(scale.x);
     const position = Vector2.xy(10, 10).scale(scale.x);
     const textOption = text.Option{
         .color = .rgba(0.86, 0.89, 0.90, 0.96),
         .scale = scale,
     };
-    const textSize = text.measure(debugText, textOption);
+    const textSize = contentSize.mul(scale);
     const panel = Rect.init(position, textSize.add(padding.scale(2)));
 
     batch.drawRect(panel, .{ .color = .rgba(0.07, 0.09, 0.11, 0.74) });
 
     const contentPosition = position.add(padding);
-    text.draw(debugText, contentPosition, textOption);
+    text.draw(labels, contentPosition, textOption);
+    const leftPosition = contentPosition.addX((labelSize.x + gap) * scale.x);
+    text.draw(left, leftPosition, textOption);
+    const rightPosition = leftPosition.addX((leftSize.x + gap) * scale.x);
+    text.draw(right, rightPosition, textOption);
 }
 
-fn writeRow(writer: *std.Io.Writer, row: Row) void {
-    appendCell(writer, row.label, 6);
-    appendCell(writer, row.left, 14);
-    writeAll(writer, "  ");
-    appendCell(writer, row.right, 18);
-    writeAll(writer, "\n");
+fn writeRow(columns: *Columns, row: Row) void {
+    writeLine(&columns.label, row.label);
+    writeLine(&columns.left, row.left);
+    writeLine(&columns.right, row.right);
 }
 
-fn debugTextScale(debugText: text.String) Vector2 {
-    const baseOption = text.Option{};
-    const baseSize = text.measure(debugText, baseOption)
-        .add(basePadding.scale(2));
+fn debugTextScale(contentSize: Vector2) Vector2 {
+    const baseSize = contentSize.add(basePadding.scale(2));
     const targetWidth = window.size.x * 0.45;
     const maxHeight = window.size.y * 0.75;
 
@@ -213,7 +236,7 @@ fn debugTextScale(debugText: text.String) Vector2 {
 }
 
 fn writeFormatLine(
-    writer: *std.Io.Writer,
+    columns: *Columns,
     label: []const u8,
     comptime leftFormat: []const u8,
     leftArgs: anytype,
@@ -224,27 +247,14 @@ fn writeFormatLine(
     var rightBuffer: [80]u8 = undefined;
     const left = text.format(&leftBuffer, leftFormat, leftArgs);
     const right = text.format(&rightBuffer, rightFormat, rightArgs);
-    appendCell(writer, label, 6);
-    appendCell(writer, left, 14);
-    writeAll(writer, "  ");
-    appendCell(writer, right, 18);
-    writeAll(writer, "\n");
+    writeLine(&columns.label, label);
+    writeLine(&columns.left, left);
+    writeLine(&columns.right, right);
 }
 
-fn appendCell(writer: *std.Io.Writer, value: []const u8, width: usize) void {
+fn writeLine(writer: *std.Io.Writer, value: []const u8) void {
     writeAll(writer, value);
-    const count = displayWidth(value);
-    if (count >= width) return;
-    for (0..width - count) |_| writeAll(writer, " ");
-}
-
-fn displayWidth(value: []const u8) usize {
-    var result: usize = 0;
-    var iterator = std.unicode.Utf8View.initUnchecked(value).iterator();
-    while (iterator.nextCodepoint()) |code| {
-        result += if (code < 128) 1 else 2;
-    }
-    return result;
+    writeAll(writer, "\n");
 }
 
 fn writeAll(writer: *std.Io.Writer, value: []const u8) void {

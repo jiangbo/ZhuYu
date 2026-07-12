@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const sk = @import("sokol");
+const shader = @import("shader");
 const assets = @import("assets.zig");
 const math = @import("math.zig");
 const graphics = @import("graphics.zig");
@@ -38,7 +40,7 @@ var images: [8]Image = undefined;
 var invalidGlyph: Glyph = undefined;
 var fontScale: f32 = undefined;
 
-pub fn init(zon: Font) void {
+fn initFont(zon: Font, filter: graphics.Filter) void {
     std.debug.assert(zon.images.len == zon.pages.len);
     std.debug.assert(zon.images.len <= images.len);
     font = zon;
@@ -48,15 +50,44 @@ pub fn init(zon: Font) void {
             .imagePaths = font.images,
             .size = font.imageSize,
             .images = &.{},
-        });
+        }, filter);
     }
 
+    const sampler = assets.sampler.get(filter);
     for (font.images, 0..) |path, i| {
-        images[i] = assets.getImage(assets.id(path)).?;
+        const image = assets.getImage(assets.id(path)).?;
+        std.debug.assert(image.sampler.id == sampler.id);
+        images[i] = image;
     }
     invalidGlyph = searchGlyph('?').?;
     changeFontSize(font.size);
 }
+
+pub const init = initFont;
+
+pub const msdf = struct {
+    var pipeline: sk.gfx.Pipeline = undefined;
+    var previousPipeline: sk.gfx.Pipeline = undefined;
+
+    // 初始化 MSDF 字体和渲染资源。
+    pub fn init(zon: Font) void {
+        initFont(zon, .linear);
+
+        const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
+        pipeline = batch.createPipeline(desc);
+    }
+
+    // 切换后续文字使用 MSDF 渲染状态。
+    pub fn begin() void {
+        previousPipeline = batch.queryPipeline();
+        batch.usePipeline(pipeline);
+    }
+
+    // 恢复进入 MSDF 前使用的流水线。
+    pub fn end() void {
+        batch.usePipeline(previousPipeline);
+    }
+};
 
 pub fn changeFontSize(size: f32) void {
     fontScale = size / font.size;

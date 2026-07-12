@@ -55,4 +55,30 @@ void main() {
 }
 @end
 
+@fs msdf_fs
+
+layout(binding=0) uniform texture2DArray tex;
+layout(binding=0) uniform sampler smp;
+
+in vec4 color;
+in vec3 uvw;
+out vec4 frag_color;
+
+float median(float red, float green, float blue) {
+    return max(min(red, green), min(max(red, green), blue));
+}
+
+void main() {
+    vec3 value = texture(sampler2DArray(tex, smp), uvw).rgb;
+    float distance = median(value.r, value.g, value.b) - 0.5;
+    vec2 unitRange = vec2(2.0) /
+        vec2(textureSize(sampler2DArray(tex, smp), 0).xy);
+    vec2 screenSize = vec2(1.0) / fwidth(uvw.xy);
+    float screenRange = max(0.5 * dot(unitRange, screenSize), 1.0);
+    float opacity = clamp(distance * screenRange + 0.5, 0.0, 1.0);
+    frag_color = vec4(color.rgb, opacity * color.a);
+}
+@end
+
 @program quad vs fs
+@program msdf vs msdf_fs
