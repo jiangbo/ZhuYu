@@ -239,17 +239,6 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
         .color_attachment = .{ .image = colorImage },
     });
 
-    const depthImage = sk.gfx.makeImage(.{
-        .usage = .{ .depth_stencil_attachment = true },
-        .width = @intFromFloat(size.x),
-        .height = @intFromFloat(size.y),
-        .sample_count = 1,
-        .pixel_format = .DEPTH_STENCIL,
-    });
-    pass.attachments.depth_stencil = sk.gfx.makeView(.{
-        .depth_stencil_attachment = .{ .image = depthImage },
-    });
-
     const view = sk.gfx.makeView(.{
         .texture = .{ .image = colorImage },
     });

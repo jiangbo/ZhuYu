@@ -60,6 +60,7 @@ pub fn run(io_: std.Io, gpa: std.mem.Allocator, info_: Info) void {
         .window_title = info.title,
         .width = @intFromFloat(info.size.x),
         .height = @intFromFloat(info.size.y),
+        .depth_format = .NONE,
         .init_cb = windowInit,
         .event_cb = windowEvent,
         .frame_cb = windowFrame,
