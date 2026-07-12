@@ -24,14 +24,7 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     allocator = memory.allocator.raw;
     maxFileSize = maxSize;
 
-    sampler.nearest = sk.gfx.makeSampler(.{
-        .min_filter = .NEAREST,
-        .mag_filter = .NEAREST,
-    });
-    sampler.linear = sk.gfx.makeSampler(.{
-        .min_filter = .LINEAR,
-        .mag_filter = .LINEAR,
-    });
+    sampler.init();
 
     sk.fetch.setup(.{
         .num_lanes = fileBuffer.len,
@@ -62,8 +55,13 @@ pub fn deinit() void {
     sk.gfx.destroySampler(sampler.linear);
 }
 
-pub fn loadImage(path: Path, size: Vector2, filter: Filter) Image {
-    const smp = sampler.get(filter);
+pub const ImageOption = struct {
+    size: Vector2 = .zero, // 异步加载前使用的图片尺寸
+    filter: Filter = .nearest, // 纹理过滤方式
+};
+
+pub fn loadImage(path: Path, option: ImageOption) Image {
+    const smp = sampler.get(option.filter);
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
     if (entry.found_existing) {
         std.debug.assert(entry.value_ptr.sampler.id == smp.id);
@@ -73,7 +71,7 @@ pub fn loadImage(path: Path, size: Vector2, filter: Filter) Image {
     entry.value_ptr.* = .{
         .view = view.load(path),
         .sampler = smp,
-        .size = size,
+        .size = option.size,
     };
     return entry.value_ptr.*;
 }
@@ -110,6 +108,17 @@ pub fn putImage(imageId: Id, image: graphics.Image) void {
 pub const sampler = struct {
     pub var nearest: sk.gfx.Sampler = .{}; // 最近邻采样器
     pub var linear: sk.gfx.Sampler = .{}; // 线性采样器
+
+    fn init() void {
+        nearest = sk.gfx.makeSampler(.{
+            .min_filter = .NEAREST,
+            .mag_filter = .NEAREST,
+        });
+        linear = sk.gfx.makeSampler(.{
+            .min_filter = .LINEAR,
+            .mag_filter = .LINEAR,
+        });
+    }
 
     // 返回过滤方式对应的采样器。
     pub fn get(filter: graphics.Filter) sk.gfx.Sampler {
