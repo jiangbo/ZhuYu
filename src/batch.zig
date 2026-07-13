@@ -73,6 +73,10 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
         .size = @sizeOf(Vertex) * vertex.len,
         .usage = .{ .stream_update = true },
     });
+
+    circleImage = assets.getImage("circle.png") orelse return;
+    const rect = math.Rect.init(.zero, circleImage.size);
+    whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
 
 pub fn beginDraw() void {
