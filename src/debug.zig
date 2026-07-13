@@ -188,22 +188,22 @@ pub fn draw(rows: []const Row) void {
 
     const baseOption = text.Option{};
     const labelSize = text.measure(labels, baseOption);
-    const leftSize = text.measure(left, baseOption);
-    const rightSize = text.measure(right, baseOption);
-    const gap = text.measure("  ", baseOption).x;
-    const contentSize = Vector2.xy(
-        labelSize.x + leftSize.x + rightSize.x + gap * 2,
-        labelSize.y,
-    );
-    const scale = debugTextScale(contentSize);
+    const gap = text.measure("    ", baseOption).x;
+    const scale = debugTextScale(labelSize.y);
     const padding = basePadding.scale(scale.x);
     const position = Vector2.xy(10, 10).scale(scale.x);
+    const panelWidth = window.size.x * 0.70;
+    const contentWidth = (panelWidth - padding.x * 2) / scale.x;
+    const valueWidth = (contentWidth - labelSize.x - gap * 2) / 2;
     const textOption = text.Option{
         .color = .rgba(0.86, 0.89, 0.90, 0.96),
         .scale = scale,
     };
-    const textSize = contentSize.mul(scale);
-    const panel = Rect.init(position, textSize.add(padding.scale(2)));
+    const panelSize = Vector2.xy(
+        panelWidth,
+        labelSize.y * scale.y + padding.y * 2,
+    );
+    const panel = Rect.init(position, panelSize);
 
     batch.drawRect(panel, .{ .color = .rgba(0.07, 0.09, 0.11, 0.74) });
 
@@ -211,7 +211,7 @@ pub fn draw(rows: []const Row) void {
     text.draw(labels, contentPosition, textOption);
     const leftPosition = contentPosition.addX((labelSize.x + gap) * scale.x);
     text.draw(left, leftPosition, textOption);
-    const rightPosition = leftPosition.addX((leftSize.x + gap) * scale.x);
+    const rightPosition = leftPosition.addX((valueWidth + gap) * scale.x);
     text.draw(right, rightPosition, textOption);
 }
 
@@ -221,14 +221,11 @@ fn writeRow(columns: *Columns, row: Row) void {
     writeLine(&columns.right, row.right);
 }
 
-fn debugTextScale(contentSize: Vector2) Vector2 {
-    const baseSize = contentSize.add(basePadding.scale(2));
-    const targetWidth = window.size.x * 0.45;
+fn debugTextScale(contentHeight: f32) Vector2 {
+    const baseHeight = contentHeight + basePadding.y * 2;
     const maxHeight = window.size.y * 0.75;
 
-    const widthScale = targetWidth / baseSize.x;
-    const heightScale = maxHeight / baseSize.y;
-    const rawScale = @min(widthScale, heightScale);
+    const rawScale = maxHeight / baseHeight;
 
     // 按半档缩放，避免调试面板盖住主要画面。
     const stepped = @round(std.math.clamp(rawScale, 0.5, 1.5) * 2) / 2;
