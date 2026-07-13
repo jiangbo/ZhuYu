@@ -283,9 +283,9 @@ pub const endPass = sk.gfx.endPass;
 pub const commit = sk.gfx.commit;
 
 pub const Color = extern struct {
-    r: f32 = 1,
-    g: f32 = 1,
-    b: f32 = 1,
+    r: f32 = 0,
+    g: f32 = 0,
+    b: f32 = 0,
     a: f32 = 1,
 
     pub const black = Color.rgb(0, 0, 0); // 黑色
