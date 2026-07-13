@@ -74,7 +74,7 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
         .usage = .{ .stream_update = true },
     });
 
-    circleImage = assets.getImage("circle.png") orelse return;
+    circleImage = assets.getImageByPath("circle.png") orelse return;
     const rect = math.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
