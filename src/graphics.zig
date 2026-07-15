@@ -30,36 +30,46 @@ pub fn EnumAnimation(comptime T: type) type {
     return std.EnumArray(T, Animation);
 }
 pub const Animation = struct {
-    pub const Clip = []const Frame;
+    pub const Frames = []const Frame;
     pub const Step = enum { next, loop, end };
-    pub const Source = struct { imageId: ImageId, clip: Clip };
+    pub const Source = struct {
+        imageId: ImageId,
+        size: Vector2, // 单帧尺寸
+        frames: Frames,
+        loop: bool = true, // 是否循环播放
+    };
 
     elapsed: f32 = -math.epsilon,
-    row: u8 = 0,
     index: u8 = 0,
+    source: Source,
     image: Image,
-    clip: Clip,
-    loop: bool = true,
     extend: u32 = 0,
 
     sourceIndex: u8 = 0,
     sources: []const Source = &.{},
 
-    pub fn init(img: Image, size: Vector2, clip: Clip) Animation {
-        return .{ .image = img.sub(.init(.zero, size)), .clip = clip };
+    pub fn init(img: Image, size: Vector2, frames: Frames) Animation {
+        return .{ .image = img.sub(.init(.zero, size)), .source = .{
+            .imageId = 0,
+            .size = size,
+            .frames = frames,
+        } };
     }
 
-    pub fn initFinished(img: Image, size: Vector2, clip: Clip) Animation {
-        const idx: u8 = @intCast(clip.len);
-        const image = img.sub(.init(.zero, size));
-        return .{ .image = image, .clip = clip, .index = idx };
-    }
-
-    pub fn initSource(src: []const Source, size: Vector2) Animation {
-        const image = assets.getImage(src[0].imageId).?;
-        var self = Animation.init(image, size, src[0].clip);
-        self.sources = src;
+    pub fn initFinished(img: Image, size: Vector2, frames: Frames) Animation {
+        var self = Animation.init(img, size, frames);
+        self.stop();
         return self;
+    }
+
+    pub fn initSource(sources: []const Source) Animation {
+        const source = sources[0];
+        const image = assets.getImage(source.imageId).?;
+        return .{
+            .source = source,
+            .image = image.sub(.init(.zero, source.size)),
+            .sources = sources,
+        };
     }
 
     pub fn subImage(self: *const Animation) Image {
@@ -67,48 +77,43 @@ pub const Animation = struct {
     }
 
     pub fn frame(self: *const Animation) Frame {
-        return self.clip[self.index];
+        return self.source.frames[self.index];
     }
 
-    pub fn subImageAt(self: *const Animation, idx: usize) Image {
-        const index = @min(self.clip.len - 1, idx);
-        var offset = self.clip[index].offset;
-        offset.y += self.image.size.y * @as(f32, @floatFromInt(self.row));
+    pub fn subImageAt(self: *const Animation, index: usize) Image {
+        const frames = self.source.frames;
+        const offset = frames[@min(frames.len - 1, index)].offset;
         return self.image.sub(.init(offset, self.image.size));
     }
 
-    pub fn play(self: *Animation, index: anytype, loop: bool) void {
-        self.playRow(index, self.row, loop);
-    }
+    pub fn play(self: *Animation, index: anytype) void {
+        const sourceIndex = math.toIndex(u8, index);
+        self.source = self.sources[sourceIndex];
+        self.sourceIndex = sourceIndex;
 
-    pub fn playRow(self: *Animation, idx: anytype, row: anytype, loop: bool) void {
-        const sourceIndex = math.toIndex(u8, idx);
-        const next = self.sources[sourceIndex];
-        const image = assets.getImage(next.imageId).?;
-        self.image = image.sub(.init(.zero, self.image.size));
-        self.clip, self.sourceIndex = .{ next.clip, sourceIndex };
-        self.row, self.loop = .{ math.toIndex(u8, row), loop };
+        const image = assets.getImage(self.source.imageId).?;
+        self.image = image.sub(.init(.zero, self.source.size));
         self.reset();
     }
 
     pub fn update(self: *Animation, delta: f32) ?Step {
-        if (self.index == self.clip.len) return null; // 已经结束
+        if (self.index == self.source.frames.len) return null; // 已经结束
         const firstUpdate = self.elapsed < 0;
         self.elapsed += delta;
         if (firstUpdate) return .next; //  第一次第一帧
-        const current = self.clip[self.index];
+        const current = self.source.frames[self.index];
         if (self.elapsed < current.duration) return null; // 还未到下一帧
 
         self.elapsed -= current.duration;
         self.index += 1;
-        if (self.index < self.clip.len) return .next; // 下一帧
-        if (!self.loop) return .end; // 动画结束
+        if (self.index < self.source.frames.len) return .next; // 下一帧
+        if (!self.source.loop) return .end; // 动画结束
         self.index = 0; // 循环播放
         return .loop;
     }
 
     pub fn getEnumFrame(self: *const Animation, T: type) T {
-        return @enumFromInt(self.clip[self.index].extend);
+        return @enumFromInt(self.source.frames[self.index].extend);
     }
 
     pub fn getEnumExtend(self: *const Animation, T: type) T {
@@ -116,15 +121,15 @@ pub const Animation = struct {
     }
 
     pub fn stop(self: *Animation) void {
-        self.index = @intCast(self.clip.len);
+        self.index = @intCast(self.source.frames.len);
     }
 
     pub fn isRunning(self: *const Animation) bool {
-        return self.index < self.clip.len;
+        return self.index < self.source.frames.len;
     }
 
     pub fn isFinished(self: *const Animation) bool {
-        return self.index == self.clip.len;
+        return self.index == self.source.frames.len;
     }
 
     pub fn reset(self: *Animation) void {
