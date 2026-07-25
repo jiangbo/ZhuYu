@@ -70,6 +70,25 @@ pub const Grid = struct {
         return .init(self.indexToWorld(index), self.cellSize());
     }
 
+    pub const CellRectIter = struct {
+        width: i32 = 0,
+        min: Cell = .xy(0, 0),
+        max: Cell = .xy(-1, -1),
+        current: Cell = .xy(0, 0),
+
+        pub fn next(self: *CellRectIter) ?usize {
+            if (self.current.y > self.max.y) return null;
+
+            const i = self.current.y * self.width + self.current.x;
+            self.current.x += 1;
+            if (self.current.x > self.max.x) {
+                self.current.x = self.min.x;
+                self.current.y += 1;
+            }
+            return @intCast(i);
+        }
+    };
+
     /// 返回矩形覆盖到的地图内格子，范围会按地图边界裁剪。
     pub fn cellsInRect(self: Grid, rect: Rect) CellRectIter {
         std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
@@ -194,181 +213,93 @@ pub fn Scan(comptime T: type) type {
 
 pub fn Field(comptime T: type) type {
     return struct {
-        map: *const Map,
+        grid: Grid,
         data: []const T = &.{},
 
         const Self = @This();
         pub const TileScan = Scan(T);
 
-        const Edge = struct {
-            fixed: i32,
-            touch: f32,
-        };
+        const Range = struct { first: i32 = 0, count: u32 = 0 };
 
         pub fn tileAt(self: *const Self, cell: Cell) ?T {
-            self.assertValid();
-            const index = self.map.grid.cellToIndex(cell) orelse return null;
+            const index = self.grid.cellToIndex(cell) orelse return null;
             return self.data[index];
         }
 
         /// 扫描 X 轴移动后的前沿瓦片，返回顺序固定为从上到下
         pub fn scanX(self: *const Self, rect: Rect, dx: f32) TileScan {
-            self.assertValid();
-            std.debug.assert(rect.size.x > 0 and rect.size.y > 0);
-
             const dest = rect.min.x + dx;
             if (dx == 0) return .{ .dest = dest };
 
-            const size: f32 = @floatFromInt(self.map.grid.cell);
-            const r0 = tileCoord(rect.min.y, size);
+            const size: f32 = @floatFromInt(self.grid.cell);
+            const r0: i32 = @intFromFloat(@floor(rect.min.y / size));
             const bottom = rect.min.y + rect.size.y - math.epsilon;
-            const r1 = tileCoord(bottom, size);
-            const rows = clipRange(r0, r1, self.map.grid.height);
+            const r1: i32 = @intFromFloat(@floor(bottom / size));
+            const rows = clipRange(r0, r1, self.grid.height);
 
-            const edge: Edge = if (dx > 0) right_edge: {
-                // 向右时固定目标右边缘所在列。
-                const right = dest + rect.size.x - math.epsilon;
-                const col = tileCoord(right, size);
-                const colf: f32 = @floatFromInt(col);
-                const left = colf * size;
-                break :right_edge .{
-                    .fixed = col,
-                    .touch = left - rect.size.x,
-                };
-            } else left_edge: {
-                // 向左时固定目标左边缘所在列。
-                const col = tileCoord(dest, size);
-                const colf: f32 = @floatFromInt(col);
-                const right = (colf + 1) * size;
-                break :left_edge .{ .fixed = col, .touch = right };
-            };
+            var front = dest;
+            if (dx > 0) front += rect.size.x - math.epsilon;
 
-            const remaining = if (inRange(edge.fixed, self.map.grid.width))
-                rows.count
-            else
-                0;
-            const width = self.map.grid.width;
-            const index = if (remaining > 0)
-                rows.first * width + edge.fixed
-            else
-                0;
-            return .{
-                .dest = dest,
-                .touch = edge.touch,
-                .state = .{
-                    .data = self.data,
-                    .index = index,
-                    .remaining = remaining,
-                    .step = width,
-                },
-            };
+            const col: i32 = @intFromFloat(@floor(front / size));
+            const cellX: f32 = @floatFromInt(col);
+
+            var touch = (cellX + 1) * size;
+            if (dx > 0) touch = cellX * size - rect.size.x;
+
+            const outside = col < 0 or col >= self.grid.width;
+            if (outside) return .{ .dest = dest, .touch = touch };
+
+            const width = self.grid.width;
+            return .{ .dest = dest, .touch = touch, .state = .{
+                .data = self.data,
+                .index = rows.first * width + col,
+                .remaining = rows.count,
+                .step = width,
+            } };
         }
 
         /// 扫描 Y 轴移动后的前沿瓦片，返回顺序固定为从左到右
         pub fn scanY(self: *const Self, rect: Rect, dy: f32) TileScan {
-            self.assertValid();
-            std.debug.assert(rect.size.x > 0 and rect.size.y > 0);
-
             const dest = rect.min.y + dy;
             if (dy == 0) return .{ .dest = dest };
 
-            const size: f32 = @floatFromInt(self.map.grid.cell);
-            const c0 = tileCoord(rect.min.x, size);
+            const size: f32 = @floatFromInt(self.grid.cell);
+            const c0: i32 = @intFromFloat(@floor(rect.min.x / size));
             const right = rect.min.x + rect.size.x - math.epsilon;
-            const c1 = tileCoord(right, size);
-            const cols = clipRange(c0, c1, self.map.grid.width);
+            const c1: i32 = @intFromFloat(@floor(right / size));
+            const cols = clipRange(c0, c1, self.grid.width);
 
-            const edge: Edge = if (dy > 0) bottom_edge: {
-                // 向下时固定目标下边缘所在行。
-                const targetBottom = dest + rect.size.y - math.epsilon;
-                const row = tileCoord(targetBottom, size);
-                const rowf: f32 = @floatFromInt(row);
-                const top = rowf * size;
-                break :bottom_edge .{
-                    .fixed = row,
-                    .touch = top - rect.size.y,
-                };
-            } else top_edge: {
-                // 向上时固定目标上边缘所在行。
-                const row = tileCoord(dest, size);
-                const rowf: f32 = @floatFromInt(row);
-                const bottom = (rowf + 1) * size;
-                break :top_edge .{ .fixed = row, .touch = bottom };
-            };
+            var front = dest;
+            if (dy > 0) front += rect.size.y - math.epsilon;
 
-            const remaining = if (inRange(edge.fixed, self.map.grid.height))
-                cols.count
-            else
-                0;
-            const width = self.map.grid.width;
-            const index = if (remaining > 0)
-                edge.fixed * width + cols.first
-            else
-                0;
+            const row: i32 = @intFromFloat(@floor(front / size));
+            const cellY: f32 = @floatFromInt(row);
+
+            var touch = (cellY + 1) * size;
+            if (dy > 0) touch = cellY * size - rect.size.y;
+
+            const outside = row < 0 or row >= self.grid.height;
+            if (outside) return .{ .dest = dest, .touch = touch };
+
+            const width = self.grid.width;
+            return .{ .dest = dest, .touch = touch, .state = .{
+                .data = self.data,
+                .index = row * width + cols.first,
+                .remaining = cols.count,
+            } };
+        }
+
+        fn clipRange(first: i32, last: i32, limit: i32) Range {
+            const clippedFirst = @max(first, 0);
+            const clippedLast = @min(last, limit - 1);
+            if (clippedFirst > clippedLast) return .{};
+
             return .{
-                .dest = dest,
-                .touch = edge.touch,
-                .state = .{
-                    .data = self.data,
-                    .index = index,
-                    .remaining = remaining,
-                },
+                .first = clippedFirst,
+                .count = @intCast(clippedLast - clippedFirst + 1),
             };
         }
-
-        fn assertValid(self: *const Self) void {
-            std.debug.assert(self.map.grid.cell > 0);
-            std.debug.assert(self.data.len >= self.map.grid.count());
-        }
     };
-}
-
-pub const CellRectIter = struct {
-    width: i32 = 0,
-    min: Cell = .xy(0, 0),
-    max: Cell = .xy(-1, -1),
-    current: Cell = .xy(0, 0),
-
-    pub fn next(self: *CellRectIter) ?usize {
-        if (self.current.y > self.max.y) return null;
-
-        const i = self.current.y * self.width + self.current.x;
-        self.current.x += 1;
-        if (self.current.x > self.max.x) {
-            self.current.x = self.min.x;
-            self.current.y += 1;
-        }
-        return @intCast(i);
-    }
-};
-
-const Range = struct {
-    first: i32 = 0,
-    count: u32 = 0,
-};
-
-fn clipRange(first: i32, last: i32, limit: i32) Range {
-    if (last < first or limit == 0) return .{};
-    if (last < 0) return .{};
-
-    if (first >= limit) return .{};
-
-    const clippedFirst = @max(first, 0);
-    const clippedLast = @min(last, limit - 1);
-    return .{
-        .first = clippedFirst,
-        .count = @intCast(clippedLast - clippedFirst + 1),
-    };
-}
-
-fn inRange(index: i32, limit: i32) bool {
-    if (index < 0) return false;
-    return index < limit;
-}
-
-fn tileCoord(value: f32, size: f32) i32 {
-    std.debug.assert(size > 0);
-    return @intFromFloat(@floor(value / size));
 }
 
 pub const LayerEnum = enum { image, tile, object };
@@ -548,5 +479,3 @@ pub const Object = struct {
         return std.mem.eql(u8, self.type, typeName);
     }
 };
-
-pub var backgroundColor: ?graphics.Color = null;
