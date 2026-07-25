@@ -95,7 +95,9 @@ pub const enums = struct {
         var values: [items.len]Tag = undefined;
 
         for (items, 0..) |item, index| {
-            names[index] = @field(item, field);
+            const value = @field(item, field);
+            const isLiteral = @typeInfo(@TypeOf(value)) == .enum_literal;
+            names[index] = if (isLiteral) @tagName(value) else value;
             values[index] = index;
         }
 
