@@ -439,7 +439,7 @@ pub const Menu = struct {
         const previous = self.selected;
         const hover = self.mouseHover();
 
-        if (input.mouse.changed) {
+        if (input.mouse.moved) {
             const touched = hover != null or self.click.hover != null;
             if (touched) self.selected = hover;
         }

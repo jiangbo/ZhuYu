@@ -7,9 +7,8 @@ pub fn handle(ev: *const sk.app.Event) void {
     const buttonCode: u16 = @intCast(@intFromEnum(ev.mouse_button));
 
     if (ev.type == .KEY_DOWN or ev.type == .KEY_UP) key.changed = true;
-    if (math.enums.inRange(ev.type, .MOUSE_DOWN, .MOUSE_LEAVE)) {
-        mouse.changed = true;
-    }
+    if (ev.type == .MOUSE_DOWN or ev.type == .MOUSE_UP) mouse.changed = true;
+    if (ev.type == .MOUSE_MOVE) mouse.moved = true;
 
     switch (ev.type) {
         .KEY_DOWN => key.state.set(keyCode),
@@ -29,6 +28,7 @@ pub fn update() void {
     mouse.scrollY = 0;
     key.changed = false;
     mouse.changed = false;
+    mouse.moved = false;
 }
 
 pub fn reset() void {
@@ -39,6 +39,7 @@ pub fn reset() void {
     mouse.scrollY = 0;
     key.changed = false;
     mouse.changed = false;
+    mouse.moved = false;
 }
 
 pub const key = struct {
@@ -83,11 +84,34 @@ pub const key = struct {
         for (keys) |k| if (released(k)) return true;
         return false;
     }
+
+    pub const Bind = struct { action: []const u8, keys: []const Code };
+    pub fn bind(comptime binds: []const Bind) type {
+        return struct {
+            pub const Action = math.enums.fromField(binds, "action");
+
+            pub fn held(action: Action) bool {
+                return key.anyHeld(binds[@intFromEnum(action)].keys);
+            }
+
+            pub fn pressed(action: Action) bool {
+                return key.anyPressed(binds[@intFromEnum(action)].keys);
+            }
+
+            pub fn released(action: Action) bool {
+                return key.anyReleased(binds[@intFromEnum(action)].keys);
+            }
+        };
+    }
 };
 
 pub const mouse = struct {
     pub const Button = sk.app.Mousebutton;
+
+    // 当前帧是否有按钮按下或松开。
     pub var changed: bool = false;
+    // 当前帧鼠标位置是否变化。
+    pub var moved: bool = false;
     pub var raw: math.Vector = .zero;
     pub var scrollY: f32 = 0;
     var lastState: std.StaticBitSet(3) = .initEmpty();

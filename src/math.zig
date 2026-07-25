@@ -88,6 +88,20 @@ pub fn toIndex(T: type, value: anytype) T {
 pub const enums = struct {
     const Array = std.EnumArray;
 
+    // 根据配置字段生成连续枚举。
+    pub fn fromField(items: anytype, comptime field: []const u8) type {
+        const Tag = std.math.IntFittingRange(0, items.len - 1);
+        var names: [items.len][]const u8 = undefined;
+        var values: [items.len]Tag = undefined;
+
+        for (items, 0..) |item, index| {
+            names[index] = @field(item, field);
+            values[index] = index;
+        }
+
+        return @Enum(Tag, .exhaustive, &names, &values);
+    }
+
     pub fn len(comptime E: type) usize {
         return std.meta.fields(E).len;
     }
