@@ -492,6 +492,12 @@ pub const Menu = struct {
     }
 
     pub fn draw(self: Menu) void {
+        self.drawImage();
+        self.drawText();
+    }
+
+    // 绘制遮罩、面板和按钮等非文字内容。
+    pub fn drawImage(self: Menu) void {
         if (self.overlay) |overlay| {
             const rect: math.Rect = .init(.zero, window.size);
             batch.drawRect(rect, .{ .color = overlay });
@@ -501,7 +507,10 @@ pub const Menu = struct {
         for (self.buttons, 0..) |button, index| {
             button.drawImage(self.buttonState(index), self.position);
         }
+    }
 
+    // 绘制标题和按钮文字。
+    pub fn drawText(self: Menu) void {
         const title = self.title;
         if (title.text.len != 0) {
             const position = self.position.add(title.position);
@@ -513,7 +522,7 @@ pub const Menu = struct {
         }
     }
 
-    pub fn drawText(self: Menu, index: usize, value: []const u8) void {
+    pub fn drawLabel(self: Menu, index: usize, value: []const u8) void {
         var button = self.buttons[index];
         button.label = value;
         button.drawText(self.buttonState(index), self.position);
