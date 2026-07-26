@@ -426,9 +426,14 @@ pub const Menu = struct {
     pub fn init(position: math.Vector2, menu: Menu) Menu {
         var result = menu;
         result.position = position;
-        result.selected = null;
-        result.click = .empty;
+        result.reset();
         return result;
+    }
+
+    // 清除菜单的选择和鼠标交互状态。
+    pub fn reset(self: *Menu) void {
+        self.selected = null;
+        self.click = .empty;
     }
 
     pub fn centerInWindow(self: *Menu) void {
