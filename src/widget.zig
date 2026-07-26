@@ -14,6 +14,7 @@ const Vector2 = math.Vector2;
 pub const Button = struct {
     pub const State = enum { normal, hover, pressed, disabled };
     pub const Style = struct {
+        color: ?graphics.Color = null,
         image: ?graphics.ImageId = null,
         source: ?math.Rect = null,
         text: text.Option = .{},
@@ -38,13 +39,16 @@ pub const Button = struct {
         };
     }
 
-    /// 绘制按钮背景图
+    /// 绘制按钮背景色和图片
     pub fn drawImage(self: Button, state: State, offset: Vector2) void {
         const visual = self.style(state);
+        const rect = self.rect.move(offset);
+        if (visual.color) |color| {
+            batch.drawRect(rect, .{ .color = color });
+        }
+
         var image = assets.getImage(visual.image orelse return).?;
         if (visual.source) |source| image = image.sub(source);
-
-        const rect = self.rect.move(offset);
         if (self.patch) |patch| {
             return batch.drawNine(.init(image, patch), rect);
         }
