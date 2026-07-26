@@ -84,25 +84,6 @@ pub const key = struct {
         for (keys) |k| if (released(k)) return true;
         return false;
     }
-
-    pub const Bind = struct { action: []const u8, keys: []const Code };
-    pub fn bind(comptime binds: []const Bind) type {
-        return struct {
-            pub const Action = math.enums.fromField(binds, "action");
-
-            pub fn held(action: Action) bool {
-                return key.anyHeld(binds[@intFromEnum(action)].keys);
-            }
-
-            pub fn pressed(action: Action) bool {
-                return key.anyPressed(binds[@intFromEnum(action)].keys);
-            }
-
-            pub fn released(action: Action) bool {
-                return key.anyReleased(binds[@intFromEnum(action)].keys);
-            }
-        };
-    }
 };
 
 pub const mouse = struct {
@@ -143,3 +124,37 @@ pub const mouse = struct {
         return false;
     }
 };
+
+pub const Bind = struct { action: []const u8, keys: []const key.Code };
+pub fn bind(comptime binds: []const Bind) type {
+    return struct {
+        pub const Action = math.enums.fromField(binds, "action");
+
+        pub fn held(action: Action) bool {
+            return key.anyHeld(binds[@intFromEnum(action)].keys);
+        }
+
+        pub fn anyHeld(actions: []const Action) bool {
+            for (actions) |action| if (held(action)) return true;
+            return false;
+        }
+
+        pub fn pressed(action: Action) bool {
+            return key.anyPressed(binds[@intFromEnum(action)].keys);
+        }
+
+        pub fn anyPressed(actions: []const Action) bool {
+            for (actions) |action| if (pressed(action)) return true;
+            return false;
+        }
+
+        pub fn released(action: Action) bool {
+            return key.anyReleased(binds[@intFromEnum(action)].keys);
+        }
+
+        pub fn anyReleased(actions: []const Action) bool {
+            for (actions) |action| if (released(action)) return true;
+            return false;
+        }
+    };
+}
