@@ -67,7 +67,8 @@ pub const init = initFont;
 
 pub const msdf = struct {
     var pipeline: sk.gfx.Pipeline = undefined;
-    var previousPipeline: sk.gfx.Pipeline = undefined;
+    var buffer: [8]sk.gfx.Pipeline = undefined;
+    pub var stack: std.ArrayList(sk.gfx.Pipeline) = .initBuffer(&buffer);
 
     // 初始化 MSDF 字体和渲染资源。
     pub fn init(zon: Font) void {
@@ -75,17 +76,18 @@ pub const msdf = struct {
 
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
         pipeline = batch.createPipeline(desc);
+        stack.clearRetainingCapacity();
     }
 
     // 切换后续文字使用 MSDF 渲染状态。
     pub fn begin() void {
-        previousPipeline = batch.queryPipeline();
+        stack.appendAssumeCapacity(batch.queryPipeline());
         batch.usePipeline(pipeline);
     }
 
     // 恢复进入 MSDF 前使用的流水线。
     pub fn end() void {
-        batch.usePipeline(previousPipeline);
+        batch.usePipeline(stack.pop().?);
     }
 };
 
