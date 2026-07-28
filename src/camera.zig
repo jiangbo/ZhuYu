@@ -78,10 +78,10 @@ pub fn directFollow(pos: Vector2) void {
 }
 
 // 将相机位置对齐到目标的实际像素。
-pub fn roundPosition(targetScale: ?Vector2) void {
-    const viewScale = targetScale orelse window.scale;
+pub fn roundPosition(scale: ?Vector2) void {
+    const viewScale = scale orelse window.scale;
+    const origin = if (scale) |_| Vector2.zero else window.viewRect.min;
     const pixelScale = main.scale.mul(viewScale);
-    const origin = if (targetScale) |_| .zero else window.viewRect.min;
     const pixel = main.position.mul(pixelScale).sub(origin).round();
     main.position = pixel.add(origin).div(pixelScale);
 }
@@ -103,4 +103,9 @@ pub fn smoothFollow(pos: Vector2, smooth: f32) void {
         main.position.y += moved;
     }
     clampBound();
+}
+
+test "round position" {
+    init(.xy(640, 480));
+    roundPosition(.one);
 }
