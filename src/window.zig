@@ -34,6 +34,7 @@ pub const Info = struct {
 pub var size: math.Vector = .zero;
 pub var clientSize: math.Vector = .zero;
 pub var viewRect: math.Rect = undefined;
+pub var scale: math.Vector = .one;
 pub var info: Info = undefined; // 当前窗口配置
 var io: std.Io = undefined;
 
@@ -115,13 +116,14 @@ pub fn computeViewRect() void {
             break :blk .init(position, maxSize);
         },
         .integer => blk: {
-            const scale = @min(ratio.x, ratio.y);
-            const usedScale = if (scale < 1) scale else @trunc(scale);
+            const min = @min(ratio.x, ratio.y);
+            const usedScale = if (min < 1) min else @trunc(min);
             const intSize = size.scale(usedScale);
             const position = clientSize.sub(intSize).mul(info.alignment);
             break :blk .init(position, intSize);
         },
     };
+    scale = viewRect.size.div(size);
     resized = false;
 }
 

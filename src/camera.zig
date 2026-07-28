@@ -2,6 +2,7 @@ const std = @import("std");
 
 const math = @import("math.zig");
 const key = @import("input.zig").key;
+const window = @import("window.zig");
 
 const Vector2 = math.Vector2;
 
@@ -76,9 +77,13 @@ pub fn directFollow(pos: Vector2) void {
     clampBound();
 }
 
-pub fn roundPosition() void {
-    const pixel = main.position.mul(main.scale).round();
-    main.position = pixel.div(main.scale);
+// 将相机位置对齐到目标的实际像素。
+pub fn roundPosition(targetScale: ?Vector2) void {
+    const viewScale = targetScale orelse window.scale;
+    const pixelScale = main.scale.mul(viewScale);
+    const origin = if (targetScale) |_| .zero else window.viewRect.min;
+    const pixel = main.position.mul(pixelScale).sub(origin).round();
+    main.position = pixel.add(origin).div(pixelScale);
 }
 
 pub fn smoothFollow(pos: Vector2, smooth: f32) void {
