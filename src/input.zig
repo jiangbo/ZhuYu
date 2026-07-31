@@ -12,16 +12,21 @@ pub const Change = struct {
     }
 };
 
+// 当前帧收到的所有键盘和鼠标按钮变化。
+pub var change: Change = .{};
+
 pub fn handle(ev: *const sk.app.Event) void {
     const keyCode: u16 = @intCast(@intFromEnum(ev.key_code));
     const buttonCode: u16 = @intCast(@intFromEnum(ev.mouse_button));
 
     switch (ev.type) {
         .KEY_DOWN => {
+            change.pressed = true;
             key.change.pressed = true;
             key.state.set(keyCode);
         },
         .KEY_UP => {
+            change.released = true;
             key.change.released = true;
             key.state.unset(keyCode);
         },
@@ -30,10 +35,12 @@ pub fn handle(ev: *const sk.app.Event) void {
             mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
         },
         .MOUSE_DOWN => {
+            change.pressed = true;
             mouse.change.pressed = true;
             mouse.state.set(buttonCode);
         },
         .MOUSE_UP => {
+            change.released = true;
             mouse.change.released = true;
             mouse.state.unset(buttonCode);
         },
@@ -47,6 +54,7 @@ pub fn update() void {
     key.lastState = key.state;
     mouse.lastState = mouse.state;
     mouse.scrollY = 0;
+    change = .{};
     key.change = .{};
     mouse.change = .{};
     mouse.moved = false;
@@ -58,6 +66,7 @@ pub fn reset() void {
     mouse.state = .initEmpty();
     mouse.lastState = .initEmpty();
     mouse.scrollY = 0;
+    change = .{};
     key.change = .{};
     mouse.change = .{};
     mouse.moved = false;
