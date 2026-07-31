@@ -2,20 +2,41 @@ const std = @import("std");
 const sk = @import("sokol");
 const math = @import("math.zig");
 
+// 当前帧收到的输入变化。
+pub const Change = struct {
+    pressed: bool = false,
+    released: bool = false,
+
+    pub fn any(self: Change) bool {
+        return self.pressed or self.released;
+    }
+};
+
 pub fn handle(ev: *const sk.app.Event) void {
     const keyCode: u16 = @intCast(@intFromEnum(ev.key_code));
     const buttonCode: u16 = @intCast(@intFromEnum(ev.mouse_button));
 
-    if (ev.type == .KEY_DOWN or ev.type == .KEY_UP) key.changed = true;
-    if (ev.type == .MOUSE_DOWN or ev.type == .MOUSE_UP) mouse.changed = true;
-    if (ev.type == .MOUSE_MOVE) mouse.moved = true;
-
     switch (ev.type) {
-        .KEY_DOWN => key.state.set(keyCode),
-        .KEY_UP => key.state.unset(keyCode),
-        .MOUSE_MOVE => mouse.raw = .xy(ev.mouse_x, ev.mouse_y),
-        .MOUSE_DOWN => mouse.state.set(buttonCode),
-        .MOUSE_UP => mouse.state.unset(buttonCode),
+        .KEY_DOWN => {
+            key.change.pressed = true;
+            key.state.set(keyCode);
+        },
+        .KEY_UP => {
+            key.change.released = true;
+            key.state.unset(keyCode);
+        },
+        .MOUSE_MOVE => {
+            mouse.moved = true;
+            mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
+        },
+        .MOUSE_DOWN => {
+            mouse.change.pressed = true;
+            mouse.state.set(buttonCode);
+        },
+        .MOUSE_UP => {
+            mouse.change.released = true;
+            mouse.state.unset(buttonCode);
+        },
         .MOUSE_SCROLL => mouse.scrollY += ev.scroll_y,
         .ICONIFIED, .UNFOCUSED => reset(),
         else => {},
@@ -26,8 +47,8 @@ pub fn update() void {
     key.lastState = key.state;
     mouse.lastState = mouse.state;
     mouse.scrollY = 0;
-    key.changed = false;
-    mouse.changed = false;
+    key.change = .{};
+    mouse.change = .{};
     mouse.moved = false;
 }
 
@@ -37,15 +58,15 @@ pub fn reset() void {
     mouse.state = .initEmpty();
     mouse.lastState = .initEmpty();
     mouse.scrollY = 0;
-    key.changed = false;
-    mouse.changed = false;
+    key.change = .{};
+    mouse.change = .{};
     mouse.moved = false;
 }
 
 pub const key = struct {
     pub const Code = sk.app.Keycode;
 
-    pub var changed: bool = false;
+    pub var change: Change = .{};
     var lastState: std.StaticBitSet(512) = .initEmpty();
     var state: std.StaticBitSet(512) = .initEmpty();
 
@@ -89,8 +110,7 @@ pub const key = struct {
 pub const mouse = struct {
     pub const Button = sk.app.Mousebutton;
 
-    // 当前帧是否有按钮按下或松开。
-    pub var changed: bool = false;
+    pub var change: Change = .{};
     // 当前帧鼠标位置是否变化。
     pub var moved: bool = false;
     pub var raw: math.Vector = .zero;
