@@ -384,6 +384,8 @@ pub fn StackStore(T: type, len: usize, limitOf: fn (T) u32) type {
 }
 
 pub const Menu = struct {
+    pub const Trigger = enum { press, release };
+
     pub const Nav = struct {
         pub const none: Nav = .{};
 
@@ -419,6 +421,8 @@ pub const Menu = struct {
         option: text.Option = .{ .anchor = .center },
     } = .{},
     buttons: []const Button = &.{},
+    // 所有键盘导航触发的时机。
+    trigger: Trigger = .press,
     navKeys: NavKeys = .{},
     cancelEvent: ?usize = null,
     hoverSound: ?[:0]const u8 = null,
@@ -478,11 +482,19 @@ pub const Menu = struct {
 
     fn defaultNav(self: Menu) Nav {
         const keys = self.navKeys;
-        return .{
-            .up = input.key.anyPressed(keys.up),
-            .down = input.key.anyPressed(keys.down),
-            .confirm = input.key.anyPressed(keys.confirm),
-            .cancel = input.key.anyPressed(keys.cancel),
+        return switch (self.trigger) {
+            .press => .{
+                .up = input.key.anyPressed(keys.up),
+                .down = input.key.anyPressed(keys.down),
+                .confirm = input.key.anyPressed(keys.confirm),
+                .cancel = input.key.anyPressed(keys.cancel),
+            },
+            .release => .{
+                .up = input.key.anyReleased(keys.up),
+                .down = input.key.anyReleased(keys.down),
+                .confirm = input.key.anyReleased(keys.confirm),
+                .cancel = input.key.anyReleased(keys.cancel),
+            },
         };
     }
 
