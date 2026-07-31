@@ -428,7 +428,7 @@ pub const Menu = struct {
     hoverSound: ?[:0]const u8 = null,
     clickSound: ?[:0]const u8 = null,
     disabled: []const usize = &.{},
-    selected: ?usize = null,
+    selected: ?usize = 0,
     click: Click = .empty,
 
     pub fn init(position: math.Vector2, menu: Menu) Menu {
@@ -438,9 +438,10 @@ pub const Menu = struct {
         return result;
     }
 
-    // 清除菜单的选择和鼠标交互状态。
+    // 选择第一个可用项，并清除鼠标交互状态。
     pub fn reset(self: *Menu) void {
         self.selected = null;
+        self.down();
         self.click = .empty;
     }
 
@@ -453,8 +454,7 @@ pub const Menu = struct {
         const hover = self.mouseHover();
 
         if (input.mouse.moved) {
-            const touched = hover != null or self.click.hover != null;
-            if (touched) self.selected = hover;
+            if (hover) |index| self.selected = index;
         }
 
         const nav = option.nav orelse self.defaultNav();
