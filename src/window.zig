@@ -198,12 +198,9 @@ pub fn Zon(comptime T: type) type {
 }
 
 pub const ZonOption = struct { ignore: bool = false };
-// 读取 ZON 文件，返回带 arena 生命周期的包装对象。
-pub fn readZon(T: type, path: [:0]const u8, ops: ZonOption) !Zon(T) {
+// 从 ZON 字节解析对象，返回带 arena 生命周期的包装对象。
+pub fn parseZon(T: type, source: []const u8, ops: ZonOption) !Zon(T) {
     const gpa = memory.allocator.raw;
-    const source = try readAll(gpa, path);
-    defer gpa.free(source);
-
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
@@ -217,13 +214,30 @@ pub fn readZon(T: type, path: [:0]const u8, ops: ZonOption) !Zon(T) {
     return .{ .value = value, .arena = arena };
 }
 
-pub fn saveZon(path: [:0]const u8, value: anytype) !void {
-    const gpa = memory.allocator.raw;
+// 将对象序列化为 ZON 字节，由调用者释放返回的内存。
+pub fn allocZon(gpa: Allocator, value: anytype) ![]u8 {
     var writer: std.Io.Writer.Allocating = .init(gpa);
     defer writer.deinit();
 
     try std.zon.stringify.serialize(value, .{}, &writer.writer);
-    try saveAll(path, writer.writer.buffered());
+    return writer.toOwnedSlice();
+}
+
+// 读取 ZON 文件，返回带 arena 生命周期的包装对象。
+pub fn readZon(T: type, path: [:0]const u8, ops: ZonOption) !Zon(T) {
+    const gpa = memory.allocator.raw;
+    const source = try readAll(gpa, path);
+    defer gpa.free(source);
+
+    return parseZon(T, source, ops);
+}
+
+pub fn saveZon(path: [:0]const u8, value: anytype) !void {
+    const gpa = memory.allocator.raw;
+    const content = try allocZon(gpa, value);
+    defer gpa.free(content);
+
+    try saveAll(path, content);
 }
 
 fn terminateBuffer(buffer: []u8, len: usize) [:0]u8 {
