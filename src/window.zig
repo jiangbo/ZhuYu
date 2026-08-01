@@ -215,12 +215,12 @@ pub fn parseZon(T: type, source: [:0]const u8, ops: ZonOption) !Zon(T) {
 }
 
 // 将对象序列化为 ZON 字节，由调用者释放返回的内存。
-pub fn allocZon(gpa: Allocator, value: anytype) ![]u8 {
+pub fn allocZon(gpa: Allocator, value: anytype) ![:0]u8 {
     var writer: std.Io.Writer.Allocating = .init(gpa);
     defer writer.deinit();
 
     try std.zon.stringify.serialize(value, .{}, &writer.writer);
-    return writer.toOwnedSlice();
+    return writer.toOwnedSliceSentinel(0);
 }
 
 // 读取 ZON 文件，返回带 arena 生命周期的包装对象。
