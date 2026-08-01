@@ -153,6 +153,15 @@ pub const toggleFullScreen = sk.app.toggleFullscreen;
 pub const frameCount = sk.app.frameCount;
 
 const Dir = std.Io.Dir;
+// 检查本地文件或浏览器存档是否存在。
+pub fn exists(path: [:0]const u8) bool {
+    if (@import("builtin").target.os.tag == .emscripten) {
+        return em.exists(path);
+    }
+    Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
 pub fn statFileTime(path: [:0]const u8) i128 {
     const file = Dir.cwd().openFile(io, path, .{}) catch return 0;
     defer file.close(io);

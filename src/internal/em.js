@@ -1,5 +1,16 @@
 // 浏览器存档桥接，供 Zig 侧 extern 函数调用。
 mergeInto(LibraryManager.library, {
+  em_js_file_exists: function(c_path) {
+    var path = UTF8ToString(c_path);
+
+    try {
+      return window.localStorage.getItem(path) !== null;
+    } catch (err) {
+      console.error("check file failed:", path, err);
+      return false;
+    }
+  },
+
   em_js_file_save: function(c_path, c_data, len) {
     var path = UTF8ToString(c_path);
     var chunkSize = 0x8000;

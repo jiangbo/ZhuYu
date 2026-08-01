@@ -70,8 +70,14 @@ pub const em = struct {
     };
 
     extern fn em_js_keep() void;
+    extern fn em_js_file_exists(path: [*]const u8) c_int;
     extern fn em_js_file_save(path: [*]const u8, data: [*]const u8, len: c_int) c_int;
     extern fn em_js_file_load(c_path: [*]const u8, out_buf: [*]u8, buf_size: c_int) c_int;
+
+    pub fn exists(path: [:0]const u8) bool {
+        em_js_keep();
+        return em_js_file_exists(path.ptr) != 0;
+    }
 
     pub fn load(path: [:0]const u8, buffer: []u8) !Load {
         em_js_keep();
