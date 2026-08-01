@@ -45,7 +45,7 @@ pub fn deinit() void {
     imageCache.deinit(allocator);
     atlas.deinit();
     view.cache.deinit(allocator);
-    sound.cache.deinit(allocator);
+    sound.deinit();
     music.deinit();
     file.deinit();
     if (sk.fetch.valid()) sk.fetch.shutdown();
@@ -210,7 +210,7 @@ const atlas = struct {
         }
     }
 
-    fn handler(response: Response) []const u8 {
+    fn handler(response: Response) bool {
         const pageIndex: PageIndex = @bitCast(response.index);
         const loadContext = cache.getPtr(pageIndex.atlasId).?;
         const img = png.load(allocator, response.data) catch |err| {
@@ -240,7 +240,7 @@ const atlas = struct {
             allocator.free(loadContext.data);
             loadContext.data = &.{};
         }
-        return &.{};
+        return false;
     }
 
     fn deinit() void {
@@ -254,13 +254,13 @@ pub const Icon = png.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     _ = file.load(path, handle, struct {
-        fn callback(resp: Response) []const u8 {
+        fn callback(resp: Response) bool {
             const icon = png.loadIcon(allocator, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
             defer allocator.free(icon.data);
             handler(resp.index, icon);
-            return &.{};
+            return false;
         }
     }.callback);
 }
@@ -275,7 +275,7 @@ const view = struct {
         return imageView;
     }
 
-    fn handler(resp: Response) []const u8 {
+    fn handler(resp: Response) bool {
         const img = png.load(allocator, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
@@ -291,7 +291,7 @@ const view = struct {
                 .y = @floatFromInt(img.height),
             };
         }
-        return &.{};
+        return false;
     }
 
     fn makeImage(w: i32, h: i32, layers: i32, data: anytype) sk.gfx.Image {
@@ -312,6 +312,12 @@ const view = struct {
 const sound = struct {
     var cache: std.AutoHashMapUnmanaged(Id, audio.Sound) = .empty;
 
+    fn deinit() void {
+        var iterator = cache.valueIterator();
+        while (iterator.next()) |value| allocator.free(value.samples);
+        cache.deinit(allocator);
+    }
+
     fn load(path: Path, option: audio.Sound.Option) audio.Sound {
         const entry = cache.getOrPut(allocator, id(path)) catch oom();
         if (entry.found_existing) return entry.value_ptr.*;
@@ -321,7 +327,7 @@ const sound = struct {
         return entry.value_ptr.*;
     }
 
-    fn handler(resp: Response) []const u8 {
+    fn handler(resp: Response) bool {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data);
         defer c.stbAudio.unload(stbAudio);
         const info = c.stbAudio.getInfo(stbAudio);
@@ -338,7 +344,7 @@ const sound = struct {
             .channels = @intCast(channels),
         };
         _ = audio.playSoundOption(resp.path, option);
-        return std.mem.sliceAsBytes(samples);
+        return false;
     }
 };
 
@@ -354,12 +360,11 @@ const music = struct {
         return null;
     }
 
-    fn handler(resp: Response) []const u8 {
-        const data = allocator.dupe(u8, resp.data) catch oom();
-        const stbAudio = c.stbAudio.loadFromMemory(data);
+    fn handler(resp: Response) bool {
+        const stbAudio = c.stbAudio.loadFromMemory(resp.data);
         cache.getPtr(id(resp.path)).?.* = stbAudio;
         audio.playMusicOption(resp.path, resp.index == 1);
-        return data;
+        return true;
     }
 
     pub fn deinit() void {
@@ -380,13 +385,12 @@ pub const file = struct {
     pub const Data = struct { bytes: []const u8, owned: bool = false };
 
     const FileState = enum { init, loading, loaded, handled };
-    const Handler = *const fn (Response) []const u8;
+    const Handler = *const fn (Response) bool;
 
     const FileCache = struct {
         state: FileState = .init,
         index: u64 = 0,
         data: Data = .{ .bytes = &.{} },
-        managed: []const u8 = &.{},
         handler: Handler = undefined,
     };
 
@@ -461,16 +465,20 @@ pub const file = struct {
             .data = value.data.bytes[0..size],
         };
 
-        value.managed = value.handler(response);
+        const owned = value.data.owned;
+        if (!value.handler(response)) {
+            if (owned) allocator.free(value.data.bytes);
+            value.data = .{ .bytes = &.{} };
+        } else if (owned and allocator.resize(value.data.bytes, size)) {
+            // resize 保证地址不变，音乐可以继续使用加载数据。
+            value.data.bytes = value.data.bytes[0..size];
+        }
         value.state = .handled;
-        if (value.data.owned) allocator.free(value.data.bytes);
-        value.data = .{ .bytes = &.{} };
     }
 
     pub fn deinit() void {
         var iterator = cache.valueIterator();
         while (iterator.next()) |value| {
-            allocator.free(value.managed);
             if (value.data.owned) allocator.free(value.data.bytes);
         }
         cache.deinit(allocator);
