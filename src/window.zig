@@ -199,7 +199,7 @@ pub fn Zon(comptime T: type) type {
 
 pub const ZonOption = struct { ignore: bool = false };
 // 从 ZON 字节解析对象，返回带 arena 生命周期的包装对象。
-pub fn parseZon(T: type, source: []const u8, ops: ZonOption) !Zon(T) {
+pub fn parseZon(T: type, source: [:0]const u8, ops: ZonOption) !Zon(T) {
     const gpa = memory.allocator.raw;
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
