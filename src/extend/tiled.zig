@@ -330,6 +330,16 @@ pub const Layer = struct {
     pub fn isNamed(self: Layer, name: []const u8) bool {
         return std.mem.eql(u8, self.name, name);
     }
+
+    /// 根据地图瓦片尺寸返回当前 tile 层的网格。
+    pub fn grid(self: Layer, cell: u32) Grid {
+        std.debug.assert(self.type == .tile);
+        return .{
+            .width = @intFromFloat(self.width),
+            .height = @intFromFloat(self.height),
+            .cell = cell,
+        };
+    }
 };
 
 pub const PropertyEnum = enum {
