@@ -202,14 +202,14 @@ fn layout(
     const scale = option.scale.scale(fontScale);
     const height = font.lineHeight * scale.y;
     const maxHeight = heightLimit orelse std.math.floatMax(f32);
-    if (height > maxHeight) return .{ .size = .zero, .next = 0 };
+    std.debug.assert(height <= maxHeight);
 
     // offset 只移动最终位置，不参与宽高、分页和 anchor 计算。
-    var pos = position.add(option.offset);
+    const start = position.add(option.offset);
 
     var next: ?usize = null;
     var width: f32, var line: f32 = .{ 0, 1 };
-    var maxWidth: f32, const startX = .{ 0, pos.x };
+    var maxWidth: f32 = 0;
     var iterator = Utf8View.initUnchecked(text).iterator();
     while (iterator.i < text.len) {
         const offset = iterator.i;
@@ -222,30 +222,23 @@ fn layout(
                 break;
             }
             width, line = .{ 0, line + 1 };
-            pos = .xy(startX, pos.y + height);
             continue;
         }
 
         const glyph = findGlyph(code);
         const advance = glyph.char.advance * font.size * scale.x;
-        if (width > 0) {
-            if (width + option.spacing + advance > option.max) {
-                // 换行后新行的行底超出高度，当前字符留给下一段
-                if ((line + 1) * height > maxHeight) {
-                    next = offset;
-                    break;
-                }
-                width, line = .{ 0, line + 1 };
-                pos = .xy(startX, pos.y + height);
-            } else {
-                width += option.spacing;
-                pos = pos.addX(option.spacing);
+        if (width > 0 and width + option.spacing + advance > option.max) {
+            // 换行后新行的行底超出高度，当前字符留给下一段
+            if ((line + 1) * height > maxHeight) {
+                next = offset;
+                break;
             }
-        }
-        const drawPos = pos;
+            width, line = .{ 0, line + 1 };
+        } else if (width > 0) width += option.spacing;
+
+        const drawPos = start.add(.xy(width, (line - 1) * height));
         width += advance;
         maxWidth = @max(maxWidth, width);
-        pos = .xy(startX + width, pos.y);
 
         if (!render) continue;
 
