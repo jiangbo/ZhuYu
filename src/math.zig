@@ -349,6 +349,14 @@ pub const Rect = struct {
         return .{ .min = min, .size = size };
     }
 
+    // 将矩形四周向内收缩 padding 像素
+    pub fn pad(self: Rect, padding: Vector2) Rect {
+        return .{
+            .min = self.min.add(padding),
+            .size = self.size.sub(padding.scale(2)),
+        };
+    }
+
     pub fn contains(self: Rect, other: anytype) bool {
         const T = @TypeOf(other);
         if (T == Vector2) return self.containsPoint(other);
