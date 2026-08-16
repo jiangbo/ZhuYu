@@ -9,6 +9,7 @@ const batch = @import("batch.zig");
 
 const Image = graphics.Image;
 const Vector2 = math.Vector2;
+const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
 
@@ -151,34 +152,75 @@ pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2,
 }
 
 const Utf8View = std.unicode.Utf8View;
+
+// 文字布局：本次排版尺寸，没画完时 next 是下一段起点。
+pub const Layout = struct {
+    size: Vector2, // 本次排版尺寸
+    next: ?usize, // 下一段起点，完整画完时为 null
+};
+
+// 绘制完整文字，宽度超出 option.max 换行，高度不限。
 pub fn draw(text: String, position: Vector2, option: Option) void {
-    _ = drawSize(text, position, option);
+    _ = drawAt(text, position, option);
 }
 
-pub fn drawSize(text: String, position: Vector2, option: Option) Vector2 {
+// 把文字画进矩形：宽度超出换行，高度超出停止，
+// 没画完时 next 是剩余文字的起点。
+pub fn drawIn(text: String, rect: Rect, option: Option) Layout {
+    if (text.len == 0) return .{ .size = .zero, .next = null };
+
+    // 矩形宽度和 option.max 同时限制本次排版。
+    const opt = option.with(.max, @min(rect.size.x, option.max));
+    var position = rect.min;
+    if (opt.anchor) |anchor| {
+        // anchor 只对齐矩形内实际排下的当前页。
+        const size = layout(text, position, rect.size.y, opt, false).size;
+        position = position.add(rect.size.sub(size).mul(anchor));
+    }
+    return layout(text, position, rect.size.y, opt, true);
+}
+
+// 无高度限制的点对齐绘制：文字的 anchor 点压在 position 上。
+fn drawAt(text: String, position: Vector2, option: Option) Vector2 {
     if (text.len == 0) return .zero;
+
     var pos = position;
     if (option.anchor) |anchor| {
         pos = pos.sub(measure(text, option).mul(anchor));
     }
-    return layout(text, pos, option, true);
+    return layout(text, pos, null, option, true).size;
 }
 
+// 统一计算测量和绘制；heightLimit 是与 position 无关的相对高度。
 fn layout(
     text: String,
     position: Vector2,
+    heightLimit: ?f32,
     option: Option,
     comptime render: bool,
-) Vector2 {
+) Layout {
     const scale = option.scale.scale(fontScale);
     const height = font.lineHeight * scale.y;
+    const maxHeight = heightLimit orelse std.math.floatMax(f32);
+    if (height > maxHeight) return .{ .size = .zero, .next = 0 };
+
+    // offset 只移动最终位置，不参与宽高、分页和 anchor 计算。
     var pos = position.add(option.offset);
 
+    var next: ?usize = null;
     var width: f32, var line: f32 = .{ 0, 1 };
     var maxWidth: f32, const startX = .{ 0, pos.x };
     var iterator = Utf8View.initUnchecked(text).iterator();
-    while (iterator.nextCodepoint()) |code| {
+    while (iterator.i < text.len) {
+        const offset = iterator.i;
+        const code = iterator.nextCodepoint().?;
+
         if (code == '\n') {
+            // 换行导致分页时，页边界已经完成换行，直接消费它。
+            if ((line + 1) * height > maxHeight) {
+                if (iterator.i < text.len) next = iterator.i;
+                break;
+            }
             width, line = .{ 0, line + 1 };
             pos = .xy(startX, pos.y + height);
             continue;
@@ -188,6 +230,11 @@ fn layout(
         const advance = glyph.char.advance * font.size * scale.x;
         if (width > 0) {
             if (width + option.spacing + advance > option.max) {
+                // 换行后新行的行底超出高度，当前字符留给下一段
+                if ((line + 1) * height > maxHeight) {
+                    next = offset;
+                    break;
+                }
                 width, line = .{ 0, line + 1 };
                 pos = .xy(startX, pos.y + height);
             } else {
@@ -213,20 +260,20 @@ fn layout(
         graphics.stats.text += 1;
     }
 
-    return .xy(maxWidth, line * height);
+    return .{ .size = .xy(maxWidth, line * height), .next = next };
 }
 
 pub fn drawLines(lines: Lines, position: Vector2, spacing: f32) void {
     var y: f32 = 0;
     for (lines) |line| {
-        const size = drawSize(line.text, position.addY(y), line.option);
+        const size = drawAt(line.text, position.addY(y), line.option);
         y += size.y + spacing;
     }
 }
 
 pub fn measure(text: String, option: Option) Vector2 {
     if (text.len == 0) return .zero;
-    return layout(text, .zero, option.with(.anchor, null), false);
+    return layout(text, .zero, null, option, false).size;
 }
 
 pub fn measureLines(lines: Lines, spacing: f32) Vector2 {
