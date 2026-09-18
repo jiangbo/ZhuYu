@@ -43,7 +43,7 @@ pub fn initCaches(allocator_: std.mem.Allocator) void {
 
 pub fn deinit() void {
     imageCache.deinit(allocator);
-    atlas.deinit();
+    atlas.cache.deinit(allocator);
     view.cache.deinit(allocator);
     sound.deinit();
     music.deinit();
@@ -153,46 +153,32 @@ pub const gpu = struct {
 };
 
 const atlas = struct {
-    var cache: std.AutoHashMapUnmanaged(Id, Load) = .empty;
+    var cache: std.AutoHashMapUnmanaged(Id, i32) = .empty;
 
-    const Load = struct {
-        view: sk.gfx.View,
-        sampler: sk.gfx.Sampler,
-        size: graphics.Vector2,
-        layers: usize,
-        loaded: usize = 0,
-        data: []u8,
-    };
-
-    const PageIndex = extern struct { atlasId: Id, layer: u32 };
+    const PageIndex = extern struct { atlasId: Id, layer: i32 };
 
     fn load(source: graphics.Atlas, smp: sk.gfx.Sampler) void {
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
-            std.debug.assert(entry.value_ptr.sampler.id == smp.id);
+            std.debug.assert(imageCache.get(atlasId).?.sampler.id == smp.id);
             return;
         }
 
+        const atlasView = sk.gfx.makeView(.{
+            .texture = .{ .image = sk.gfx.makeImage(.{
+                .usage = .{ .write_unsealed = true },
+                .width = @intFromFloat(source.size.x),
+                .height = @intFromFloat(source.size.y),
+                .type = .ARRAY,
+                .num_slices = @intCast(source.imagePaths.len),
+            }) },
+        });
+        entry.value_ptr.* = 0;
+
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
         imageCache.ensureUnusedCapacity(allocator, len) catch oom();
-
-        const atlasView = sk.gfx.allocView();
-        const pageCount = source.imagePaths.len;
-        const size: usize = @intFromFloat(source.size.x * source.size.y);
-        entry.value_ptr.* = .{
-            .view = atlasView,
-            .sampler = smp,
-            .size = source.size,
-            .layers = pageCount,
-            .data = allocator.alloc(u8, size * 4 * pageCount) catch oom(),
-        };
         for (source.imagePaths, 0..) |path, i| {
-            const pageIndex = PageIndex{
-                .atlasId = atlasId,
-                .layer = @intCast(i),
-            };
-            _ = file.load(path, @bitCast(pageIndex), handler);
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
                 .sampler = smp,
@@ -200,6 +186,12 @@ const atlas = struct {
                 .offset = .zero,
                 .size = source.size,
             });
+
+            const pageIndex = PageIndex{
+                .atlasId = atlasId,
+                .layer = @intCast(i),
+            };
+            _ = file.load(path, @bitCast(pageIndex), handler);
         }
 
         for (source.images) |image| {
@@ -212,41 +204,29 @@ const atlas = struct {
 
     fn handler(response: Response) bool {
         const pageIndex: PageIndex = @bitCast(response.index);
-        const loadContext = cache.getPtr(pageIndex.atlasId).?;
+        const atlasView = imageCache.get(pageIndex.atlasId).?.view;
+        const atlasImage = sk.gfx.queryViewImage(atlasView);
         const img = png.load(allocator, response.data) catch |err| {
             std.debug.panic("{s}: {}", .{ response.path, err });
         };
         defer allocator.free(img.data);
 
-        const width: i32 = @intFromFloat(loadContext.size.x);
-        const height: i32 = @intFromFloat(loadContext.size.y);
-        std.debug.assert(img.width == width);
-        std.debug.assert(img.height == height);
+        std.debug.assert(img.width == sk.gfx.queryImageWidth(atlasImage));
+        std.debug.assert(img.height == sk.gfx.queryImageHeight(atlasImage));
 
-        const start = img.data.len * pageIndex.layer;
-        const end = start + img.data.len;
-        @memcpy(loadContext.data[start..end], img.data);
-        loadContext.loaded += 1;
+        sk.gfx.writeImageUnsealed(.{
+            .src = .{ .data = sk.gfx.asRange(img.data) },
+            .dst = .{ .image = atlasImage, .slice = pageIndex.layer },
+            // 零值表示从当前图层写到最后一层，这里只写本次加载的图层。
+            .size = .{ .num_slices = 1 },
+        });
 
-        if (loadContext.loaded == loadContext.layers) {
-            sk.gfx.initView(loadContext.view, .{ .texture = .{
-                .image = view.makeImage(
-                    @intFromFloat(loadContext.size.x),
-                    @intFromFloat(loadContext.size.y),
-                    @intCast(loadContext.layers),
-                    loadContext.data,
-                ),
-            } });
-            allocator.free(loadContext.data);
-            loadContext.data = &.{};
+        const count = cache.getPtr(pageIndex.atlasId).?;
+        count.* += 1;
+        if (count.* == sk.gfx.queryImageNumSlices(atlasImage)) {
+            sk.gfx.sealImage(atlasImage);
         }
         return false;
-    }
-
-    fn deinit() void {
-        var iterator = cache.valueIterator();
-        while (iterator.next()) |v| allocator.free(v.data);
-        cache.deinit(allocator);
     }
 };
 
