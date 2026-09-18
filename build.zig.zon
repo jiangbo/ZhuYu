@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sokol = .{
-            .url = "git+https://github.com/floooh/sokol-zig#defd351b85e55480dc60068e1dcf96da190376d1",
-            .hash = "sokol-0.1.0-pb1HK8XKNwAN8Xkkp67pjgOQ9mTdDxNBKGN4n13xw2qQ",
+            .url = "git+https://github.com/floooh/sokol-zig#ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f",
+            .hash = "sokol-0.1.0-pb1HKygbQQCINV-qSe4SFm92QWaT_95VpWTJkwYqzOrX",
         },
         .stb = .{
             .url = "git+https://github.com/nothings/stb#31c1ad37456438565541f4919958214b6e762fb4",

@@ -71,7 +71,7 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
     pipeline = createPipeline(shaderDesc);
     vertexHandle = sk.gfx.makeBuffer(.{
         .size = @sizeOf(Vertex) * vertex.len,
-        .usage = .{ .stream_update = true },
+        .usage = .{ .write_transient = true },
     });
 
     circleImage = assets.getImageByPath("circle.png") orelse return;
@@ -125,7 +125,10 @@ pub fn endCommand() void {
 fn uploadVertices() void {
     if (vertices.items.len == 0) return;
     const buffer = sk.gfx.asRange(vertices.items);
-    _ = sk.gfx.updateBuffer(vertexHandle, buffer);
+    sk.gfx.writeBufferTransient(.{
+        .src = .{ .data = buffer },
+        .dst = .{ .buffer = vertexHandle },
+    });
 }
 
 fn currentDraw() ?*DrawCommand {
