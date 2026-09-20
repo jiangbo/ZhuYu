@@ -38,7 +38,9 @@ pub var scale: math.Vector = .one;
 pub var info: Info = undefined; // 当前窗口配置
 var io: std.Io = undefined;
 
-pub extern "Imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
+const platform = if (builtin.os.tag == .windows) struct {
+    pub extern "Imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
+} else struct {};
 
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
     if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
@@ -53,8 +55,8 @@ pub fn run(io_: std.Io, gpa: std.mem.Allocator, info_: Info) void {
     viewRect = .init(.zero, size);
     io = io_;
 
-    if (info.disableIME and builtin.os.tag == .windows) {
-        _ = ImmDisableIME(-1);
+    if (builtin.os.tag == .windows) {
+        if (info.disableIME) _ = platform.ImmDisableIME(-1);
     }
 
     sk.app.run(.{
