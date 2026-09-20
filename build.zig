@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    addEmsdkInstallStep(b, sokol);
     const sokolModule = sokol.module("sokol");
     const shader = try createShader(b, sokol, sokolModule);
 
@@ -75,6 +76,12 @@ pub fn build(b: *std.Build) !void {
 
 // 添加一个使用 ZhuYu 的应用目标。
 pub fn addApp(b: *std.Build, options: AppOption) !App {
+    const sokol = options.zhuyu.builder.dependency("sokol", .{
+        .target = options.target,
+        .optimize = options.optimize,
+    });
+    addEmsdkInstallStep(b, sokol);
+
     const mod = b.createModule(.{
         .root_source_file = options.root_source_file,
         .target = options.target,
@@ -86,7 +93,13 @@ pub fn addApp(b: *std.Build, options: AppOption) !App {
         return addNativeApp(b, options, mod);
     }
 
-    return try addWebApp(b, options, mod);
+    return try addWebApp(b, options, mod, sokol);
+}
+
+fn addEmsdkInstallStep(b: *std.Build, sokol: *std.Build.Dependency) void {
+    const emsdk = sokol.builder.dependency("emsdk", .{});
+    const emsdkStep = sk.emSdkInstallStep(b, emsdk, .{});
+    b.step("install-emsdk", "Install Emscripten SDK").dependOn(emsdkStep);
 }
 
 fn addNativeApp(
@@ -114,14 +127,9 @@ fn addWebApp(
     b: *std.Build,
     options: AppOption,
     mod: *std.Build.Module,
+    sokol: *std.Build.Dependency,
 ) !App {
-    const sokol = options.zhuyu.builder.dependency("sokol", .{
-        .target = options.target,
-        .optimize = options.optimize,
-    });
     const emsdk = sokol.builder.dependency("emsdk", .{});
-    const emsdkStep = sk.emSdkInstallStep(b, emsdk, .{});
-    b.step("install-emsdk", "install emsdk").dependOn(emsdkStep);
 
     const lib = b.addLibrary(.{
         .name = options.name,
