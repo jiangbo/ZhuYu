@@ -126,14 +126,21 @@ fn addNativeApp(
 fn addWebApp(
     b: *std.Build,
     options: AppOption,
-    mod: *std.Build.Module,
+    appModule: *std.Build.Module,
     sokol: *std.Build.Dependency,
 ) !App {
     const emsdk = sokol.builder.dependency("emsdk", .{});
 
+    const webModule = b.createModule(.{
+        .root_source_file = options.zhuyu.path("src/internal/web_main.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = &.{.{ .name = "app", .module = appModule }},
+    });
+
     const lib = b.addLibrary(.{
         .name = options.name,
-        .root_module = mod,
+        .root_module = webModule,
     });
 
     var emLink = options.em_link;
@@ -152,7 +159,7 @@ fn addWebApp(
     const linkStep = try sk.emLinkStep(b, emLink);
     b.getInstallStep().dependOn(&linkStep.step);
 
-    return .{ .module = mod, .artifact = lib };
+    return .{ .module = appModule, .artifact = lib };
 }
 
 fn createShader(
