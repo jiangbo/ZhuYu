@@ -26,8 +26,3 @@
 ## 4. 部署到 Cloudflare
 
 - 待做：将项目的 Web/WASM 构建产物部署到 Cloudflare。
-
-## 相关构建问题
-
-- `install-emsdk` 不应依赖 `-Dtarget=wasm32-emscripten` 才注册。
-- WebGL2 链接需要 `-sUSE_WEBGL2=1`，否则会出现 GL 符号未定义。
