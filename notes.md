@@ -26,3 +26,9 @@
 ## 4. 部署到 Cloudflare
 
 - 待做：将项目的 Web/WASM 构建产物部署到 Cloudflare。
+
+## 5. VS Code Remote SSH 找不到 Zig/ZLS
+
+- `zig.path`、`zig.zls.path` 是 `machine-overridable` 设置；Windows 用户设置不会被远程 Linux 继承，应写入 `/root/.vscode-server/data/Machine/settings.json`，值分别为 `zig`、`zls`，并设置 `zig.zls.enabled` 为 `on`。
+- Zig 扩展运行在远程 Linux；确保 `/root/.bashrc` 将 `/root/software/zig` 加入 `PATH`。仅写 `/etc/profile` 无法覆盖 VS Code Remote SSH 的非登录 shell。
+- PATH 变更后使用 `Remote-SSH: Kill VS Code Server on Host...` 再重新连接；仅关闭或重载窗口可能继续使用旧的 Server 进程。
