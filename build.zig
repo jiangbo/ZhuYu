@@ -8,6 +8,7 @@ pub const defaultEmLinkOptions: EmLinkOptions = .{
     .optimize = undefined,
     .lib_main = undefined,
     .emsdk = undefined,
+    .use_webgl2 = true,
     .shell_file_path = null,
 };
 
