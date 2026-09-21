@@ -5,7 +5,16 @@ const app = @import("app");
 // std.Io.Threaded, which does not compile for wasm32-emscripten. Web builds do
 // not use the process IO backend: ZhuYu loads browser assets through em.js.
 pub const panic = std.debug.no_panic;
+pub const std_options: std.Options = .{ .logFn = ignoreLog };
 pub const std_options_debug_io = std.Io.failing;
+
+// Zig 0.16 的 Web 临时入口不输出标准日志。
+fn ignoreLog(
+    comptime _: std.log.Level,
+    comptime _: @EnumLiteral(),
+    comptime _: []const u8,
+    _: anytype,
+) void {}
 
 pub fn main() void {
     const gpa = std.heap.c_allocator;
