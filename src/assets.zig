@@ -56,7 +56,7 @@ pub fn deinit() void {
 }
 
 pub const ImageOption = struct {
-    size: Vector2 = .zero, // 异步加载前使用的图片尺寸
+    size: Vector2, // 图片尺寸，加载完成后验证
     filter: Filter = .nearest, // 纹理过滤方式
 };
 
@@ -265,12 +265,10 @@ const view = struct {
         sk.gfx.initView(imageView, .{ .texture = .{
             .image = makeImage(img.width, img.height, 1, img.data),
         } });
-        if (imageCache.getPtr(id(resp.path))) |image| {
-            image.size = .{
-                .x = @floatFromInt(img.width),
-                .y = @floatFromInt(img.height),
-            };
-        }
+        const image = imageCache.getPtr(id(resp.path)).?;
+        // 文件尺寸必须与调用方提供的尺寸一致。
+        std.debug.assert(image.size.x == @as(f32, @floatFromInt(img.width)));
+        std.debug.assert(image.size.y == @as(f32, @floatFromInt(img.height)));
         return false;
     }
 
