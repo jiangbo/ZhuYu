@@ -148,7 +148,9 @@ pub fn draw(rows: []const Row) void {
     });
     writeFormatLine(&columns, "图形", "纹理 {}", .{
         totalStats.images.alive,
-    }, "顶点 {} KB", .{frameStats.size_update_buffer / 1024});
+    }, "顶点 {} KB", .{
+        batch.vertices.items.len * @sizeOf(batch.Vertex) / 1024,
+    });
     const batchUsed: f32 = @floatFromInt(batch.vertices.items.len);
     const batchCap: f32 = @floatFromInt(batch.vertices.capacity);
     writeFormatLine(&columns, "绘制", "批次 {}", .{
