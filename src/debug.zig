@@ -141,7 +141,7 @@ pub fn draw(rows: []const Row) void {
         window.clientSize.x,
         window.clientSize.y,
     }, "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
-    writeFormatLine(&columns, "缩放", "屏幕 {d:.0}%", .{
+    writeFormatLine(&columns, "显示", "屏幕 {d:.0}%", .{
         sk.app.dpiScale() * 100,
     }, "画面 {d:.0}%", .{
         window.viewRect.size.x / window.size.x * 100,
@@ -167,7 +167,7 @@ pub fn draw(rows: []const Row) void {
     writeFormatLine(&columns, "相机", "{d:.1}, {d:.1}", .{
         camera.main.position.x,
         camera.main.position.y,
-    }, "{d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
+    }, "缩放 {d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
     // 获取当前已加载的资源统计数据
     const assetStats = assets.queryStats();
     writeFormatLine(&columns, "资源", "文件 {}", .{assetStats.file}, //
