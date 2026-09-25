@@ -152,6 +152,7 @@ fn addCommand(image: Image) *DrawCommand {
 pub fn drawVertices(items: []const Vertex, image: ?Image) void {
     if (image) |img| {
         const cmd = currentDraw() orelse addCommand(img);
+        // 自动分批只比较纹理视图，不比较采样器或其它状态。
         if (cmd.view.id != img.view.id) _ = addCommand(img);
     }
     vertices.appendSliceAssumeCapacity(items);
