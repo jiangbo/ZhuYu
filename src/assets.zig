@@ -313,7 +313,9 @@ const sound = struct {
         const channels: i32 = @intCast(info.channels);
         const size = c.stbAudio.getSampleCount(stbAudio) * channels;
         const samples = allocator.alloc(f32, @intCast(size)) catch oom();
-        _ = c.stbAudio.fillSamples(stbAudio, samples, channels);
+        const decoded = c.stbAudio.fillSamples(stbAudio, samples, channels);
+        // 音效必须至少解码出一帧，避免循环播放时无法推进。
+        std.debug.assert(decoded > 0);
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
@@ -340,6 +342,8 @@ const music = struct {
 
     fn handler(resp: Response) bool {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data);
+        // 音乐必须包含可播放的帧。
+        std.debug.assert(c.stbAudio.getSampleCount(stbAudio) > 0);
         cache.getPtr(id(resp.path)).?.* = stbAudio;
         audio.playMusicOption(resp.path, resp.index == 1);
         return true;
