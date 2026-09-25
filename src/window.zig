@@ -47,13 +47,17 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 }
 
 const root = @import("root");
-pub fn run(io_: std.Io, gpa: std.mem.Allocator, info_: Info) void {
-    sk.time.setup();
+// 初始化窗口运行前需要的 IO 和内存分配器。
+pub fn init(io_: std.Io, gpa: std.mem.Allocator) void {
+    io = io_;
     memory.init(gpa);
+}
+
+pub fn run(info_: Info) void {
+    sk.time.setup();
     info = info_;
     size = info.logicSize orelse info.size;
     viewRect = .init(.zero, size);
-    io = io_;
 
     if (builtin.os.tag == .windows) {
         if (info.disableIME) _ = platform.ImmDisableIME(-1);
