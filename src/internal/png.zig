@@ -217,9 +217,8 @@ pub fn load(allocator: Allocator, bytes: []const u8) !Image {
     };
 
     switch (header.color) {
-        .rgb => try parseRgb(&decode),
+        .rgb, .gray => try parseRows(&decode, &.{}),
         .rgba => try parseRgba(&decode),
-        .gray => try parseGray(&decode),
         .indexed => {
             var buf: [256 * 4]u8 = undefined; // 256 色，每色 4 字节。
             for (0..rgb.len / 3) |i| {
@@ -230,9 +229,9 @@ pub fn load(allocator: Allocator, bytes: []const u8) !Image {
                 buf[i * 4 + 3] = a;
             }
             const palette = buf[0 .. rgb.len / 3 * 4];
-            try parseIndexed(&decode, palette);
+            try parseRows(&decode, palette);
         },
-        .magic => try parseIndexed(&decode, rgb),
+        .magic => try parseRows(&decode, rgb),
         else => return error.UnsupportedColor,
     }
     return .{
@@ -388,66 +387,42 @@ fn readChunk(reader: *Reader) !ChunkData {
     };
 }
 
-fn parseIndexed(decode: *const Decode, palette: []const u8) !void {
+// 逐行恢复 RGB、灰度和调色板图片，再转换为 RGBA 像素。
+fn parseRows(decode: *const Decode, palette: []const u8) !void {
     const width = decode.header.width;
-    const row = decode.row[0..width];
-    const prior = decode.prior[0..width];
+    const size: usize = if (decode.header.color == .rgb) 3 else 1;
+    var row = decode.row[0 .. width * size];
+    var prior = decode.prior[0 .. width * size];
 
     for (0..decode.header.height) |y| {
         const filter = try decode.flate.reader.takeEnum(Filter, .big);
         try decode.flate.reader.readSliceAll(row);
-        unFilter(row, prior, 1, filter);
+        unFilter(row, prior, size, filter);
 
         const dest = decode.data[y * width * 4 ..][0 .. width * 4];
-        for (row, 0..) |index, x| {
-            const color = @as(usize, index) * 4;
-            if (color + 4 > palette.len) return error.InvalidPaletteIndex;
-            @memcpy(dest[x * 4 ..][0..4], palette[color..][0..4]);
+        switch (decode.header.color) {
+            .rgb => for (0..width) |x| {
+                dest[x * 4 + 0] = row[x * 3 + 0];
+                dest[x * 4 + 1] = row[x * 3 + 1];
+                dest[x * 4 + 2] = row[x * 3 + 2];
+                dest[x * 4 + 3] = 255;
+            },
+            .gray => for (row, 0..) |value, x| {
+                dest[x * 4 + 0] = 255;
+                dest[x * 4 + 1] = 255;
+                dest[x * 4 + 2] = 255;
+                dest[x * 4 + 3] = value;
+            },
+            .indexed, .magic => for (row, 0..) |index, x| {
+                const color = @as(usize, index) * 4;
+                if (color + 4 > palette.len) return error.InvalidPaletteIndex;
+                @memcpy(dest[x * 4 ..][0..4], palette[color..][0..4]);
+            },
+            else => unreachable,
         }
 
-        @memcpy(prior, row);
-    }
-}
-
-fn parseRgb(decode: *const Decode) !void {
-    const width = decode.header.width;
-
-    for (0..decode.header.height) |y| {
-        const filter = try decode.flate.reader.takeEnum(Filter, .big);
-        try decode.flate.reader.readSliceAll(decode.row);
-        unFilter(decode.row, decode.prior, 3, filter);
-
-        const dest = decode.data[y * width * 4 ..][0 .. width * 4];
-        for (0..width) |x| {
-            dest[x * 4 + 0] = decode.row[x * 3 + 0];
-            dest[x * 4 + 1] = decode.row[x * 3 + 1];
-            dest[x * 4 + 2] = decode.row[x * 3 + 2];
-            dest[x * 4 + 3] = 255;
-        }
-
-        @memcpy(decode.prior, decode.row);
-    }
-}
-
-fn parseGray(decode: *const Decode) !void {
-    const width = decode.header.width;
-    const row = decode.row[0..width];
-    const prior = decode.prior[0..width];
-
-    for (0..decode.header.height) |y| {
-        const filter = try decode.flate.reader.takeEnum(Filter, .big);
-        try decode.flate.reader.readSliceAll(row);
-        unFilter(row, prior, 1, filter);
-
-        const dest = decode.data[y * width * 4 ..][0 .. width * 4];
-        for (row, 0..) |value, x| {
-            dest[x * 4 + 0] = 255;
-            dest[x * 4 + 1] = 255;
-            dest[x * 4 + 2] = 255;
-            dest[x * 4 + 3] = value;
-        }
-
-        @memcpy(prior, row);
+        // 交换两行缓冲，保留当前行供下一行反滤波使用。
+        std.mem.swap([]u8, &row, &prior);
     }
 }
 
