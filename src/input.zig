@@ -16,8 +16,8 @@ pub const Change = struct {
 pub var change: Change = .{};
 
 pub fn handle(ev: *const sk.app.Event) void {
-    const keyCode: u16 = @intCast(@intFromEnum(ev.key_code));
-    const buttonCode: u16 = @intCast(@intFromEnum(ev.mouse_button));
+    const keyCode: usize = @intCast(@backingInt(ev.key_code));
+    const buttonCode: usize = @intCast(@backingInt(ev.mouse_button));
 
     switch (ev.type) {
         .KEY_DOWN => {
@@ -61,10 +61,10 @@ pub fn update() void {
 }
 
 pub fn reset() void {
-    key.state = .initEmpty();
-    key.lastState = .initEmpty();
-    mouse.state = .initEmpty();
-    mouse.lastState = .initEmpty();
+    key.state = .empty;
+    key.lastState = .empty;
+    mouse.state = .empty;
+    mouse.lastState = .empty;
     mouse.scrollY = 0;
     change = .{};
     key.change = .{};
@@ -76,8 +76,8 @@ pub const key = struct {
     pub const Code = sk.app.Keycode;
 
     pub var change: Change = .{};
-    var lastState: std.StaticBitSet(512) = .initEmpty();
-    var state: std.StaticBitSet(512) = .initEmpty();
+    var lastState: std.StaticBitSet(512) = .empty;
+    var state: std.StaticBitSet(512) = .empty;
 
     pub fn set(keyCode: Code, down: bool) void {
         handle(&sk.app.Event{
@@ -87,16 +87,16 @@ pub const key = struct {
     }
 
     pub fn held(keyCode: Code) bool {
-        return state.isSet(@intCast(@intFromEnum(keyCode)));
+        return state.isSet(@intCast(@backingInt(keyCode)));
     }
 
     pub fn pressed(keyCode: Code) bool {
-        const code: usize = @intCast(@intFromEnum(keyCode));
+        const code: usize = @intCast(@backingInt(keyCode));
         return !lastState.isSet(code) and state.isSet(code);
     }
 
     pub fn released(keyCode: Code) bool {
-        const code: usize = @intCast(@intFromEnum(keyCode));
+        const code: usize = @intCast(@backingInt(keyCode));
         return lastState.isSet(code) and !state.isSet(code);
     }
 
@@ -124,8 +124,8 @@ pub const mouse = struct {
     pub var moved: bool = false;
     pub var raw: math.Vector = .zero;
     pub var scrollY: f32 = 0;
-    var lastState: std.StaticBitSet(3) = .initEmpty();
-    var state: std.StaticBitSet(3) = .initEmpty();
+    var lastState: std.StaticBitSet(3) = .empty;
+    var state: std.StaticBitSet(3) = .empty;
 
     pub fn set(button: Button, down: bool) void {
         handle(&sk.app.Event{
@@ -135,16 +135,16 @@ pub const mouse = struct {
     }
 
     pub fn held(button: Button) bool {
-        return state.isSet(@intCast(@intFromEnum(button)));
+        return state.isSet(@intCast(@backingInt(button)));
     }
 
     pub fn pressed(button: Button) bool {
-        const code: usize = @intCast(@intFromEnum(button));
+        const code: usize = @intCast(@backingInt(button));
         return !lastState.isSet(code) and state.isSet(code);
     }
 
     pub fn released(button: Button) bool {
-        const code: usize = @intCast(@intFromEnum(button));
+        const code: usize = @intCast(@backingInt(button));
         return lastState.isSet(code) and !state.isSet(code);
     }
 
@@ -160,7 +160,7 @@ pub fn bind(comptime binds: []const Bind) type {
         pub const Action = math.enums.fromField(binds, "action");
 
         pub fn held(action: Action) bool {
-            return key.anyHeld(binds[@intFromEnum(action)].keys);
+            return key.anyHeld(binds[@backingInt(action)].keys);
         }
 
         pub fn anyHeld(actions: []const Action) bool {
@@ -169,7 +169,7 @@ pub fn bind(comptime binds: []const Bind) type {
         }
 
         pub fn pressed(action: Action) bool {
-            return key.anyPressed(binds[@intFromEnum(action)].keys);
+            return key.anyPressed(binds[@backingInt(action)].keys);
         }
 
         pub fn anyPressed(actions: []const Action) bool {
@@ -178,7 +178,7 @@ pub fn bind(comptime binds: []const Bind) type {
         }
 
         pub fn released(action: Action) bool {
-            return key.anyReleased(binds[@intFromEnum(action)].keys);
+            return key.anyReleased(binds[@backingInt(action)].keys);
         }
 
         pub fn anyReleased(actions: []const Action) bool {

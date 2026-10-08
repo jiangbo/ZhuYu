@@ -21,7 +21,7 @@ pub const AppOption = struct {
     name: []const u8,
     root_source_file: std.Build.LazyPath,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     zhuyu: *std.Build.Dependency,
     imports: []const std.Build.Module.Import = &.{},
     em_link: EmLinkOptions = defaultEmLinkOptions,
@@ -52,15 +52,28 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     zhu.addIncludePath(stb.path("."));
+    // 翻译 Vorbis 声明，功能宏与 C 实现保持一致。
+    const vorbis = b.addTranslateC(.{
+        .root_source_file = stb.path("stb_vorbis.c"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vorbis.defineCMacro("STB_VORBIS_HEADER_ONLY", null);
+    vorbis.defineCMacro("STB_VORBIS_NO_PUSHDATA_API", null);
+    vorbis.defineCMacro("STB_VORBIS_NO_INTEGER_CONVERSION", null);
+    vorbis.defineCMacro("STB_VORBIS_NO_STDIO", null);
+    zhu.addImport("stb_vorbis", vorbis.createModule());
     if (target.result.os.tag == .emscripten) {
         const emsdk = sokol.builder.dependency("emsdk", .{});
-        zhu.addSystemIncludePath(emsdk.path(b.pathJoin(&.{
+        const includePath = emsdk.path(b.pathJoin(&.{
             "upstream",
             "emscripten",
             "cache",
             "sysroot",
             "include",
-        })));
+        }));
+        zhu.addSystemIncludePath(includePath);
+        vorbis.addSystemIncludePath(includePath);
     }
     zhu.addCSourceFile(.{
         .file = b.path("src/internal/stb_audio.c"),
@@ -112,13 +125,13 @@ fn addNativeApp(
         .name = options.name,
         .root_module = mod,
     });
-    if (options.optimize != .Debug) exe.subsystem = .Windows;
+    if (options.optimize != .debug) exe.subsystem = .windows;
 
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run.addArgs(args);
+    run.addPassthruArgs();
     b.step("run", "Run the app").dependOn(&run.step);
 
     return .{ .module = mod, .artifact = exe };
@@ -132,16 +145,9 @@ fn addWebApp(
 ) !App {
     const emsdk = sokol.builder.dependency("emsdk", .{});
 
-    const webModule = b.createModule(.{
-        .root_source_file = options.zhuyu.path("src/internal/web_main.zig"),
-        .target = options.target,
-        .optimize = options.optimize,
-        .imports = &.{.{ .name = "app", .module = appModule }},
-    });
-
     const lib = b.addLibrary(.{
         .name = options.name,
-        .root_module = webModule,
+        .root_module = appModule,
     });
 
     var emLink = options.em_link;

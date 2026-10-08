@@ -6,6 +6,7 @@ const assets = @import("assets.zig");
 const math = @import("math.zig");
 const graphics = @import("graphics.zig");
 const batch = @import("batch.zig");
+const memory = @import("internal/memory.zig");
 
 const Image = graphics.Image;
 const Vector2 = math.Vector2;
@@ -139,7 +140,7 @@ pub const Lines = []const Line;
 
 pub fn drawNumber(number: anytype, pos: Vector2, option: Option) void {
     var textBuffer: [15]u8 = undefined;
-    const string = format(&textBuffer, "{d}", .{number});
+    const string = memory.format(&textBuffer, "{d}", .{number});
     draw(string, pos, option);
 }
 
@@ -148,7 +149,7 @@ pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2,
     option: Option) void {
 // zig fmt: on
     var buffer: [1024]u8 = undefined;
-    draw(format(&buffer, fmt, args), pos, option);
+    draw(memory.format(&buffer, fmt, args), pos, option);
 }
 
 const Utf8View = std.unicode.Utf8View;
@@ -305,14 +306,6 @@ pub fn encodeUtf8(buffer: []u8, unicode: []const u21) []u8 {
             catch std.debug.panic("illegal unicode: {}", .{code});
     }
     return buffer[0..len];
-}
-
-pub fn format(buf: []u8, comptime fmt: String, args: anytype) []u8 {
-    return std.fmt.bufPrint(buf, fmt, args) catch @panic("text too long");
-}
-
-pub fn formatZ(buf: []u8, comptime fmt: String, args: anytype) [:0]u8 {
-    return std.fmt.bufPrintZ(buf, fmt, args) catch @panic("text too long");
 }
 
 pub fn nextIndex(str: []const u8, index: usize) usize {

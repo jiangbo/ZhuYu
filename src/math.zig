@@ -79,7 +79,7 @@ pub fn ceilAway(value: f32) f32 {
 
 pub fn toIndex(T: type, value: anytype) T {
     return switch (@typeInfo(@TypeOf(value))) {
-        .@"enum" => @intCast(@intFromEnum(value)),
+        .@"enum" => @intCast(@backingInt(value)),
         .int, .comptime_int => @intCast(value),
         else => @compileError("index must be enum or int"),
     };
@@ -105,12 +105,12 @@ pub const enums = struct {
     }
 
     pub fn len(comptime E: type) usize {
-        return std.meta.fields(E).len;
+        return @typeInfo(E).@"enum".field_names.len;
     }
 
     pub fn inRange(e: anytype, min: @TypeOf(e), max: @TypeOf(e)) bool {
-        const v = @intFromEnum(e);
-        return v >= @intFromEnum(min) and v <= @intFromEnum(max);
+        const v = @backingInt(e);
+        return v >= @backingInt(min) and v <= @backingInt(max);
     }
 
     pub fn next(value: anytype) @TypeOf(value) {
@@ -124,7 +124,7 @@ pub const enums = struct {
     pub fn to(E: type, value: anytype) E {
         const T = @TypeOf(value);
         if (T == []const u8) return std.meta.stringToEnum(E, value).?;
-        return @enumFromInt(value);
+        return @fromBackingInt(@intCast(value));
     }
 
     pub fn array(E: type, V: type, values: []const V) Array(E, V) {
@@ -591,3 +591,12 @@ pub const random = struct {
         return get().boolean();
     }
 };
+
+// 验证运行时整数到窄枚举的转换，避免只编译声明漏掉泛型错误。
+test "enum accepts runtime integer" {
+    const Kind = enum(u8) { first, second };
+    var value: u32 = 1;
+    _ = &value;
+    try std.testing.expectEqual(Kind.second, enums.to(Kind, value));
+    try std.testing.expectEqual(@as(usize, 2), enums.len(Kind));
+}

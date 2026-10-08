@@ -39,10 +39,11 @@ comptime {
 }
 
 pub const clamp = std.math.clamp;
-pub const format = text.format;
-pub const formatZ = text.formatZ;
+pub const format = memory.format;
+pub const formatZ = memory.formatZ;
 pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
+pub const reinterpret = memory.reinterpret;
 
 pub const testing = struct {
     pub const allocator: Allocator = .{ .raw = std.testing.allocator };

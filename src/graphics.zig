@@ -3,6 +3,7 @@ const std = @import("std");
 const sk = @import("sokol");
 const math = @import("math.zig");
 const assets = @import("assets.zig");
+const memory = @import("internal/memory.zig");
 const window = @import("window.zig");
 
 pub const View = sk.gfx.View;
@@ -113,11 +114,12 @@ pub const Animation = struct {
     }
 
     pub fn getEnumFrame(self: *const Animation, T: type) T {
-        return @enumFromInt(self.source.frames[self.index].extend);
+        const extend = self.source.frames[self.index].extend;
+        return @fromBackingInt(@intCast(extend));
     }
 
     pub fn getEnumExtend(self: *const Animation, T: type) T {
-        return @enumFromInt(self.extend);
+        return @fromBackingInt(@intCast(self.extend));
     }
 
     pub fn stop(self: *Animation) void {
@@ -263,7 +265,7 @@ pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
     var action = sk.gfx.PassAction{};
     action.colors[0] = .{
         .load_action = .CLEAR,
-        .clear_value = @bitCast(color),
+        .clear_value = memory.reinterpret(sk.gfx.Color, color),
     };
 
     var viewport: ?math.Rect = renderPass.viewport;

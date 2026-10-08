@@ -2,7 +2,7 @@
     .name = .zhuyu,
     .version = "0.1.0",
     .fingerprint = 0x77a3d2846158853,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .sokol = .{
             .url = "git+https://github.com/floooh/sokol-zig#ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f",

@@ -244,8 +244,8 @@ fn writeFormatLine(
 ) void {
     var leftBuffer: [80]u8 = undefined;
     var rightBuffer: [80]u8 = undefined;
-    const left = text.format(&leftBuffer, leftFormat, leftArgs);
-    const right = text.format(&rightBuffer, rightFormat, rightArgs);
+    const left = memory.format(&leftBuffer, leftFormat, leftArgs);
+    const right = memory.format(&rightBuffer, rightFormat, rightArgs);
     writeLine(&columns.label, label);
     writeLine(&columns.left, left);
     writeLine(&columns.right, right);

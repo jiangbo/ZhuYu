@@ -29,7 +29,7 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     sk.fetch.setup(.{
         .num_lanes = fileBuffer.len,
         .logger = .{ .func = sk.log.func },
-        .allocator = @bitCast(memory.skAllocator),
+        .allocator = memory.sokolAllocator(sk.fetch.Allocator),
     });
 }
 
@@ -155,7 +155,8 @@ pub const gpu = struct {
 const atlas = struct {
     var cache: std.AutoHashMapUnmanaged(Id, i32) = .empty;
 
-    const PageIndex = extern struct { atlasId: Id, layer: i32 };
+    // 打包为文件加载回调的 64 位标识。
+    const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
 
     fn load(source: graphics.Atlas, smp: sk.gfx.Sampler) void {
         const atlasId = id(source.imagePaths[0]);
@@ -405,8 +406,7 @@ pub const file = struct {
         var buffer: [1024]u8 = undefined;
         std.debug.assert(buffer.len == sk.fetch.maxPath());
         const fmt = assetRoot ++ "{s}";
-        const filePath = std.fmt.bufPrintZ(&buffer, fmt, .{path}) catch
-            @panic("asset path too long");
+        const filePath = memory.formatZ(&buffer, fmt, .{path});
         std.log.info("loading {s}", .{filePath});
         _ = sk.fetch.send(.{ .path = filePath, .callback = callback });
 

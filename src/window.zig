@@ -72,7 +72,7 @@ pub fn run(info_: Info) void {
         .event_cb = windowEvent,
         .frame_cb = windowFrame,
         .cleanup_cb = windowDeinit,
-        .allocator = @bitCast(memory.skAllocator),
+        .allocator = memory.sokolAllocator(sk.app.Allocator),
         .high_dpi = true,
     });
 }
@@ -82,7 +82,7 @@ export fn windowInit() void {
     sk.gfx.setup(.{
         .environment = sk.glue.environment(),
         .logger = .{ .func = sk.log.func },
-        .allocator = memory.skAllocator,
+        .allocator = memory.sokolAllocator(sk.gfx.Allocator),
     });
     assets.init(io, info.maxFileSize);
     camera.init(size);
@@ -193,7 +193,7 @@ pub fn readAll(gpa: Allocator, path: [:0]const u8) ![:0]u8 {
     if (@import("builtin").target.os.tag == .emscripten) {
         var buffer: [1024]u8 = undefined;
         return switch (try em.load(path, &buffer)) {
-            .loaded => |content| try gpa.dupeZ(u8, content),
+            .loaded => |content| try gpa.dupeSentinel(u8, content, 0),
             .tooSmall => |len| readFromJs(gpa, path, len),
         };
     }
@@ -220,12 +220,14 @@ pub fn parseZon(T: type, source: [:0]const u8, ops: ZonOption) !Zon(T) {
     errdefer arena.deinit();
 
     const arenaAllocator = arena.allocator();
-    const option: std.zon.parse.Options = .{
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const value = try std.zon.parse.fromSlice(T, .{
+        .gpa = gpa,
+        .arena = arenaAllocator,
+        .source = source,
+        .diagnostics = &diagnostics,
         .ignore_unknown_fields = ops.ignore,
-        .free_on_error = false,
-    };
-    const value = try std.zon.parse.fromSliceAlloc(T, //
-        arenaAllocator, source, null, option);
+    });
     return .{ .value = value, .arena = arena };
 }
 
@@ -291,9 +293,10 @@ pub fn exit() void {
 
 pub const Cursor = sk.app.MouseCursor;
 pub const setCursor = sk.app.setMouseCursor;
-pub const CursorDesc = extern struct {
+// 打包为图片加载回调的 64 位标识。
+pub const CursorDesc = packed struct(u64) {
     cursor: Cursor = .CUSTOM_1,
-    offset: extern struct { x: i16 = 0, y: i16 = 0 } = .{},
+    offset: packed struct { x: i16 = 0, y: i16 = 0 } = .{},
     comptime {
         std.debug.assert(@sizeOf(@This()) == @sizeOf(u64));
     }
@@ -305,7 +308,7 @@ pub fn loadCursor(path: [:0]const u8, desc: CursorDesc) void {
 fn mouseCallback(handle: u64, icon: assets.Icon) void {
     const cursorDesc: CursorDesc = @bitCast(handle);
     _ = sk.app.bindMouseCursorImage(cursorDesc.cursor, .{
-        .pixels = @bitCast(sk.gfx.asRange(icon.data)),
+        .pixels = .{ .ptr = icon.data.ptr, .size = icon.data.len },
         .width = icon.width,
         .height = icon.height,
         .cursor_hotspot_x = cursorDesc.offset.x,
@@ -328,7 +331,7 @@ pub fn useWindowIcon(path: [:0]const u8) void {
         fn callback(_: u64, icon: assets.Icon) void {
             var desc: sk.app.IconDesc = .{};
             desc.images[0] = .{
-                .pixels = @bitCast(sk.gfx.asRange(icon.data)),
+                .pixels = .{ .ptr = icon.data.ptr, .size = icon.data.len },
                 .width = icon.width,
                 .height = icon.height,
             };

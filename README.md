@@ -10,6 +10,15 @@ ZhuYu 是一个用 Zig 编写的 2D 游戏开发库，基于 Sokol。
 - 图片与音频资源加载。
 - 文字绘制、界面控件和 Tiled 地图支持。
 
+## 构建要求
+
+使用 Zig 0.17.0。运行测试：
+
+```sh
+zig build test
+zig build test -Doptimize=safe
+```
+
 ## 开发状态
 
 **警告：本项目仍在开发中，不保证任何兼容性。**

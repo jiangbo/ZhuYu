@@ -14,13 +14,7 @@ export fn c_free(ptr: ?*anyopaque) void {
 
 pub const stbAudio = stbVorbis;
 pub const stbVorbis = struct {
-    const stb = @cImport({
-        @cDefine("STB_VORBIS_NO_PUSHDATA_API", {});
-        @cDefine("STB_VORBIS_HEADER_ONLY", {});
-        @cDefine("STB_VORBIS_NO_INTEGER_CONVERSION", {});
-        @cDefine("STB_VORBIS_NO_STDIO", {});
-        @cInclude("stb_vorbis.c");
-    });
+    const stb = @import("stb_vorbis");
 
     pub const Audio = stb.stb_vorbis;
     pub const AudioInfo = stb.stb_vorbis_info;
@@ -49,7 +43,7 @@ pub const stbVorbis = struct {
         return stb.stb_vorbis_get_samples_float_interleaved(
             audio,
             channels,
-            @ptrCast(buffer),
+            buffer.ptr,
             @intCast(buffer.len),
         );
     }

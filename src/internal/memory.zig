@@ -1,14 +1,38 @@
 const std = @import("std");
-const sk = @import("sokol");
 
 pub var counter: Counter = undefined;
 pub var allocator: OomAllocator = undefined;
-pub var skAllocator: sk.gfx.Allocator = undefined;
 
 pub fn init(gpa: std.mem.Allocator) void {
     counter = Counter.init(gpa);
     allocator = .{ .raw = counter.allocator() };
-    skAllocator = .{ .alloc_fn = sk_alloc, .free_fn = sk_free };
+}
+
+// 根据 Sokol 分配器类型创建实例，共用引擎的分配和释放回调。
+pub fn sokolAllocator(comptime T: type) T {
+    return .{ .alloc_fn = sk_alloc, .free_fn = sk_free };
+}
+
+// 按内存布局重新解释值，调用方保证字段布局相符。
+pub fn reinterpret(comptime T: type, value: anytype) T {
+    const Value = @TypeOf(value);
+    if (@sizeOf(T) != @sizeOf(Value)) {
+        @compileError("types must have the same size");
+    }
+    // 本地副本满足两种类型的对齐，转换后返回值而非指针。
+    const source: Value align(@max(@alignOf(T), @alignOf(Value))) = value;
+    return @as(*const T, @ptrCast(&source)).*;
+}
+
+// 格式化到缓冲区，空间不足时直接终止。
+pub fn format(buf: []u8, comptime fmt: []const u8, args: anytype) []u8 {
+    return std.fmt.bufPrint(buf, fmt, args) catch @panic("buffer too small");
+}
+
+// 格式化为以零结尾的字符串，缓冲区不足时直接终止。
+pub fn formatZ(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]u8 {
+    return std.fmt.bufPrintSentinel(buf, fmt, args, 0) catch
+        @panic("buffer too small");
 }
 
 pub const OomAllocator = struct {
@@ -31,7 +55,7 @@ pub const OomAllocator = struct {
     }
 
     pub fn dupeZ(self: OomAllocator, T: type, data: []const T) [:0]T {
-        return self.raw.dupeZ(T, data) catch oom();
+        return self.raw.dupeSentinel(T, data, 0) catch oom();
     }
 
     pub fn free(self: OomAllocator, data: anytype) void {
