@@ -480,6 +480,12 @@ pub const Menu = struct {
         return self.buttons[index].event;
     }
 
+    /// 更新菜单，并将触发的事件转为指定枚举。
+    pub fn updateEnum(self: *Menu, T: type, option: Option) ?T {
+        const event = self.update(option) orelse return null;
+        return @fromBackingInt(@intCast(event));
+    }
+
     fn defaultNav(self: Menu) Nav {
         const keys = self.navKeys;
         return switch (self.trigger) {
