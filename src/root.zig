@@ -45,6 +45,12 @@ pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
 pub const reinterpret = memory.reinterpret;
 
+/// 初始化引擎共用的内存分配器和窗口 IO。
+pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
+    memory.init(gpa);
+    window.io = io;
+}
+
 pub const testing = struct {
     pub const allocator: Allocator = .{ .raw = std.testing.allocator };
 };

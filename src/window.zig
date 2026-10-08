@@ -36,7 +36,7 @@ pub var clientSize: math.Vector = .zero;
 pub var viewRect: math.Rect = undefined;
 pub var scale: math.Vector = .one;
 pub var info: Info = undefined; // 当前窗口配置
-var io: std.Io = undefined;
+pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
 const platform = if (builtin.os.tag == .windows) struct {
     pub extern "Imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
@@ -47,12 +47,6 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 }
 
 const root = @import("root");
-// 初始化窗口运行前需要的 IO 和内存分配器。
-pub fn init(io_: std.Io, gpa: std.mem.Allocator) void {
-    io = io_;
-    memory.init(gpa);
-}
-
 pub fn run(info_: Info) void {
     sk.time.setup();
     info = info_;
