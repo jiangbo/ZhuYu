@@ -156,13 +156,6 @@ fn addWebApp(
     emLink.lib_main = lib;
     emLink.emsdk = emsdk;
 
-    // 加入引擎使用的 JavaScript 库，并保留应用自己的库。
-    const len = emLink.js_libraries.len;
-    const jsLibraries = try b.allocator.alloc(std.Build.LazyPath, len + 1);
-    @memcpy(jsLibraries[0..len], emLink.js_libraries);
-    jsLibraries[len] = options.zhuyu.path("src/internal/em.js");
-    emLink.js_libraries = jsLibraries;
-
     const linkStep = try sk.emLinkStep(b, emLink);
     b.getInstallStep().dependOn(&linkStep.step);
 

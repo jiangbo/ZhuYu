@@ -58,32 +58,86 @@ pub const stbVorbis = struct {
 };
 
 pub const em = struct {
+    const api = @import("std").os.emscripten;
+
     pub const Load = union(enum) {
         loaded: []u8,
         tooSmall: usize,
     };
 
-    extern fn em_js_keep() void;
-    extern fn em_js_file_exists(path: [*]const u8) c_int;
-    extern fn em_js_file_save(path: [*]const u8, data: [*]const u8, len: c_int) c_int;
-    extern fn em_js_file_load(c_path: [*]const u8, out_buf: [*]u8, buf_size: c_int) c_int;
-
+    /// 检查浏览器中是否存在存档。
     pub fn exists(path: [:0]const u8) bool {
-        em_js_keep();
-        return em_js_file_exists(path.ptr) != 0;
+        var scriptBuffer: [1024]u8 = undefined;
+        const script = memory.formatZ(&scriptBuffer,
+            \\(() => {{
+            \\    const path = UTF8ToString({d});
+            \\    try {{
+            \\        return localStorage.getItem(path) !== null;
+            \\    }} catch (err) {{
+            \\        console.error("check file failed:", path, err);
+            \\        return false;
+            \\    }}
+            \\}})()
+        , .{@intFromPtr(path.ptr)});
+        return api.emscripten_run_script_int(script.ptr) != 0;
     }
 
+    /// 读取浏览器存档，将原始字节写入传入的缓冲区。
     pub fn load(path: [:0]const u8, buffer: []u8) !Load {
-        em_js_keep();
-        const len = em_js_file_load(path.ptr, buffer.ptr, @intCast(buffer.len));
+        var scriptBuffer: [2048]u8 = undefined;
+        const script = memory.formatZ(&scriptBuffer,
+            \\(() => {{
+            \\    const path = UTF8ToString({d});
+            \\    const out = {d};
+            \\    const len = {d};
+            \\    try {{
+            \\        const base64 = localStorage.getItem(path);
+            \\        if (!base64) return 0;
+            \\        const binary = atob(base64);
+            \\        if (binary.length > len) return -binary.length;
+            \\        for (let i = 0; i < binary.length; i++) {{
+            \\            HEAPU8[out + i] = binary.charCodeAt(i);
+            \\        }}
+            \\        return binary.length;
+            \\    }} catch (err) {{
+            \\        console.error("load file failed:", path, err);
+            \\        return 0;
+            \\    }}
+            \\}})()
+        , .{ @intFromPtr(path.ptr), @intFromPtr(buffer.ptr), buffer.len });
+        const len = api.emscripten_run_script_int(script.ptr);
         if (len == 0) return error.FileNotFound;
         if (len < 0) return .{ .tooSmall = @intCast(-len) };
         return .{ .loaded = buffer[0..@intCast(len)] };
     }
 
+    /// 将存档字节编码为 Base64，保存到浏览器。
     pub fn save(path: [:0]const u8, data: []const u8) !void {
-        em_js_keep();
-        const err = em_js_file_save(path.ptr, data.ptr, @intCast(data.len));
+        var scriptBuffer: [2048]u8 = undefined;
+        const script = memory.formatZ(&scriptBuffer,
+            \\(() => {{
+            \\    const path = UTF8ToString({d});
+            \\    const data = {d};
+            \\    const len = {d};
+            \\    let text = "";
+            \\    for (let pos = data; pos < data + len; pos += 0x8000) {{
+            \\        const end = Math.min(pos + 0x8000, data + len);
+            \\        const chars = new Array(end - pos);
+            \\        for (let i = pos; i < end; i++) {{
+            \\            chars[i - pos] = String.fromCharCode(HEAPU8[i]);
+            \\        }}
+            \\        text += chars.join("");
+            \\    }}
+            \\    try {{
+            \\        localStorage.setItem(path, btoa(text));
+            \\        return 0;
+            \\    }} catch (err) {{
+            \\        console.error("save file failed:", path, err);
+            \\        return 1;
+            \\    }}
+            \\}})()
+        , .{ @intFromPtr(path.ptr), @intFromPtr(data.ptr), data.len });
+        const err = api.emscripten_run_script_int(script.ptr);
         if (err != 0) return error.WriteFailed;
     }
 };
