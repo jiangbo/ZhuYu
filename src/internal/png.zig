@@ -53,112 +53,43 @@ const Decode = struct {
     prior: []u8,
 };
 
+// 使用标准 Reader 的缓冲和跨块处理，只提供 IDAT 数据流。
 const DataReader = struct {
     reader: Reader,
     bytes: []const u8,
     ranges: []const Range,
-    // 原 IDAT 读取位置，buf 状态下表示预读到哪里。
+    // 当前 IDAT 块和块内读取位置。
     rangeIndex: usize = 0,
-    rangeOffset: usize = 0,
-    buf: [8]u8 = undefined, // flate 跨 IDAT 时拼少量连续字节。
+    offset: usize = 0,
 
-    const vtable: Reader.VTable = .{
-        .stream = stream,
-        .readVec = readVec,
-        .rebase = rebase,
-    };
-
-    fn init(bytes: []const u8, ranges: []const Range) DataReader {
-        const reader = std.mem.zeroInit(std.Io.Reader, .{
-            .vtable = &vtable,
-        });
-        return .{ .reader = reader, .bytes = bytes, .ranges = ranges };
+    // 由 std 管理输入缓冲，跨块拼接不需要单独处理。
+    fn init(bytes: []const u8, ranges: []const Range, buffer: []u8) DataReader {
+        return .{
+            .reader = std.mem.zeroInit(Reader, .{
+                .vtable = &@as(Reader.VTable, .{ .stream = stream }),
+                .buffer = buffer,
+            }),
+            .bytes = bytes,
+            .ranges = ranges,
+        };
     }
 
+    // 按顺序输出 IDAT 数据，不包含 PNG 块头和 CRC。
     fn stream(reader: *Reader, writer: *Writer, limit: Limit) !usize {
         const self: *@This() = @alignCast(@fieldParentPtr("reader", reader));
-        if (limit == .nothing) return 0;
-        if (reader.seek >= reader.end) try self.loadRange();
-
-        const data = limit.slice(reader.buffer[reader.seek..reader.end]);
-        const n = try writer.write(data);
-        reader.seek += n;
-        return n;
-    }
-
-    fn readVec(reader: *Reader, data: [][]u8) !usize {
-        const self: *@This() = @alignCast(@fieldParentPtr("reader", reader));
-        if (data[0].len == 0) {
-            std.debug.assert(reader.seek == reader.end);
-            try self.loadRange();
-            return 0;
-        }
-
-        if (reader.seek >= reader.end) try self.loadRange();
-        const start = reader.seek;
-        for (data) |full| {
-            if (full.len == 0) continue;
-            if (reader.seek >= reader.end) break;
-
-            const src = reader.buffer[reader.seek..reader.end];
-            const min = @min(full.len, src.len);
-            @memcpy(full[0..min], src[0..min]);
-            reader.seek += min;
-        }
-
-        return reader.seek - start;
-    }
-
-    fn rebase(reader: *Reader, capacity: usize) !void {
-        const self: *@This() = @alignCast(@fieldParentPtr("reader", reader));
-        // 这里只给 zlib/deflate 用，输入最多预读 4 字节。
-        std.debug.assert(capacity <= 4);
-        if (reader.end - reader.seek >= capacity) return;
-
-        if (reader.buffer.ptr == self.buf[0..].ptr) {
-            self.rangeOffset -= reader.end - reader.seek;
-            return try self.loadRange();
-        }
-
-        // 未消费的尾巴搬到 buf 头，再从后续 IDAT range 补满。
-        const left = reader.buffer[reader.seek..reader.end];
-        @memmove(self.buf[0..left.len], left);
-        const need = self.buf.len - left.len;
-
-        try self.loadRange();
-        const src = reader.buffer[reader.seek..reader.end];
-        // 假设小 IDAT 只在末尾，中间 IDAT 一定能补齐。
-        const copy = @min(need, src.len);
-        @memcpy(self.buf[left.len..][0..copy], src[0..copy]);
-        self.rangeIndex -= 1;
-        self.rangeOffset = reader.seek + copy;
-
-        const len = left.len + copy;
-        if (len < capacity) return error.ReadFailed;
-        self.setReader(self.buf[0..len], 0);
-    }
-
-    fn loadRange(self: *DataReader) !void {
         while (self.rangeIndex < self.ranges.len) {
             const range = self.ranges[self.rangeIndex];
-            self.rangeIndex += 1;
-            const seek = self.rangeOffset;
-            self.rangeOffset = 0;
-            if (seek == range.end - range.start) continue;
-
-            const buffer = self.bytes[range.start..range.end];
-            self.setReader(@constCast(buffer), seek);
-            return;
+            const data = self.bytes[range.start + self.offset .. range.end];
+            if (data.len == 0) {
+                self.rangeIndex += 1;
+                self.offset = 0;
+                continue;
+            }
+            const n = try writer.write(limit.sliceConst(data));
+            self.offset += n;
+            return n;
         }
-
-        self.setReader(&.{}, 0);
         return error.EndOfStream;
-    }
-
-    fn setReader(self: *DataReader, buffer: []u8, seek: usize) void {
-        self.reader.buffer = buffer;
-        self.reader.seek = seek;
-        self.reader.end = buffer.len;
     }
 };
 
@@ -201,7 +132,8 @@ pub fn load(allocator: Allocator, bytes: []const u8) !Image {
     const pixelData = try allocator.alloc(u8, len);
     errdefer allocator.free(pixelData);
 
-    var source = DataReader.init(bytes, ranges.items);
+    var inputBuffer: [4 * 1024]u8 = undefined;
+    var source = DataReader.init(bytes, ranges.items, &inputBuffer);
 
     const prior = try gpa.alloc(u8, header.width * 3);
     @memset(prior, 0);
