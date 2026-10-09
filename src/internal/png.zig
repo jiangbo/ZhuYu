@@ -135,7 +135,8 @@ pub fn load(allocator: Allocator, bytes: []const u8) !Image {
     var inputBuffer: [4 * 1024]u8 = undefined;
     var source = DataReader.init(bytes, ranges.items, &inputBuffer);
 
-    const prior = try gpa.alloc(u8, header.width * 3);
+    // 首行使用全零上一行，RGBA 也复用这块工作缓冲。
+    const prior = try gpa.alloc(u8, header.width * 4);
     @memset(prior, 0);
 
     const buffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
@@ -304,13 +305,11 @@ fn readHeader(reader: *Reader) !Header {
 
 fn readChunk(reader: *Reader) !ChunkData {
     const dataLen = try reader.takeInt(u32, .big);
-    const crcBytes = try reader.peek(dataLen + @sizeOf(Chunk));
-
     const kind = try reader.takeEnum(Chunk, .big);
     const start = reader.seek;
     const data = try reader.take(dataLen);
-    const crc = try reader.takeInt(u32, .big);
-    if (crc != std.hash.Crc32.hash(crcBytes)) return error.InvalidCrc;
+    // 与 stb_image 一样，跳过 CRC，不校验块数据。
+    try reader.discardAll(4);
 
     return .{
         .kind = kind,
@@ -360,7 +359,7 @@ fn parseRows(decode: *const Decode, palette: []const u8) !void {
 
 fn parseRgba(decode: *const Decode) !void {
     const len = decode.header.width * 4;
-    var pre: []const u8 = &.{};
+    var pre: []const u8 = decode.prior[0..len];
 
     for (0..decode.header.height) |y| {
         const filter = try decode.flate.reader.takeEnum(Filter, .big);
@@ -371,26 +370,31 @@ fn parseRgba(decode: *const Decode) !void {
     }
 }
 
+// 上一行始终有效，只对每行开头缺少左侧数据的部分单独处理。
 fn unFilter(cur: []u8, pre: []const u8, size: usize, f: Filter) void {
     switch (f) {
         .none => {},
-        .sub => for (cur, 0..) |*value, i| {
-            value.* +%= if (i >= size) cur[i - size] else 0;
+        .sub => for (cur[size..], size..) |*value, i| {
+            value.* +%= cur[i - size];
         },
-        .up => for (cur, 0..) |*value, i| {
-            value.* +%= if (pre.len == 0) 0 else pre[i];
+        .up => for (cur, pre) |*value, up| {
+            value.* +%= up;
         },
-        .average => for (cur, 0..) |*value, i| {
-            const left = if (i >= size) cur[i - size] else 0;
-            const up = if (pre.len == 0) 0 else pre[i];
-            value.* +%= @intCast((@as(u16, left) + up) / 2);
+        .average => {
+            for (cur[0..size], pre[0..size]) |*value, up| {
+                value.* +%= up / 2;
+            }
+            for (cur[size..], size..) |*value, i| {
+                value.* +%= @intCast((@as(u16, cur[i - size]) + pre[i]) / 2);
+            }
         },
-        .paeth => for (cur, 0..) |*value, i| {
-            const left = if (i >= size) cur[i - size] else 0;
-            const up = if (pre.len == 0) 0 else pre[i];
-            var upLeft: u8 = 0;
-            if (pre.len != 0 and i >= size) upLeft = pre[i - size];
-            value.* +%= paeth(left, up, upLeft);
+        .paeth => {
+            for (cur[0..size], pre[0..size]) |*value, up| {
+                value.* +%= up;
+            }
+            for (cur[size..], size..) |*value, i| {
+                value.* +%= paeth(cur[i - size], pre[i], pre[i - size]);
+            }
         },
     }
 }
