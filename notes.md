@@ -43,3 +43,13 @@
 - 待做：后续单独评估并迁移到官方包；本次暂不引入该依赖。
 - 参考：Zig 0.17 发布说明的 `C Translation Moving to External Package`。
   https://ziglang.org/download/0.17.0/release-notes.html
+
+## 6. `std.Io` 增大 WASM 体积
+
+- 上游跟踪：Zig issue [#31421](https://codeberg.org/ziglang/zig/issues/31421)。
+- 原因：`std.Io` 的函数指针表使未使用的功能无法被充分移除，增大构建产物。
+- 状态：截至 2026-10-08，issue 仍为 open；最新评论（2026-10-05）反馈
+  Zig 0.17 仍存在此问题。此前空 `main` 的局部修复没有完整解决此问题。
+- 项目表现：demo 的 Zig 0.17 ReleaseSafe WASM 中，按函数符号归属统计，
+  `std.Io` 代码约 75.5 KiB；其中包含实际需要的功能，不能全部视为可删除开销。
+- 待做：跟踪上游修复；修复发布后重新构建并比较 WASM 体积，确认实际收益。

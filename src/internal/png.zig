@@ -464,13 +464,11 @@ fn unFilter(cur: []u8, pre: []const u8, size: usize, f: Filter) void {
 }
 
 fn paeth(a: u8, b: u8, c: u8) u8 {
-    const p = @as(i16, a) + b - c;
-    const pa = @abs(p - a);
-    const pb = @abs(p - b);
-    const pc = @abs(p - c);
-    if (pa <= pb and pa <= pc) return a;
-    if (pb <= pc) return b;
-    return c;
+    // stb_image 的等价公式，通过大小比较选择预测值。
+    const limit = @as(i32, c) * 3 - (@as(i32, a) + b);
+    const low, const high = .{ @min(a, b), @max(a, b) };
+    const next = if (high <= limit) low else c;
+    return if (limit <= low) high else next;
 }
 
 const TestPng = struct {
