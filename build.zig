@@ -1,50 +1,26 @@
 const std = @import("std");
-const sk = @import("sokol");
 
-pub const EmLinkOptions = sk.EmLinkOptions;
-
-pub const defaultEmLinkOptions: EmLinkOptions = .{
-    .target = undefined,
-    .optimize = undefined,
-    .lib_main = undefined,
-    .emsdk = undefined,
-    .use_webgl2 = true,
-    .shell_file_path = null,
-};
-
-pub const App = struct {
-    module: *std.Build.Module,
-    artifact: *std.Build.Step.Compile,
-};
-
-pub const AppOption = struct {
-    name: []const u8,
-    root_source_file: std.Build.LazyPath,
-    target: std.Build.ResolvedTarget,
-    optimize: std.lang.Optimize,
-    zhuyu: *std.Build.Dependency,
-    imports: []const std.Build.Module.Import = &.{},
-    em_link: EmLinkOptions = defaultEmLinkOptions,
-};
+// 应用直接使用同一版本的 Sokol 构建工具。
+pub const sokol = @import("sokol");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const web = target.result.os.tag == .emscripten;
 
-    const sokol = b.dependency("sokol", .{
+    const sokolDep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
     });
-    addEmsdkInstallStep(b, sokol);
-    const sokolModule = sokol.module("sokol");
-    const shader = try createShader(b, sokol, sokolModule);
+    const sokolModule = sokolDep.module("sokol");
+    const shader = try createShader(b, sokolDep, web);
 
     const zhu = b.addModule("zhu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         // Web 由 emcc 链接，关闭 C 的 UBSan。
-        .sanitize_c = if (target.result.os.tag == .emscripten) .off else null,
+        .sanitize_c = if (web) .off else null,
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
@@ -53,16 +29,10 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    if (target.result.os.tag == .emscripten) {
-        const emsdk = sokol.builder.dependency("emsdk", .{});
-        const includePath = emsdk.path(b.pathJoin(&.{
-            "upstream",
-            "emscripten",
-            "cache",
-            "sysroot",
-            "include",
-        }));
-        zhu.addSystemIncludePath(includePath);
+    if (web) {
+        const em = sokolDep.builder.dependency("emsdk", .{});
+        const include = em.path("upstream/emscripten/cache/sysroot/include");
+        zhu.addSystemIncludePath(include);
     }
     zhu.addCSourceFile(.{
         .file = stb.path("stb_vorbis.c"),
@@ -79,96 +49,23 @@ pub fn build(b: *std.Build) !void {
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
-// 添加一个使用 ZhuYu 的应用目标。
-pub fn addApp(b: *std.Build, options: AppOption) !App {
-    const sokol = options.zhuyu.builder.dependency("sokol", .{
-        .target = options.target,
-        .optimize = options.optimize,
-    });
-    addEmsdkInstallStep(b, sokol);
-
-    const mod = b.createModule(.{
-        .root_source_file = options.root_source_file,
-        .target = options.target,
-        .optimize = options.optimize,
-        .imports = options.imports,
-    });
-
-    if (!options.target.result.cpu.arch.isWasm()) {
-        return addNativeApp(b, options, mod);
-    }
-
-    return try addWebApp(b, options, mod, sokol);
-}
-
-fn addEmsdkInstallStep(b: *std.Build, sokol: *std.Build.Dependency) void {
-    const emsdk = sokol.builder.dependency("emsdk", .{});
-    const emsdkStep = sk.emSdkInstallStep(b, emsdk, .{});
-    b.step("install-emsdk", "Install Emscripten SDK").dependOn(emsdkStep);
-}
-
-fn addNativeApp(
-    b: *std.Build,
-    options: AppOption,
-    mod: *std.Build.Module,
-) App {
-    const exe = b.addExecutable(.{
-        .name = options.name,
-        .root_module = mod,
-    });
-    if (options.optimize != .debug) exe.subsystem = .windows;
-
-    b.installArtifact(exe);
-
-    const run = b.addRunArtifact(exe);
-    run.step.dependOn(b.getInstallStep());
-    run.addPassthruArgs();
-    b.step("run", "Run the app").dependOn(&run.step);
-
-    return .{ .module = mod, .artifact = exe };
-}
-
-fn addWebApp(
-    b: *std.Build,
-    options: AppOption,
-    appModule: *std.Build.Module,
-    sokol: *std.Build.Dependency,
-) !App {
-    const emsdk = sokol.builder.dependency("emsdk", .{});
-
-    const lib = b.addLibrary(.{
-        .name = options.name,
-        .root_module = appModule,
-    });
-
-    var emLink = options.em_link;
-    emLink.target = options.target;
-    emLink.optimize = options.optimize;
-    emLink.lib_main = lib;
-    emLink.emsdk = emsdk;
-
-    const linkStep = try sk.emLinkStep(b, emLink);
-    b.getInstallStep().dependOn(&linkStep.step);
-
-    return .{ .module = appModule, .artifact = lib };
-}
-
 fn createShader(
     b: *std.Build,
-    sokol: *std.Build.Dependency,
-    sokolModule: *std.Build.Module,
+    sokolDep: *std.Build.Dependency,
+    web: bool,
 ) !*std.Build.Module {
-    return try sk.shdc.createModule(b, "shader", sokolModule, .{
-        .shdc_dep = sokol.builder.dependency("shdc", .{}),
+    const sokolModule = sokolDep.module("sokol");
+    return try sokol.shdc.createModule(b, "shader", sokolModule, .{
+        .shdc_dep = sokolDep.builder.dependency("shdc", .{}),
         .input = "src/internal/quad.glsl",
         .output = "quad.glsl.zig",
+        // Web 只生成 WebGL2 和 WebGPU 对应的 shader。
         .slang = .{
-            .glsl410 = true,
-            .metal_macos = true,
-            .hlsl5 = true,
-            .glsl300es = true,
-            .wgsl = true,
+            .glsl410 = !web,
+            .metal_macos = !web,
+            .hlsl5 = !web,
+            .glsl300es = web,
+            .wgsl = web,
         },
-        .reflection = true,
     });
 }
