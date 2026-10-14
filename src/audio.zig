@@ -68,7 +68,7 @@ pub fn playMusicOption(path: [:0]const u8, loop: bool) void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
 
-    stbAudio.reset(source.?);
+    source.?.reset();
     music = .{ .source = source.?, .loop = loop };
 }
 
@@ -157,11 +157,11 @@ fn fillMusic(buffer: []f32, channels: i32) void {
     // 因为有可能循环播放，所以循环添加，直到缓冲区填满。
     while (music.state == .playing) {
         const source = music.source;
-        const count = stbAudio.fillSamples(source, buffer[len..], channels);
+        const count = source.fillStereoSamples(buffer[len..]);
         len += @as(usize, @intCast(count * channels));
 
         if (len == buffer.len) break;
-        if (music.loop) stbAudio.reset(source) else music.state = .stopped;
+        if (music.loop) source.reset() else music.state = .stopped;
     }
     // 填充音乐完成，设置音乐的音量
     for (buffer[0..len]) |*sample| sample.* *= volume;

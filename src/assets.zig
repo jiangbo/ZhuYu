@@ -308,13 +308,11 @@ const sound = struct {
 
     fn handler(resp: Response) bool {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data);
-        defer c.stbAudio.unload(stbAudio);
-        const info = c.stbAudio.getInfo(stbAudio);
+        defer stbAudio.unload();
 
-        const channels: i32 = @intCast(info.channels);
-        const size = c.stbAudio.getSampleCount(stbAudio) * channels;
-        const samples = allocator.alloc(f32, @intCast(size)) catch oom();
-        const decoded = c.stbAudio.fillSamples(stbAudio, samples, channels);
+        const size = stbAudio.getSampleCapacity();
+        const samples = allocator.alloc(f32, size) catch oom();
+        const decoded = stbAudio.fillSamples(samples);
         // 音效必须至少解码出一帧，避免循环播放时无法推进。
         std.debug.assert(decoded > 0);
 
@@ -322,7 +320,7 @@ const sound = struct {
         const option = soundCache.option;
         soundCache.* = .{
             .samples = samples,
-            .channels = @intCast(channels),
+            .channels = @intCast(stbAudio.getInfo().channels),
         };
         _ = audio.playSoundOption(resp.path, option);
         return false;
@@ -344,7 +342,7 @@ const music = struct {
     fn handler(resp: Response) bool {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data);
         // 音乐必须包含可播放的帧。
-        std.debug.assert(c.stbAudio.getSampleCount(stbAudio) > 0);
+        std.debug.assert(stbAudio.getSampleCount() > 0);
         cache.getPtr(id(resp.path)).?.* = stbAudio;
         audio.playMusicOption(resp.path, resp.index == 1);
         return true;
@@ -352,7 +350,7 @@ const music = struct {
 
     pub fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |v| if (v.*) |s| c.stbAudio.unload(s);
+        while (iterator.next()) |v| if (v.*) |s| s.unload();
         cache.deinit(allocator);
     }
 };

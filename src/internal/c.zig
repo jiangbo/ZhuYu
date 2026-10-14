@@ -14,46 +14,92 @@ export fn c_free(ptr: ?*anyopaque) void {
 
 pub const stbAudio = stbVorbis;
 pub const stbVorbis = struct {
-    const stb = @import("stb_vorbis");
+    pub const Audio = opaque {
+        pub fn getInfo(self: *Audio) AudioInfo {
+            return stb_vorbis_get_info(self);
+        }
 
-    pub const Audio = stb.stb_vorbis;
-    pub const AudioInfo = stb.stb_vorbis_info;
+        pub fn getSampleCount(self: *Audio) usize {
+            return stb_vorbis_stream_length_in_samples(self);
+        }
+
+        // 完整 PCM 所需的 f32 元素数，包含全部原始声道。
+        pub fn getSampleCapacity(self: *Audio) usize {
+            const channels: usize = @intCast(self.getInfo().channels);
+            return self.getSampleCount() * channels;
+        }
+
+        // 按原始声道写入 PCM，返回每声道采样数。
+        pub fn fillSamples(self: *Audio, buffer: []f32) i32 {
+            return stb_vorbis_get_samples_float_interleaved(
+                self,
+                self.getInfo().channels,
+                buffer.ptr,
+                @intCast(buffer.len),
+            );
+        }
+
+        // 请求双声道输出，缺失的声道由 Vorbis 补零。
+        pub fn fillStereoSamples(self: *Audio, buffer: []f32) i32 {
+            return stb_vorbis_get_samples_float_interleaved(
+                self,
+                2,
+                buffer.ptr,
+                @intCast(buffer.len),
+            );
+        }
+
+        pub fn reset(self: *Audio) void {
+            _ = stb_vorbis_seek_start(self);
+        }
+
+        pub fn unload(self: *Audio) void {
+            stb_vorbis_close(self);
+        }
+    };
+
+    // 按值返回，字段类型和顺序必须与 stb_vorbis_info 完整对应。
+    pub const AudioInfo = extern struct {
+        sample_rate: c_uint,
+        channels: c_int,
+        setup_memory_required: c_uint,
+        setup_temp_memory_required: c_uint,
+        temp_memory_required: c_uint,
+        max_frame_size: c_int,
+    };
+
+    const Alloc = extern struct {
+        alloc_buffer: ?[*]u8,
+        alloc_buffer_length_in_bytes: c_int,
+    };
+
+    extern fn stb_vorbis_open_memory(
+        data: [*]const u8,
+        len: c_int,
+        error_code: ?*c_int,
+        alloc_buffer: ?*const Alloc,
+    ) ?*Audio;
+    extern fn stb_vorbis_get_info(audio: *Audio) AudioInfo;
+    extern fn stb_vorbis_stream_length_in_samples(audio: *Audio) c_uint;
+    extern fn stb_vorbis_get_samples_float_interleaved(
+        audio: *Audio,
+        channels: c_int,
+        buffer: [*]f32,
+        num_floats: c_int,
+    ) c_int;
+    extern fn stb_vorbis_seek_start(audio: *Audio) c_int;
+    extern fn stb_vorbis_close(audio: *Audio) void;
 
     pub fn loadFromMemory(data: []const u8) *Audio {
         var errorCode: c_int = 0;
 
-        const vorbis = stb.stb_vorbis_open_memory(
+        const vorbis = stb_vorbis_open_memory(
             data.ptr,
             @intCast(data.len),
             &errorCode,
             null,
         );
         return vorbis.?;
-    }
-
-    pub fn getInfo(audio: *Audio) AudioInfo {
-        return stb.stb_vorbis_get_info(audio);
-    }
-
-    pub fn getSampleCount(audio: *Audio) i32 {
-        return @intCast(stb.stb_vorbis_stream_length_in_samples(audio));
-    }
-
-    pub fn fillSamples(audio: *Audio, buffer: []f32, channels: i32) c_int {
-        return stb.stb_vorbis_get_samples_float_interleaved(
-            audio,
-            channels,
-            buffer.ptr,
-            @intCast(buffer.len),
-        );
-    }
-
-    pub fn reset(audio: *Audio) void {
-        _ = stb.stb_vorbis_seek_start(audio);
-    }
-
-    pub fn unload(audio: *Audio) void {
-        stb.stb_vorbis_close(audio);
     }
 };
 

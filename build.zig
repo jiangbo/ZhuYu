@@ -52,17 +52,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     zhu.addIncludePath(stb.path("."));
-    // 翻译 Vorbis 声明，功能宏与 C 实现保持一致。
-    const vorbis = b.addTranslateC(.{
-        .root_source_file = stb.path("stb_vorbis.c"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vorbis.defineCMacro("STB_VORBIS_HEADER_ONLY", null);
-    vorbis.defineCMacro("STB_VORBIS_NO_PUSHDATA_API", null);
-    vorbis.defineCMacro("STB_VORBIS_NO_INTEGER_CONVERSION", null);
-    vorbis.defineCMacro("STB_VORBIS_NO_STDIO", null);
-    zhu.addImport("stb_vorbis", vorbis.createModule());
     if (target.result.os.tag == .emscripten) {
         const emsdk = sokol.builder.dependency("emsdk", .{});
         const includePath = emsdk.path(b.pathJoin(&.{
@@ -73,7 +62,6 @@ pub fn build(b: *std.Build) !void {
             "include",
         }));
         zhu.addSystemIncludePath(includePath);
-        vorbis.addSystemIncludePath(includePath);
     }
     zhu.addCSourceFile(.{
         .file = b.path("src/internal/stb_audio.c"),
