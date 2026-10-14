@@ -39,7 +39,8 @@ pub var info: Info = undefined; // 当前窗口配置
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
 const platform = if (builtin.os.tag == .windows) struct {
-    pub extern "Imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
+    // 使用 Zig 自带的导入库名称，Linux 交叉编译时也能找到。
+    pub extern "imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
 } else struct {};
 
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {

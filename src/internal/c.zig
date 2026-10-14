@@ -78,10 +78,10 @@ pub const stbVorbis = struct {
     extern fn stb_vorbis_close(audio: *Audio) void;
 
     // 内部按 8 字节对齐划分空间，缓冲区首地址也保持同样的对齐。
-    // 暂定 200 KiB 作为每个解码器的工作内存预算，不是所有 OGG 的容量保证。
+    // 暂定 256 KiB 作为每个解码器的工作内存预算，不是所有 OGG 的容量保证。
     // 容量不足时打开解码器返回错误码 3；缓冲区由调用方释放。
     pub fn allocBuffer(allocator: std.mem.Allocator) ![]align(8) u8 {
-        return allocator.alignedAlloc(u8, .@"8", 200 * 1024);
+        return allocator.alignedAlloc(u8, .@"8", 256 * 1024);
     }
 
     // 缓冲区由调用方持有，关闭解码器前不能释放或移动。
