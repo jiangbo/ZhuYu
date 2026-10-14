@@ -152,20 +152,6 @@ pub fn alloc(len: usize) ?*anyopaque {
     return @ptrCast(base + cHeaderSize);
 }
 
-pub fn realloc(ptr: ?*anyopaque, len: usize) ?*anyopaque {
-    const oldPtr = ptr orelse return alloc(len);
-    if (len == 0) {
-        free(oldPtr);
-        return null;
-    }
-
-    const old = cSlice(oldPtr);
-    const newLen = cHeaderSize + len;
-    const newSlice = allocator.raw.realloc(old, newLen) catch return null;
-    @as(*usize, @ptrCast(@alignCast(newSlice.ptr))).* = len;
-    return @ptrCast(newSlice.ptr + cHeaderSize);
-}
-
 pub fn free(ptr: ?*anyopaque) void {
     const p = ptr orelse return;
     allocator.raw.rawFree(cSlice(p), cAlign, @returnAddress());

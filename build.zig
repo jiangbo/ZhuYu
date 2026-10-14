@@ -43,6 +43,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        // Web 由 emcc 链接，关闭 C 的 UBSan。
+        .sanitize_c = if (target.result.os.tag == .emscripten) .off else null,
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
@@ -51,7 +53,6 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    zhu.addIncludePath(stb.path("."));
     if (target.result.os.tag == .emscripten) {
         const emsdk = sokol.builder.dependency("emsdk", .{});
         const includePath = emsdk.path(b.pathJoin(&.{
@@ -64,11 +65,13 @@ pub fn build(b: *std.Build) !void {
         zhu.addSystemIncludePath(includePath);
     }
     zhu.addCSourceFile(.{
-        .file = b.path("src/internal/stb_audio.c"),
-        .flags = if (target.result.os.tag == .emscripten)
-            &.{ "-O2", "-fno-sanitize=undefined" }
-        else
-            &.{"-O2"},
+        .file = stb.path("stb_vorbis.c"),
+        .flags = &.{
+            "-O2",
+            "-DSTB_VORBIS_NO_PUSHDATA_API",
+            "-DSTB_VORBIS_NO_INTEGER_CONVERSION",
+            "-DSTB_VORBIS_NO_STDIO",
+        },
     });
 
     const tests = b.addTest(.{ .root_module = zhu });
