@@ -316,9 +316,9 @@ const sound = struct {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer.?);
         defer stbAudio.unload();
 
-        // 音效在加载时统一为设备输出声道，播放时不再转换。
-        const channels = sk.audio.channels();
-        const size = stbAudio.getSampleCapacity(channels);
+        const channels: u8 = @intCast(stbAudio.getInfo().channels);
+        std.debug.assert(channels == 1 or channels == 2);
+        const size = stbAudio.getSampleCapacity();
         const samples = allocator.alloc(f32, size) catch oom();
         const decoded = stbAudio.fillSamples(samples, channels);
         // 音效必须至少解码出一帧，避免循环播放时无法推进。
@@ -326,7 +326,7 @@ const sound = struct {
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
-        soundCache.* = .{ .samples = samples };
+        soundCache.* = .{ .samples = samples, .channels = channels };
         _ = audio.playSoundOption(resp.path, option);
         return false;
     }

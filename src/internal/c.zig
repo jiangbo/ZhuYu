@@ -12,9 +12,10 @@ pub const stbVorbis = struct {
             return stb_vorbis_stream_length_in_samples(self);
         }
 
-        // 指定输出声道下，完整 PCM 所需的 f32 元素数。
-        pub fn getSampleCapacity(self: *Audio, channels: i32) usize {
-            return self.getSampleCount() * @as(usize, @intCast(channels));
+        // 按原始声道存储完整 PCM 所需的 f32 元素数。
+        pub fn getSampleCapacity(self: *Audio) usize {
+            const channels: usize = @intCast(self.getInfo().channels);
+            return self.getSampleCount() * channels;
         }
 
         // 长期空间加两阶段临时需求的较大值，估算工作容量并向上对齐。

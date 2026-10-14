@@ -90,6 +90,7 @@ pub const Sound = struct {
     option: Option = .{},
 
     index: usize = 0,
+    channels: u8 = 0,
     state: StateEnum = .playing,
 };
 
@@ -111,7 +112,7 @@ pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
         .left = left,
         .right = right,
     });
-    if (sound.samples.len == 0) return null;
+    if (sound.channels == 0) return null;
 
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
@@ -119,6 +120,7 @@ pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
     const index = allocSoundIndex();
     sounds[index] = .{
         .samples = sound.samples,
+        .channels = sound.channels,
         .option = .{ .loop = option.loop, .left = left, .right = right },
     };
     return index;
@@ -180,22 +182,25 @@ fn fillSound(buffer: []f32) void {
     }
 }
 
-// PCM 已统一为输出声道，只叠加采样并应用对应声道的音量。
+// 按帧读取原始 PCM，单声道采样可分别应用左右音量。
 fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
     const channels: usize = @intCast(sk.audio.channels());
     const source = sound.samples[sound.index..];
-    const len = @min(buffer.len, source.len);
+    const frames = @min(buffer.len / channels, source.len / sound.channels);
     const left = volume * sound.option.left;
     const right = volume * sound.option.right;
 
-    var index: usize = 0;
-    while (index < len) : (index += channels) {
-        buffer[index] += source[index] * left;
-        if (channels == 2) buffer[index + 1] += source[index + 1] * right;
+    for (0..frames) |frame| {
+        const index = frame * sound.channels;
+        buffer[frame * channels] += source[index] * left;
+        if (channels == 2) {
+            const sample = source[index + sound.channels - 1];
+            buffer[frame * 2 + 1] += sample * right;
+        }
     }
-    sound.index += len;
+    sound.index += frames * sound.channels;
     if (sound.index == sound.samples.len) {
         if (sound.option.loop) sound.index = 0 else sound.state = .stopped;
     }
-    return len;
+    return frames * channels;
 }
