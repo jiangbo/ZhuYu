@@ -30,20 +30,6 @@
 - Zig 扩展运行在远程 Linux；确保 `/root/.bashrc` 将 `/root/software/zig` 加入 `PATH`。仅写 `/etc/profile` 无法覆盖 VS Code Remote SSH 的非登录 shell。
 - PATH 变更后使用 `Remote-SSH: Kill VS Code Server on Host...` 再重新连接；仅关闭或重载窗口可能继续使用旧的 Server 进程。
 
-## 5. Vorbis C 声明翻译
-
-- 当前选择：暂时使用 `b.addTranslateC` 翻译 `stb_vorbis.c`，生成供
-  `src/internal/c.zig` 导入的 Zig 模块，不使用手写 extern 绑定。
-- 翻译时定义 `STB_VORBIS_HEADER_ONLY`，只生成接口声明；其余功能宏与
-  `src/internal/stb_audio.c` 保持一致。
-- `stb_audio.c` 仍由 `zhu.addCSourceFile` 编译，提供 Vorbis 实现并接入引擎
-  内存回调；声明翻译不能替代这一步。
-- 问题：Zig 0.17 已弃用 `std.Build.Step.TranslateC`，当前接口仍可用。
-- 官方替代：显式依赖官方 `translate-c` 包，在构建阶段生成绑定。
-- 待做：后续单独评估并迁移到官方包；本次暂不引入该依赖。
-- 参考：Zig 0.17 发布说明的 `C Translation Moving to External Package`。
-  https://ziglang.org/download/0.17.0/release-notes.html
-
 ## 6. `std.Io` 增大 WASM 体积
 
 - 上游跟踪：Zig issue [#31421](https://codeberg.org/ziglang/zig/issues/31421)。
