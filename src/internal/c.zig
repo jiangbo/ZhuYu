@@ -12,10 +12,9 @@ pub const stbVorbis = struct {
             return stb_vorbis_stream_length_in_samples(self);
         }
 
-        // 完整 PCM 所需的 f32 元素数，包含全部原始声道。
-        pub fn getSampleCapacity(self: *Audio) usize {
-            const channels: usize = @intCast(self.getInfo().channels);
-            return self.getSampleCount() * channels;
+        // 指定输出声道下，完整 PCM 所需的 f32 元素数。
+        pub fn getSampleCapacity(self: *Audio, channels: i32) usize {
+            return self.getSampleCount() * @as(usize, @intCast(channels));
         }
 
         // 长期空间加两阶段临时需求的较大值，估算工作容量并向上对齐。
@@ -26,21 +25,11 @@ pub const stbVorbis = struct {
             return std.mem.alignForward(usize, setup + temp, 8);
         }
 
-        // 按原始声道写入 PCM，返回每声道采样数。
-        pub fn fillSamples(self: *Audio, buffer: []f32) i32 {
+        // 按指定声道输出，返回每声道采样数。
+        pub fn fillSamples(self: *Audio, buffer: []f32, channels: i32) i32 {
             return stb_vorbis_get_samples_float_interleaved(
                 self,
-                self.getInfo().channels,
-                buffer.ptr,
-                @intCast(buffer.len),
-            );
-        }
-
-        // 请求双声道输出，缺失的声道由 Vorbis 补零。
-        pub fn fillStereoSamples(self: *Audio, buffer: []f32) i32 {
-            return stb_vorbis_get_samples_float_interleaved(
-                self,
-                2,
+                channels,
                 buffer.ptr,
                 @intCast(buffer.len),
             );

@@ -34,8 +34,27 @@ pub fn build(b: *std.Build) !void {
         const include = em.path("upstream/emscripten/cache/sysroot/include");
         zhu.addSystemIncludePath(include);
     }
+    // 单声道解码为双声道时复制到右侧，仅修改构建缓存中的副本。
+    b.dependOnFileContents(stb.path("stb_vorbis.c"));
+    const sourcePath = try stb.builder.root.joinString(b.allocator, "stb_vorbis.c");
+    const source = try std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
+        sourcePath,
+        b.allocator,
+        .unlimited,
+    );
+    const patched = try std.mem.replaceOwned(u8, b.allocator, source,
+        \\         for (   ; i < channels; ++i)
+        \\            *buffer++ = 0;
+    ,
+        \\         for (   ; i < channels; ++i)
+        \\            *buffer++ = f->channels == 1 && channels == 2
+        \\               ? f->channel_buffers[0][f->channel_buffer_start+j] : 0;
+    );
+    if (std.mem.eql(u8, source, patched)) return error.VorbisPatchMismatch;
+    const vorbis = b.addWriteFiles().add("stb_vorbis.c", patched);
     zhu.addCSourceFile(.{
-        .file = stb.path("stb_vorbis.c"),
+        .file = vorbis,
         .flags = &.{
             "-O2",
             "-DSTB_VORBIS_NO_PUSHDATA_API",

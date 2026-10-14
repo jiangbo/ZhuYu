@@ -7,13 +7,15 @@ const stbAudio = @import("internal/c.zig").stbAudio;
 var mutex: std.Io.Mutex = .init;
 pub var paused: std.atomic.Value(bool) = .init(false);
 
-pub fn init(sampleRate: u32, soundBuffer: []Sound) void {
+// 输出支持单声道或双声道，由应用明确选择。
+pub fn init(sampleRate: u32, channels: u8, soundBuffer: []Sound) void {
+    std.debug.assert(channels == 1 or channels == 2);
     sounds = soundBuffer;
     for (sounds) |*sound| sound.state = .stopped;
 
     // 启动音频线程
     sk.audio.setup(.{
-        .num_channels = 2,
+        .num_channels = channels,
         .sample_rate = @intCast(sampleRate),
         .stream_cb = audioCallback,
         .logger = .{ .func = sk.log.func },
@@ -88,7 +90,6 @@ pub const Sound = struct {
     option: Option = .{},
 
     index: usize = 0,
-    channels: u8 = 0,
     state: StateEnum = .playing,
 };
 
@@ -110,7 +111,7 @@ pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
         .left = left,
         .right = right,
     });
-    if (sound.channels == 0) return null;
+    if (sound.samples.len == 0) return null;
 
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
@@ -118,7 +119,6 @@ pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
     const index = allocSoundIndex();
     sounds[index] = .{
         .samples = sound.samples,
-        .channels = sound.channels,
         .option = .{ .loop = option.loop, .left = left, .right = right },
     };
     return index;
@@ -157,7 +157,7 @@ fn fillMusic(buffer: []f32, channels: i32) void {
     // 因为有可能循环播放，所以循环添加，直到缓冲区填满。
     while (music.state == .playing) {
         const source = music.source;
-        const count = source.fillStereoSamples(buffer[len..]);
+        const count = source.fillSamples(buffer[len..], channels);
         len += @as(usize, @intCast(count * channels));
 
         if (len == buffer.len) break;
@@ -180,47 +180,22 @@ fn fillSound(buffer: []f32) void {
     }
 }
 
+// PCM 已统一为输出声道，只叠加采样并应用对应声道的音量。
 fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
-    const len = if (sound.channels == 1)
-        mixMonoSamples(buffer, sound, volume)
-    else if (sound.channels == 2)
-        mixStereoSamples(buffer, sound, volume)
-    else
-        std.debug.panic("unsupported channels: {d}", .{sound.channels});
-
-    if (sound.index == sound.samples.len) {
-        if (sound.option.loop) sound.index = 0 else sound.state = .stopped;
-    }
-
-    return len;
-}
-
-fn mixStereoSamples(dstBuffer: []f32, sound: *Sound, volume: f32) usize {
-    const srcBuffer = sound.samples[sound.index..];
-    const len = @min(dstBuffer.len, srcBuffer.len) / 2 * 2;
+    const channels: usize = @intCast(sk.audio.channels());
+    const source = sound.samples[sound.index..];
+    const len = @min(buffer.len, source.len);
     const left = volume * sound.option.left;
     const right = volume * sound.option.right;
 
     var index: usize = 0;
-    while (index < len) : (index += 2) {
-        dstBuffer[index] += srcBuffer[index] * left;
-        dstBuffer[index + 1] += srcBuffer[index + 1] * right;
+    while (index < len) : (index += channels) {
+        buffer[index] += source[index] * left;
+        if (channels == 2) buffer[index + 1] += source[index + 1] * right;
     }
     sound.index += len;
+    if (sound.index == sound.samples.len) {
+        if (sound.option.loop) sound.index = 0 else sound.state = .stopped;
+    }
     return len;
-}
-
-fn mixMonoSamples(dstBuffer: []f32, sound: *Sound, volume: f32) usize {
-    const srcBuffer = sound.samples[sound.index..];
-    const len = @min(dstBuffer.len / 2, srcBuffer.len);
-    const left = volume * sound.option.left;
-    const right = volume * sound.option.right;
-
-    for (0..len) |index| {
-        const src = srcBuffer[index];
-        dstBuffer[index * 2] += src * left;
-        dstBuffer[index * 2 + 1] += src * right;
-    }
-    sound.index += len;
-    return len * 2;
 }

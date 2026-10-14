@@ -316,18 +316,17 @@ const sound = struct {
         const stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer.?);
         defer stbAudio.unload();
 
-        const size = stbAudio.getSampleCapacity();
+        // 音效在加载时统一为设备输出声道，播放时不再转换。
+        const channels = sk.audio.channels();
+        const size = stbAudio.getSampleCapacity(channels);
         const samples = allocator.alloc(f32, size) catch oom();
-        const decoded = stbAudio.fillSamples(samples);
+        const decoded = stbAudio.fillSamples(samples, channels);
         // 音效必须至少解码出一帧，避免循环播放时无法推进。
         std.debug.assert(decoded > 0);
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
-        soundCache.* = .{
-            .samples = samples,
-            .channels = @intCast(stbAudio.getInfo().channels),
-        };
+        soundCache.* = .{ .samples = samples };
         _ = audio.playSoundOption(resp.path, option);
         return false;
     }
