@@ -1,3 +1,4 @@
+const std = @import("std");
 const memory = @import("memory.zig");
 
 export fn c_alloc(len: usize) ?*anyopaque {
@@ -27,6 +28,14 @@ pub const stbVorbis = struct {
         pub fn getSampleCapacity(self: *Audio) usize {
             const channels: usize = @intCast(self.getInfo().channels);
             return self.getSampleCount() * channels;
+        }
+
+        // 长期空间加两阶段临时需求的较大值，估算工作容量并向上对齐。
+        pub fn getBufferSize(self: *Audio) usize {
+            const info = self.getInfo();
+            const setup: usize = info.setup_bytes;
+            const temp = @max(info.setup_temp_bytes, info.decode_temp_bytes);
+            return std.mem.alignForward(usize, setup + temp, 8);
         }
 
         // 按原始声道写入 PCM，返回每声道采样数。
@@ -62,9 +71,9 @@ pub const stbVorbis = struct {
     pub const AudioInfo = extern struct {
         sample_rate: c_uint,
         channels: c_int,
-        setup_memory_required: c_uint,
-        setup_temp_memory_required: c_uint,
-        temp_memory_required: c_uint,
+        setup_bytes: c_uint,
+        setup_temp_bytes: c_uint,
+        decode_temp_bytes: c_uint,
         max_frame_size: c_int,
     };
 
@@ -90,16 +99,27 @@ pub const stbVorbis = struct {
     extern fn stb_vorbis_seek_start(audio: *Audio) c_int;
     extern fn stb_vorbis_close(audio: *Audio) void;
 
-    pub fn loadFromMemory(data: []const u8) *Audio {
-        var errorCode: c_int = 0;
+    // 内部按 8 字节对齐划分空间，缓冲区首地址也保持同样的对齐。
+    // 暂定 200 KiB 作为每个解码器的工作内存预算，不是所有 OGG 的容量保证。
+    // 容量不足时打开解码器返回错误码 3；缓冲区由调用方释放。
+    pub fn allocBuffer(allocator: std.mem.Allocator) ![]align(8) u8 {
+        return allocator.alignedAlloc(u8, .@"8", 200 * 1024);
+    }
 
-        const vorbis = stb_vorbis_open_memory(
+    // 缓冲区由调用方持有，关闭解码器前不能释放或移动。
+    pub fn loadFromMemory(data: []const u8, buffer: []align(8) u8) *Audio {
+        const alloc: Alloc = .{
+            .alloc_buffer = buffer.ptr,
+            .alloc_buffer_length_in_bytes = @intCast(buffer.len),
+        };
+        var code: c_int = 0;
+
+        return stb_vorbis_open_memory(
             data.ptr,
             @intCast(data.len),
-            &errorCode,
-            null,
-        );
-        return vorbis.?;
+            &code,
+            &alloc,
+        ) orelse std.debug.panic("vorbis open error: {}", .{code});
     }
 };
 

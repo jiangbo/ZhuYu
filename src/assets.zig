@@ -290,11 +290,14 @@ const view = struct {
 
 const sound = struct {
     var cache: std.AutoHashMapUnmanaged(Id, audio.Sound) = .empty;
+    // 音效解码回调串行执行，首次分配后复用工作缓冲区。
+    var buffer: ?[]align(8) u8 = null;
 
     fn deinit() void {
         var iterator = cache.valueIterator();
         while (iterator.next()) |value| allocator.free(value.samples);
         cache.deinit(allocator);
+        if (buffer) |value| allocator.free(value);
     }
 
     fn load(path: Path, option: audio.Sound.Option) audio.Sound {
@@ -307,7 +310,10 @@ const sound = struct {
     }
 
     fn handler(resp: Response) bool {
-        const stbAudio = c.stbAudio.loadFromMemory(resp.data);
+        if (buffer == null) {
+            buffer = c.stbAudio.allocBuffer(allocator) catch oom();
+        }
+        const stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer.?);
         defer stbAudio.unload();
 
         const size = stbAudio.getSampleCapacity();
@@ -328,29 +334,50 @@ const sound = struct {
 };
 
 const music = struct {
-    var cache: std.AutoHashMapUnmanaged(Id, ?*c.stbAudio.Audio) = .empty;
+    const Music = struct {
+        source: ?*c.stbAudio.Audio,
+        // 独立分配，缓存表扩容时工作缓冲区的地址保持不变。
+        buffer: []align(8) u8,
+
+        const empty: Music = .{ .source = null, .buffer = &.{} };
+
+        fn deinit(self: *Music) void {
+            if (self.source) |source| source.unload();
+            allocator.free(self.buffer);
+        }
+    };
+    var cache: std.AutoHashMapUnmanaged(Id, Music) = .empty;
 
     fn load(path: Path, loop: bool) ?*c.stbAudio.Audio {
         const entry = cache.getOrPut(allocator, id(path)) catch oom();
-        if (entry.found_existing) return entry.value_ptr.*;
+        if (entry.found_existing) return entry.value_ptr.source;
 
-        entry.value_ptr.* = null;
+        entry.value_ptr.* = .empty;
         _ = file.load(path, if (loop) 1 else 0, handler);
         return null;
     }
 
     fn handler(resp: Response) bool {
-        const stbAudio = c.stbAudio.loadFromMemory(resp.data);
+        var buffer = c.stbAudio.allocBuffer(allocator) catch oom();
+        var stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer);
+        const size = stbAudio.getBufferSize();
+        if (size < buffer.len and allocator.resize(buffer, size)) {
+            // resize 不移动地址且保留全部长期数据，旧解码器只用于关闭。
+            stbAudio.unload();
+            buffer = buffer[0..size];
+            stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer);
+        }
         // 音乐必须包含可播放的帧。
         std.debug.assert(stbAudio.getSampleCount() > 0);
-        cache.getPtr(id(resp.path)).?.* = stbAudio;
+        const musicCache = cache.getPtr(id(resp.path)).?;
+        musicCache.* = .{ .source = stbAudio, .buffer = buffer };
         audio.playMusicOption(resp.path, resp.index == 1);
         return true;
     }
 
     pub fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |v| if (v.*) |s| s.unload();
+        while (iterator.next()) |value| value.deinit();
         cache.deinit(allocator);
     }
 };
