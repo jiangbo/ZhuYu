@@ -41,6 +41,58 @@ pub var io: std.Io = undefined; // 加载资源时使用的 IO
 const platform = if (builtin.os.tag == .windows) struct {
     // 使用 Zig 自带的导入库名称，Linux 交叉编译时也能找到。
     pub extern "imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
+} else if (builtin.abi.isAndroid()) struct {
+    // 对应 NDK android/native_activity.h，保持完整字段顺序和 C 内存布局。
+    pub const Activity = extern struct {
+        callbacks: ?*anyopaque,
+        vm: ?*anyopaque,
+        env: ?*anyopaque,
+        clazz: ?*anyopaque,
+        internalDataPath: [*:0]const u8,
+        externalDataPath: ?[*:0]const u8,
+        sdkVersion: i32,
+        instance: ?*anyopaque,
+        assetManager: ?*anyopaque,
+        obbPath: ?[*:0]const u8,
+    };
+
+    // 游戏回调继续使用 IO，窗口配置由 run 写入后返回给 Sokol。
+    var threaded: std.Io.Threaded = undefined;
+    var desc: ?sk.app.Desc = null;
+
+    export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {
+        const gpa = std.heap.c_allocator;
+        threaded = .init(gpa, .{});
+
+        const activity: *const Activity =
+            @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
+        // 进入游戏 main 前切换目录，普通文件读写使用应用私有空间。
+        const path = std.mem.span(activity.internalDataPath);
+        std.process.setCurrentPath(threaded.io(), path) catch |err|
+            std.debug.panic("android private directory: {}", .{err});
+
+        // 只供 main 初始化阶段使用。
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        var environ_map = std.process.Environ.Map.init(gpa);
+        defer environ_map.deinit();
+
+        const result = root.main(.{
+            .minimal = .{
+                .args = .{ .vector = &.{} },
+                .environ = .empty,
+            },
+            .arena = &arena,
+            .gpa = gpa,
+            .io = threaded.io(),
+            .environ_map = &environ_map,
+            .preopens = .empty,
+        });
+        if (@typeInfo(@TypeOf(result)) == .error_union) {
+            _ = result catch |e| std.debug.panic("android main: {}", .{e});
+        }
+        return desc orelse @panic("android main must call window.run()");
+    }
 } else struct {};
 
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
@@ -48,7 +100,14 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 }
 
 const root = @import("root");
+
 pub fn run(info_: Info) void {
+    const desc = createDesc(info_);
+    if (!builtin.abi.isAndroid()) return sk.app.run(desc);
+    platform.desc = desc;
+}
+
+fn createDesc(info_: Info) sk.app.Desc {
     sk.time.setup();
     info = info_;
     size = info.logicSize orelse info.size;
@@ -58,7 +117,7 @@ pub fn run(info_: Info) void {
         if (info.disableIME) _ = platform.ImmDisableIME(-1);
     }
 
-    sk.app.run(.{
+    return .{
         .window_title = info.title,
         .width = @intFromFloat(info.size.x),
         .height = @intFromFloat(info.size.y),
@@ -69,7 +128,8 @@ pub fn run(info_: Info) void {
         .cleanup_cb = windowDeinit,
         .allocator = memory.sokolAllocator(sk.app.Allocator),
         .high_dpi = true,
-    });
+        .logger = .{ .func = sk.log.func },
+    };
 }
 
 export fn windowInit() void {
@@ -143,6 +203,7 @@ export fn windowDeinit() void {
     call(root, "deinit", .{memory.allocator});
     assets.deinit();
     sk.gfx.shutdown();
+    if (builtin.abi.isAndroid()) platform.threaded.deinit();
 }
 
 pub fn timestamp() std.Io.Timestamp {
