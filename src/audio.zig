@@ -8,7 +8,7 @@ var mutex: std.Io.Mutex = .init;
 pub var paused: std.atomic.Value(bool) = .init(false);
 
 /// 使用 Sokol 配置初始化音频，num_channels 为 0 时使用双声道。
-/// 混音回调、日志和分配器由引擎设置。
+/// 未提供回调、日志或分配器时使用引擎默认值；自定义回调接管音频输出。
 pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
     var desc = option;
     if (desc.num_channels == 0) desc.num_channels = 2;
@@ -16,10 +16,15 @@ pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
     sounds = soundBuffer;
     for (sounds) |*sound| sound.state = .stopped;
 
+    if (desc.stream_cb == null and desc.stream_userdata_cb == null) {
+        desc.stream_cb = audioCallback;
+    }
+    if (desc.logger.func == null) desc.logger.func = sk.log.func;
+    if (desc.allocator.alloc_fn == null and desc.allocator.free_fn == null) {
+        desc.allocator = memory.sokolAllocator(sk.audio.Allocator);
+    }
+
     // 启动音频线程
-    desc.stream_cb = audioCallback;
-    desc.logger = .{ .func = sk.log.func };
-    desc.allocator = memory.sokolAllocator(sk.audio.Allocator);
     sk.audio.setup(desc);
 }
 
