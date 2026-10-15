@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) !void {
         const include = em.path("upstream/emscripten/cache/sysroot/include");
         zhu.addSystemIncludePath(include);
     }
-    // 单声道解码为双声道时复制到右侧，仅修改构建缓存中的副本。
+    // 单声道复制到左右，双声道取平均合为单声道，仅修改构建缓存中的副本。
     b.dependOnFileContents(stb.path("stb_vorbis.c"));
     const sourcePath = try stb.builder.root.joinString(b.allocator, "stb_vorbis.c");
     const source = try std.Io.Dir.cwd().readFileAlloc(
@@ -44,9 +44,17 @@ pub fn build(b: *std.Build) !void {
         .unlimited,
     );
     const patched = try std.mem.replaceOwned(u8, b.allocator, source,
+        \\         for (i=0; i < z; ++i)
+        \\            *buffer++ = f->channel_buffers[i][f->channel_buffer_start+j];
         \\         for (   ; i < channels; ++i)
         \\            *buffer++ = 0;
     ,
+        \\         for (i=0; i < z; ++i) {
+        \\            float sample = f->channel_buffers[i][f->channel_buffer_start+j];
+        \\            if (channels == 1 && f->channels == 2)
+        \\               sample = (sample + f->channel_buffers[1][f->channel_buffer_start+j]) * 0.5f;
+        \\            *buffer++ = sample;
+        \\         }
         \\         for (   ; i < channels; ++i)
         \\            *buffer++ = f->channels == 1 && channels == 2
         \\               ? f->channel_buffers[0][f->channel_buffer_start+j] : 0;

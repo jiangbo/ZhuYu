@@ -7,20 +7,20 @@ const stbAudio = @import("internal/c.zig").stbAudio;
 var mutex: std.Io.Mutex = .init;
 pub var paused: std.atomic.Value(bool) = .init(false);
 
-// 输出支持单声道或双声道，由应用明确选择。
-pub fn init(sampleRate: u32, channels: u8, soundBuffer: []Sound) void {
-    std.debug.assert(channels == 1 or channels == 2);
+/// 使用 Sokol 配置初始化音频，num_channels 为 0 时使用双声道。
+/// 混音回调、日志和分配器由引擎设置。
+pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
+    var desc = option;
+    if (desc.num_channels == 0) desc.num_channels = 2;
+    std.debug.assert(desc.num_channels == 1 or desc.num_channels == 2);
     sounds = soundBuffer;
     for (sounds) |*sound| sound.state = .stopped;
 
     // 启动音频线程
-    sk.audio.setup(.{
-        .num_channels = channels,
-        .sample_rate = @intCast(sampleRate),
-        .stream_cb = audioCallback,
-        .logger = .{ .func = sk.log.func },
-        .allocator = memory.sokolAllocator(sk.audio.Allocator),
-    });
+    desc.stream_cb = audioCallback;
+    desc.logger = .{ .func = sk.log.func };
+    desc.allocator = memory.sokolAllocator(sk.audio.Allocator);
+    sk.audio.setup(desc);
 }
 
 pub fn deinit() void {
@@ -182,7 +182,7 @@ fn fillSound(buffer: []f32) void {
     }
 }
 
-// 按帧读取原始 PCM，单声道采样可分别应用左右音量。
+// 按帧应用左右音量，单声道输出取左右平均值。
 fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
     const channels: usize = @intCast(sk.audio.channels());
     const source = sound.samples[sound.index..];
@@ -192,10 +192,13 @@ fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
 
     for (0..frames) |frame| {
         const index = frame * sound.channels;
-        buffer[frame * channels] += source[index] * left;
-        if (channels == 2) {
-            const sample = source[index + sound.channels - 1];
-            buffer[frame * 2 + 1] += sample * right;
+        const l = source[index] * left;
+        const r = source[index + sound.channels - 1] * right;
+        if (channels == 1) {
+            buffer[frame] += (l + r) * 0.5;
+        } else {
+            buffer[frame * 2] += l;
+            buffer[frame * 2 + 1] += r;
         }
     }
     sound.index += frames * sound.channels;
