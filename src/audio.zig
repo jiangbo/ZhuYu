@@ -107,7 +107,6 @@ pub fn playSound(path: [:0]const u8) void {
 }
 
 pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
-    if (@import("builtin").is_test) return null;
     if (!sk.audio.isvalid()) return null;
 
     const left = std.math.clamp(option.left, 0.0, 1.0);
