@@ -71,6 +71,8 @@ pub fn buildAndroid(
             "comptime {{\n    _ = @import(\"{1f}\").window;\n}}\n\n" ++
             "// 安卓日志和 panic 由引擎直接输出到 Logcat。\n" ++
             "pub const std_options: @import(\"std\").Options = .{{\n" ++
+            "    // 沿用安卓系统的备用信号栈，缩减动态库体积。\n" ++
+            "    .signal_stack_size = null,\n" ++
             "    .logFn = @import(\"{1f}\").android.log,\n}};\n" ++
             "pub const panic = @import(\"{1f}\").android.panic;\n", .{
             source,
