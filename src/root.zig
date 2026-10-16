@@ -51,6 +51,12 @@ pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
     window.io = io;
 }
 
+// 安卓平台适配，日志和 panic 配置由 buildAndroid 注入入口。
+pub const android = struct {
+    pub const log = @import("internal/android.zig").log;
+    pub const panic = @import("internal/android.zig").panic;
+};
+
 pub const testing = struct {
     pub const allocator: Allocator = .{ .raw = std.testing.allocator };
 };

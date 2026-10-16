@@ -43,7 +43,7 @@ pub const AndroidOptions = struct {
     ndk: []const u8, // Android NDK 目录，由游戏构建选项传入。
 };
 
-// 在游戏构建缓存中补充窗口引用，生成 NativeActivity 加载的动态库。
+// 在游戏构建缓存中补充安卓入口配置，生成 NativeActivity 加载的动态库。
 pub fn buildAndroid(
     b: *std.Build,
     dep: *std.Build.Dependency,
@@ -67,9 +67,15 @@ pub fn buildAndroid(
     const files = b.addWriteFiles();
     _ = files.addCopyDirectory(rootFile.dirname(), "", .{});
     mod.root_source_file = files.add("zhuyu_android_main.zig", //
-        b.fmt("{s}\n\n// 动态库显式分析窗口模块，保留引擎导出的入口和回调。\n" ++
-            "comptime {{\n    _ = @import(\"{f}\").window;\n}}\n", //
-            .{ source, std.zig.fmtString(importName) }));
+        b.fmt("{0s}\n\n// 动态库显式分析窗口模块，保留引擎导出的入口和回调。\n" ++
+            "comptime {{\n    _ = @import(\"{1f}\").window;\n}}\n\n" ++
+            "// 安卓日志和 panic 由引擎直接输出到 Logcat。\n" ++
+            "pub const std_options: @import(\"std\").Options = .{{\n" ++
+            "    .logFn = @import(\"{1f}\").android.log,\n}};\n" ++
+            "pub const panic = @import(\"{1f}\").android.panic;\n", .{
+            source,
+            std.zig.fmtString(importName),
+        }));
 
     // 配置引擎和 Sokol 使用的 NDK、系统库及 APK 资源读取。
     const target = zhu.resolved_target.?;
