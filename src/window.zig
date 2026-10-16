@@ -96,16 +96,12 @@ export fn windowInit() void {
     call(root, "init", .{memory.allocator});
 }
 
-pub var mouse: math.Vector = .zero;
 pub var resized: bool = false;
 
 export fn windowEvent(event: ?*const Event) void {
     if (event) |ev| {
-        input.handle(ev);
-        if (ev.type == .MOUSE_MOVE) {
-            const position = input.mouse.raw.sub(viewRect.min);
-            mouse = position.mul(size).div(viewRect.size);
-        } else if (ev.type == .RESIZED) resized = true;
+        input.handle(ev, .{ .offset = viewRect.min, .scale = scale });
+        if (ev.type == .RESIZED) resized = true;
 
         call(root, "event", .{ev});
     }

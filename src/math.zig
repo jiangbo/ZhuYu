@@ -152,6 +152,7 @@ pub const Vector2 = extern struct {
     pub const zero = Vector2{ .x = 0, .y = 0 };
     pub const center = Vector2{ .x = 0.5, .y = 0.5 };
     pub const one = Vector2{ .x = 1, .y = 1 };
+    pub const inf = Vector2.square(std.math.inf(f32));
 
     pub fn xy(x: f32, y: f32) Vector2 {
         return .{ .x = x, .y = y };

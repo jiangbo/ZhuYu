@@ -166,7 +166,7 @@ pub fn draw(rows: []const Row) void {
     writeFormatLine(&columns, "鼠标", "{d:.1}, {d:.1}", .{
         input.mouse.raw.x,
         input.mouse.raw.y,
-    }, "{d:.1}, {d:.1}", .{ window.mouse.x, window.mouse.y });
+    }, "{d:.1}, {d:.1}", .{ input.mouse.pos.x, input.mouse.pos.y });
     writeFormatLine(&columns, "相机", "{d:.1}, {d:.1}", .{
         camera.main.position.x,
         camera.main.position.y,

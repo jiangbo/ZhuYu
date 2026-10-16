@@ -34,10 +34,6 @@ pub const Animation = graphics.Animation;
 pub const EnumAnimation = graphics.EnumAnimation;
 pub const Allocator = memory.OomAllocator;
 
-comptime {
-    _ = @import("internal/c.zig");
-}
-
 pub const clamp = std.math.clamp;
 pub const format = memory.format;
 pub const formatZ = memory.formatZ;
@@ -45,10 +41,16 @@ pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
 pub const reinterpret = memory.reinterpret;
 
-/// 初始化引擎共用的内存分配器和窗口 IO。
+/// 初始化引擎共用的内存分配器、窗口 IO 和输入设备推测值。
 pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
     memory.init(gpa);
     window.io = io;
+    if (@import("builtin").os.tag == .emscripten) {
+        // 主要指针是手指时，推测当前环境没有键盘。
+        key.mayHave = std.os.emscripten.emscripten_run_script_int(
+            "!window.matchMedia('(pointer: coarse)').matches",
+        ) != 0;
+    }
 }
 
 // 安卓平台适配，日志和 panic 配置由 buildAndroid 注入入口。

@@ -66,35 +66,21 @@ pub const Button = struct {
     }
 };
 
-pub fn ClickT(comptime T: type) type {
-    return struct {
-        hover: ?T = null,
-        pressed: ?T = null,
-        captured: bool = false,
-        frame: u64 = 0,
+// 单个区域的点击状态，供游戏中的独立按钮使用。
+pub const Click = struct {
+    pressed: bool = false, // 是否已在区域内按下，且尚未取消或释放。
 
-        pub const empty: @This() = .{};
+    // 每帧调用一次，区域内按下并释放才算点击。
+    // 移出或取消即失效，再移回也不恢复。
+    pub fn update(self: *Click, rect: math.Rect) bool {
+        const state = input.touch.query(rect);
+        if (state.pressed) self.pressed = true;
 
-        pub fn update(self: *@This(), hover: ?T) ?T {
-            const currentFrame = window.frameCount();
-            if (self.frame + 1 < currentFrame) self.* = .empty;
-            self.frame = currentFrame;
-
-            self.hover = hover;
-            self.captured = self.hover != null or self.pressed != null;
-
-            if (hover) |value| {
-                if (input.mouse.pressed(.LEFT)) self.pressed = value;
-            }
-
-            if (!input.mouse.released(.LEFT)) return null;
-            defer self.pressed = null;
-            if (!std.meta.eql(self.pressed, self.hover)) return null;
-            return self.hover;
-        }
-    };
-}
-pub const Click = ClickT(usize);
+        const clicked = self.pressed and state.released;
+        if (!state.held) self.pressed = false;
+        return clicked;
+    }
+};
 
 pub const Popup = struct {
     anchor: Vector2,
@@ -429,7 +415,7 @@ pub const Menu = struct {
     clickSound: ?[:0]const u8 = null,
     disabled: []const usize = &.{},
     selected: ?usize = 0,
-    click: Click = .empty,
+    pressed: ?usize = null, // 菜单内按下的按钮编号。
 
     pub fn init(position: math.Vector2, menu: Menu) Menu {
         var result = menu;
@@ -438,11 +424,11 @@ pub const Menu = struct {
         return result;
     }
 
-    // 选择第一个可用项，并清除鼠标交互状态。
+    // 选择第一个可用项，并清除点击交互状态。
     pub fn reset(self: *Menu) void {
         self.selected = null;
         self.down();
-        self.click = .empty;
+        self.pressed = null;
     }
 
     pub fn centerInWindow(self: *Menu) void {
@@ -451,11 +437,7 @@ pub const Menu = struct {
 
     pub fn update(self: *Menu, option: Option) ?usize {
         const previous = self.selected;
-        const hover = self.mouseHover();
-
-        if (input.mouse.moved) {
-            if (hover) |index| self.selected = index;
-        }
+        const clicked = self.updateTouch();
 
         const nav = option.nav orelse self.defaultNav();
         self.selectByNav(nav, option.wrap);
@@ -475,9 +457,42 @@ pub const Menu = struct {
             };
         }
 
-        const index = self.click.update(hover) orelse return null;
+        const index = clicked orelse return null;
         if (self.clickSound) |sound| audio.playSound(sound);
         return self.buttons[index].event;
+    }
+
+    // 更新鼠标和触摸操作，返回本帧点击的按钮编号。
+    fn updateTouch(self: *Menu) ?usize {
+        const moved = input.mouse.moved or input.touch.moved;
+
+        var hover: ?usize = null; // 鼠标悬停的按钮。
+        var touched: ?usize = null; // 触摸或鼠标左键当前所在的按钮。
+        var newPressed: ?usize = null; // 本帧按下的按钮，取第一个。
+        // 保存按下按钮的查询结果，禁用的按钮保持空状态。
+        var state: input.touch.PressState = .{};
+        for (self.buttons, 0..) |button, index| {
+            if (self.isDisabled(index)) continue;
+            const rect = button.rect.move(self.position);
+            const press = input.touch.query(rect);
+            // 当前按钮内正按住或刚释放。
+            if (hover == null and input.mouse.hover(rect)) hover = index;
+            const active = press.held or press.released;
+            if (touched == null and active) touched = index;
+
+            if (newPressed != null) continue; // 已找到本帧按下的按钮
+            if (self.pressed == index or press.pressed) state = press;
+            if (press.pressed) newPressed = index;
+        }
+
+        if (newPressed) |index| self.pressed = index;
+        const clicked = if (state.released) self.pressed else null;
+        if (state.released or !state.held) self.pressed = null;
+
+        if (moved) {
+            if (touched orelse hover) |index| self.selected = index;
+        }
+        return clicked;
     }
 
     /// 更新菜单，并将触发的事件转为指定枚举。
@@ -502,15 +517,6 @@ pub const Menu = struct {
                 .cancel = input.key.anyReleased(keys.cancel),
             },
         };
-    }
-
-    fn mouseHover(self: Menu) ?usize {
-        for (self.buttons, 0..) |button, index| {
-            if (self.isDisabled(index)) continue;
-            const rect = button.rect.move(self.position);
-            if (rect.contains(window.mouse)) return index;
-        }
-        return null;
     }
 
     pub fn draw(self: Menu) void {
@@ -565,7 +571,7 @@ pub const Menu = struct {
         if (self.isDisabled(index)) return .disabled;
 
         const hover = self.selected == index;
-        if (self.click.pressed) |pressed| {
+        if (self.pressed) |pressed| {
             if (pressed == index and hover) return .pressed;
         }
         return if (hover) .hover else .normal;
