@@ -7,12 +7,10 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
-    const android = target.result.abi.isAndroid();
 
     const sokolDep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
-        .dont_link_system_libs = android,
     });
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result);
@@ -21,64 +19,196 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // Web 和 Android 均不引入 C 的 UBSan 运行时。
-        .sanitize_c = if (web or android) .off else null,
+        // Web 由 emcc 链接，关闭 C 的 UBSan。
+        .sanitize_c = if (web) .off else null,
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
-    if (android) {
-        try patchFetch(b, sokolDep);
-        zhu.addIncludePath(sokolDep.path("src/sokol/c"));
-        zhu.addCSourceFile(.{
-            // 临时的 APK 资源读取适配在构建缓存生成。
-            .file = b.addWriteFiles().add("android.c",
-                \\#define _BSD_SOURCE 1
-                \\#include <android/asset_manager.h>
-                \\#include <android/native_activity.h>
-                \\#include <stdio.h>
-                \\#include <string.h>
-                \\#include "sokol_app.h"
-                \\
-                \\static int asset_read(void* asset, char* buffer, int size) {
-                \\    return AAsset_read((AAsset*)asset, buffer, size);
-                \\}
-                \\
-                \\static fpos_t asset_seek(void* asset, fpos_t offset, int origin) {
-                \\    return AAsset_seek((AAsset*)asset, offset, origin);
-                \\}
-                \\
-                \\static int asset_close(void* asset) {
-                \\    AAsset_close((AAsset*)asset);
-                \\    return 0;
-                \\}
-                \\
-                \\// assets/ 路径读取 APK，其余路径使用普通文件系统。
-                \\FILE* zhu_android_fopen(const char* path) {
-                \\    if (strncmp(path, "assets/", 7) != 0) return fopen(path, "rb");
-                \\    ANativeActivity* activity =
-                \\        (ANativeActivity*)sapp_android_get_native_activity();
-                \\    AAsset* asset = AAssetManager_open(activity->assetManager,
-                \\        path + 7, AASSET_MODE_RANDOM);
-                \\    if (!asset) return NULL;
-                \\    FILE* stream = funopen(asset, asset_read, NULL,
-                \\        asset_seek, asset_close);
-                \\    if (!stream) AAsset_close(asset);
-                \\    return stream;
-                \\}
-            ),
-            .flags = &.{"-fPIC"},
-        });
-    }
-
-    const stb = b.dependency("stb", .{
-        .target = target,
-        .optimize = optimize,
-    });
     if (web) {
         const em = sokolDep.builder.dependency("emsdk", .{});
         const include = em.path("upstream/emscripten/cache/sysroot/include");
         zhu.addSystemIncludePath(include);
     }
+    try addVorbis(b, zhu);
+
+    const tests = b.addTest(.{ .root_module = zhu });
+    const runTests = b.addRunArtifact(tests);
+    b.step("test", "Run tests").dependOn(&runTests.step);
+}
+
+// 游戏提供动态库名称和模块，安卓平台配置由引擎统一处理。
+pub const AndroidOptions = struct {
+    name: []const u8,
+    root_module: *std.Build.Module,
+    ndk: []const u8, // Android NDK 目录，由游戏构建选项传入。
+};
+
+// 在游戏构建缓存中补充窗口引用，生成 NativeActivity 加载的动态库。
+pub fn buildAndroid(
+    b: *std.Build,
+    dep: *std.Build.Dependency,
+    options: AndroidOptions,
+) !*std.Build.Step.Compile {
+    const mod = options.root_module;
+    const zhu = dep.module("zhu");
+    // 按模块对象查找游戏设置的导入名，不要求用户使用固定别名。
+    var imports = mod.import_table.iterator();
+    const importName = while (imports.next()) |entry| {
+        if (entry.value_ptr.* == zhu) break entry.key_ptr.*;
+    } else "zhu";
+    // 追踪游戏入口内容，从模块本身取得源码路径和所属项目。
+    const rootFile = mod.root_source_file.?;
+    const src = rootFile.src_path;
+    b.dependOnFileContents(rootFile);
+    const path = try src.owner.root.joinString(b.allocator, src.sub_path);
+    const source = try std.Io.Dir.cwd().readFileAlloc(b.graph.io, //
+        path, b.allocator, .unlimited);
+    // 完整复制源码目录，保留所有文件和原有的相对导入关系。
+    const files = b.addWriteFiles();
+    _ = files.addCopyDirectory(rootFile.dirname(), "", .{});
+    mod.root_source_file = files.add("zhuyu_android_main.zig", //
+        b.fmt("{s}\n\n// 动态库显式分析窗口模块，保留引擎导出的入口和回调。\n" ++
+            "comptime {{\n    _ = @import(\"{f}\").window;\n}}\n", //
+            .{ source, std.zig.fmtString(importName) }));
+
+    // 配置引擎和 Sokol 使用的 NDK、系统库及 APK 资源读取。
+    const target = zhu.resolved_target.?;
+    // 取回创建引擎依赖时使用的同一份 Sokol，配置在实际编译前生效。
+    const sokolDep = dep.builder.dependency("sokol", .{
+        .target = target,
+        .optimize = zhu.optimize.?,
+    });
+
+    const host = switch (b.graph.host.result.os.tag) {
+        .windows => "windows-x86_64",
+        .linux => "linux-x86_64",
+        .macos => "darwin-x86_64",
+        else => @panic("Unsupported NDK host"),
+    };
+    const sysroot = b.pathJoin(&.{
+        options.ndk,
+        "toolchains",
+        "llvm",
+        "prebuilt",
+        host,
+        "sysroot",
+    });
+    const include = b.pathJoin(&.{ sysroot, "usr", "include" });
+    const arch = switch (target.result.cpu.arch) {
+        .aarch64 => "aarch64-linux-android",
+        .arm, .thumb => "arm-linux-androideabi",
+        .x86 => "i686-linux-android",
+        .x86_64 => "x86_64-linux-android",
+        else => return error.UnsupportedAndroidTarget,
+    };
+    const archInclude = b.pathJoin(&.{ include, arch });
+    const libraries = b.pathJoin(&.{
+        sysroot,
+        "usr",
+        "lib",
+        arch,
+        b.fmt("{d}", .{target.result.os.version_range.linux.android}),
+    });
+    // 引擎和 Sokol 使用同一套 NDK，最终动态库复用这份链接配置。
+    const sokolLib = sokolDep.artifact("sokol_clib");
+    for ([_]*std.Build.Module{ zhu, sokolLib.root_module }) |module| {
+        module.addSystemIncludePath(.{ .cwd_relative = include });
+        module.addSystemIncludePath(.{ .cwd_relative = archInclude });
+        module.addLibraryPath(.{ .cwd_relative = libraries });
+        module.pic = true;
+    }
+    const config = b.fmt(
+        "include_dir={s}\nsys_include_dir={s}\ncrt_dir={s}\ncc_dir={s}\n" ++
+            "msvc_lib_dir=\nkernel32_lib_dir=\ndarwin_sdk_dir=\n",
+        .{ include, archInclude, libraries, libraries },
+    );
+    const libc = b.addWriteFiles().add("android-libc.conf", config);
+    sokolLib.setLibCFile(libc);
+    // GLES、EGL、android、log 继续由 Sokol 声明。
+    zhu.linkSystemLibrary("aaudio", .{});
+    zhu.linkSystemLibrary("m", .{});
+    // 系统库改为最终动态库的文件输入，绕过 Zig 的 LLD 库路径参数问题。
+    // TODO: Zig 修复后，验证系统库声明可直接链接，再移除下面的转换。
+    // https://codeberg.org/ziglang/zig/issues/37257
+    // 文件输入不会像系统库声明一样从 Sokol 静态库传递到最终链接。
+    for ([_]*std.Build.Module{ zhu, sokolLib.root_module }) |module| {
+        var index: usize = 0;
+        while (index < module.link_objects.items.len) {
+            switch (module.link_objects.items[index]) {
+                .system_lib => |system| {
+                    mod.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{
+                        libraries, b.fmt("lib{s}.so", .{system.name}),
+                    }) });
+                    _ = module.link_objects.orderedRemove(index);
+                },
+                else => index += 1,
+            }
+        }
+    }
+
+    try patchFetch(b, sokolDep);
+    zhu.addIncludePath(sokolDep.path("src/sokol/c"));
+    zhu.addCSourceFile(.{
+        // 临时的 APK 资源读取适配在构建缓存生成。
+        .file = b.addWriteFiles().add("android.c",
+            \\#define _BSD_SOURCE 1
+            \\#include <android/asset_manager.h>
+            \\#include <android/native_activity.h>
+            \\#include <stdio.h>
+            \\#include <string.h>
+            \\#include "sokol_app.h"
+            \\
+            \\static int asset_read(void* asset, char* buffer, int size) {
+            \\    return AAsset_read((AAsset*)asset, buffer, size);
+            \\}
+            \\
+            \\static fpos_t asset_seek(void* asset, fpos_t offset, int origin) {
+            \\    return AAsset_seek((AAsset*)asset, offset, origin);
+            \\}
+            \\
+            \\static int asset_close(void* asset) {
+            \\    AAsset_close((AAsset*)asset);
+            \\    return 0;
+            \\}
+            \\
+            \\// assets/ 路径读取 APK，其余路径使用普通文件系统。
+            \\FILE* zhu_android_fopen(const char* path) {
+            \\    if (strncmp(path, "assets/", 7) != 0) return fopen(path, "rb");
+            \\    ANativeActivity* activity =
+            \\        (ANativeActivity*)sapp_android_get_native_activity();
+            \\    AAsset* asset = AAssetManager_open(activity->assetManager,
+            \\        path + 7, AASSET_MODE_RANDOM);
+            \\    if (!asset) return NULL;
+            \\    FILE* stream = funopen(asset, asset_read, NULL,
+            \\        asset_seek, asset_close);
+            \\    if (!stream) AAsset_close(asset);
+            \\    return stream;
+            \\}
+        ),
+    });
+
+    // 游戏动态库直接复用同一份库路径和 libc 配置。
+    mod.pic = true;
+    mod.link_libc = true;
+    mod.addLibraryPath(.{ .cwd_relative = libraries });
+    const lib = b.addLibrary(.{
+        .name = options.name,
+        .linkage = .dynamic,
+        .root_module = mod,
+    });
+    lib.setLibCFile(libc);
+    lib.link_z_defs = true;
+    lib.link_z_max_page_size = 16384;
+    lib.link_z_common_page_size = 16384;
+    return lib;
+}
+
+// 添加 Vorbis 解码器，在缓存副本中处理单声道和双声道转换。
+fn addVorbis(b: *std.Build, zhu: *std.Build.Module) !void {
+    const stb = b.dependency("stb", .{
+        .target = zhu.resolved_target.?,
+        .optimize = zhu.optimize.?,
+    });
     // 单声道复制到左右，双声道取平均合为单声道，仅修改构建缓存中的副本。
     b.dependOnFileContents(stb.path("stb_vorbis.c"));
     const sourcePath = try stb.builder.root.joinString(b.allocator, "stb_vorbis.c");
@@ -97,7 +227,8 @@ pub fn build(b: *std.Build) !void {
         \\         for (i=0; i < z; ++i) {
         \\            float sample = f->channel_buffers[i][f->channel_buffer_start+j];
         \\            if (channels == 1 && f->channels == 2)
-        \\               sample = (sample + f->channel_buffers[1][f->channel_buffer_start+j]) * 0.5f;
+        \\               sample = (sample +
+        \\                  f->channel_buffers[1][f->channel_buffer_start+j]) * 0.5f;
         \\            *buffer++ = sample;
         \\         }
         \\         for (   ; i < channels; ++i)
@@ -115,10 +246,6 @@ pub fn build(b: *std.Build) !void {
             "-DSTB_VORBIS_NO_STDIO",
         },
     });
-
-    const tests = b.addTest(.{ .root_module = zhu });
-    const runTests = b.addRunArtifact(tests);
-    b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
 // 只替换构建缓存中的 fetch 实现，保留 Sokol 原来的线程和回调流程。
