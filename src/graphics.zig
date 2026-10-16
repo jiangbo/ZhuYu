@@ -261,7 +261,15 @@ pub const RenderPass = struct {
     viewport: ?math.Rect = null,
 };
 
+// 最近一次窗口目标 beginPass 的经过时间，离屏目标不计入。
+// 包含交换链查询、开始渲染通道、清屏和设置视口，以及这些调用中的驱动等待。
+// 不包含后续绘制、endPass 和 commit，也不是 GPU 的执行时间。
+pub var beginPassTicks: u64 = 0;
 pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
+    const start = sk.time.now();
+    defer if (renderPass.target == null) {
+        beginPassTicks = sk.time.since(start);
+    };
     var action = sk.gfx.PassAction{};
     action.colors[0] = .{
         .load_action = .CLEAR,

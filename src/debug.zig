@@ -116,7 +116,8 @@ pub fn draw(rows: []const Row) void {
         fps = frame - fpsFrame;
         start, fpsFrame = .{ time, frame };
         frameTime = sk.app.frameDuration() * 1000;
-        usedTime = sk.time.ms(window.frameTicks);
+        // 自身用时直接扣掉窗口 beginPass 的耗时，其余位置的等待仍会保留。
+        usedTime = sk.time.ms(window.frameTicks - graphics.beginPassTicks);
     }
     last = frame;
 
