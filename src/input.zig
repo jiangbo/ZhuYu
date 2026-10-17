@@ -22,36 +22,23 @@ pub const Option = struct {
     scale: math.Vector = .one, // 视口缩放比例。
 };
 
-// 将键盘、鼠标和触摸事件写入各自的输入状态。
+// 键盘和鼠标按钮统一写入按键状态，触摸单独保存触点。
 pub fn handle(ev: *const sk.app.Event, option: Option) void {
-    const keyCode: usize = @intCast(@backingInt(ev.key_code));
-    const buttonCode: usize = @intCast(@backingInt(ev.mouse_button));
-
     switch (ev.type) {
-        .KEY_DOWN => {
-            change.pressed = true;
-            key.change.pressed = true;
-            key.state.set(keyCode);
-        },
-        .KEY_UP => {
-            change.released = true;
-            key.change.released = true;
-            key.state.unset(keyCode);
+        .KEY_DOWN, .KEY_UP => {
+            // 键盘编号保持 Sokol 原值。
+            const code: key.Code = @fromBackingInt(@backingInt(ev.key_code));
+            key.set(code, ev.type == .KEY_DOWN);
         },
         .MOUSE_MOVE => {
             mouse.moved = true;
             mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
             mouse.pos = mouse.raw.sub(option.offset).div(option.scale);
         },
-        .MOUSE_DOWN => {
-            change.pressed = true;
-            mouse.change.pressed = true;
-            mouse.state.set(buttonCode);
-        },
-        .MOUSE_UP => {
-            change.released = true;
-            mouse.change.released = true;
-            mouse.state.unset(buttonCode);
+        .MOUSE_DOWN, .MOUSE_UP => {
+            // 鼠标编号加一，对应 MOUSE_LEFT、MOUSE_RIGHT、MOUSE_MIDDLE。
+            const code = @backingInt(ev.mouse_button) + 1;
+            key.set(@fromBackingInt(code), ev.type == .MOUSE_DOWN);
         },
         .MOUSE_SCROLL => mouse.scrollY += ev.scroll_y,
         .TOUCHES_BEGAN, .TOUCHES_MOVED, .TOUCHES_ENDED, .TOUCHES_CANCELLED => {
@@ -88,11 +75,8 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
 
 pub fn update() void {
     key.lastState = key.state;
-    mouse.lastState = mouse.state;
     mouse.scrollY = 0;
     change = .{};
-    key.change = .{};
-    mouse.change = .{};
     mouse.moved = false;
     touch.moved = false;
 
@@ -110,31 +94,48 @@ pub fn reset() void {
     touch.moved = false;
     key.state = .empty;
     key.lastState = .empty;
-    mouse.state = .empty;
-    mouse.lastState = .empty;
     mouse.scrollY = 0;
     change = .{};
-    key.change = .{};
-    mouse.change = .{};
     mouse.moved = false;
 }
 
 pub const key = struct {
-    pub const Code = sk.app.Keycode;
+    // 合并键盘和鼠标按钮，键盘保留原值，鼠标使用空闲编号 1、2、3。
+    pub const Code = code: {
+        const keys = std.enums.values(sk.app.Keycode);
+        const buttons = std.enums.values(sk.app.Mousebutton);
+        var names: [keys.len + buttons.len - 1][]const u8 = undefined;
+        var values: [names.len]i32 = undefined;
+
+        for (keys, 0..) |value, i| {
+            names[i] = @tagName(value);
+            values[i] = @backingInt(value);
+        }
+
+        // 鼠标项加前缀，跳过 INVALID，避免与键盘项重名。
+        for (buttons, keys.len..) |value, index| {
+            if (value == .INVALID) break;
+            names[index] = "MOUSE_" ++ @tagName(value);
+            values[index] = @backingInt(value) + 1;
+        }
+
+        break :code @Enum(i32, .exhaustive, &names, &values);
+    };
 
     // 根据平台推测是否有键盘，浏览器在引擎初始化时查询主要指针类型。
     pub var mayHave: bool = !builtin.target.abi.isAndroid() and
         builtin.os.tag != .ios;
 
-    pub var change: Change = .{};
+    // 键盘键和鼠标按钮共用当前帧与上一帧的状态。
     var lastState: std.StaticBitSet(512) = .empty;
     var state: std.StaticBitSet(512) = .empty;
 
+    // 直接写入统一按键状态，并记录本帧输入变化。
     pub fn set(keyCode: Code, down: bool) void {
-        handle(&sk.app.Event{
-            .type = if (down) .KEY_DOWN else .KEY_UP,
-            .key_code = keyCode,
-        }, .{});
+        const code: usize = @intCast(@backingInt(keyCode));
+        change.pressed = change.pressed or down;
+        change.released = change.released or !down;
+        state.setValue(code, down);
     }
 
     pub fn held(keyCode: Code) bool {
@@ -168,47 +169,16 @@ pub const key = struct {
 };
 
 pub const mouse = struct {
-    pub const Button = sk.app.Mousebutton;
-
-    pub var change: Change = .{};
     // 当前帧鼠标位置是否变化。
     pub var moved: bool = false;
     pub var raw: math.Vector = math.Vector.inf.neg(); // 原始像素坐标。
     // 游戏逻辑坐标，收到鼠标位置事件前不命中 UI 矩形。
     pub var pos: math.Vector = math.Vector.inf.neg();
     pub var scrollY: f32 = 0;
-    var lastState: std.StaticBitSet(3) = .empty;
-    var state: std.StaticBitSet(3) = .empty;
-
-    pub fn set(button: Button, down: bool) void {
-        handle(&sk.app.Event{
-            .type = if (down) .MOUSE_DOWN else .MOUSE_UP,
-            .mouse_button = button,
-        }, .{});
-    }
 
     // 判断鼠标逻辑坐标是否位于矩形内。
     pub fn hover(rect: math.Rect) bool {
         return rect.contains(pos);
-    }
-
-    pub fn held(button: Button) bool {
-        return state.isSet(@intCast(@backingInt(button)));
-    }
-
-    pub fn pressed(button: Button) bool {
-        const code: usize = @intCast(@backingInt(button));
-        return !lastState.isSet(code) and state.isSet(code);
-    }
-
-    pub fn released(button: Button) bool {
-        const code: usize = @intCast(@backingInt(button));
-        return lastState.isSet(code) and !state.isSet(code);
-    }
-
-    pub fn anyReleased(buttons: []const Button) bool {
-        for (buttons) |button| if (released(button)) return true;
-        return false;
     }
 };
 
@@ -258,9 +228,9 @@ pub const touch = struct {
         var result: State = .{};
         const mousePosition = if (useRaw) mouse.raw else mouse.pos;
         if (rect.contains(mousePosition)) {
-            result.held = mouse.held(.LEFT);
-            result.pressed = mouse.pressed(.LEFT);
-            result.released = mouse.released(.LEFT);
+            result.held = key.held(.MOUSE_LEFT);
+            result.pressed = key.pressed(.MOUSE_LEFT);
+            result.released = key.released(.MOUSE_LEFT);
         }
 
         for (points) |slot| {
