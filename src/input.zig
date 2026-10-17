@@ -180,9 +180,9 @@ pub const mouse = struct {
     pub var pos: math.Vector = math.Vector.inf.neg();
     pub var scrollY: f32 = 0;
 
-    // 判断鼠标逻辑坐标是否位于矩形内。
-    pub fn hover(rect: math.Rect) bool {
-        return rect.contains(pos);
+    // 判断鼠标逻辑坐标是否位于指定区域内。
+    pub fn hover(area: anytype) bool {
+        return area.contains(pos);
     }
 };
 
@@ -217,21 +217,21 @@ pub const touch = struct {
         return null;
     }
 
-    // 按默认坐标查询区域内的触摸和鼠标左键。
-    pub fn query(rect: math.Rect) State {
-        return queryArea(rect, false);
+    // 按默认坐标查询矩形、圆形等区域内的触摸和鼠标左键。
+    pub fn query(area: anytype) State {
+        return queryArea(area, false);
     }
 
     // 按实际像素坐标查询区域内的触摸和鼠标左键，包含黑边。
-    pub fn queryRaw(rect: math.Rect) State {
-        return queryArea(rect, true);
+    pub fn queryRaw(area: anytype) State {
+        return queryArea(area, true);
     }
 
     // 复用区域查询，仅切换触点和鼠标使用的位置字段。
-    fn queryArea(rect: math.Rect, comptime useRaw: bool) State {
+    fn queryArea(area: anytype, comptime useRaw: bool) State {
         var result: State = .{};
         const mousePosition = if (useRaw) mouse.raw else mouse.pos;
-        if (rect.contains(mousePosition)) {
+        if (area.contains(mousePosition)) {
             result.held = key.held(.MOUSE_LEFT);
             result.pressed = key.pressed(.MOUSE_LEFT);
             result.released = key.released(.MOUSE_LEFT);
@@ -240,7 +240,7 @@ pub const touch = struct {
         for (points) |slot| {
             const point = slot orelse continue;
             const position = if (useRaw) point.raw else point.pos;
-            if (!rect.contains(position)) continue;
+            if (!area.contains(position)) continue;
             result.held = result.held or point.state == .held;
             result.pressed = result.pressed or point.began;
             result.released = result.released or point.state == .ended;

@@ -523,6 +523,14 @@ pub const Shape = union(enum) {
     circle: Circle,
     // capsule: AxisCapsule,
 
+    // 返回形状的中心位置。
+    pub fn center(self: Shape) Vector2 {
+        return switch (self) {
+            .rect => |rect| rect.center(),
+            .circle => |circle| circle.center,
+        };
+    }
+
     pub fn move(self: Shape, offset: Vector2) Shape {
         return switch (self) {
             inline else => |s, tag| @unionInit(Shape, //
