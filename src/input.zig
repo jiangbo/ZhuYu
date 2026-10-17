@@ -243,10 +243,21 @@ pub const touch = struct {
         return null;
     }
 
-    // 统一查询触摸和鼠标左键，每个位置只判断一次。
+    // 按默认坐标查询区域内的触摸和鼠标左键。
     pub fn query(rect: math.Rect) State {
+        return queryArea(rect, false);
+    }
+
+    // 按实际像素坐标查询区域内的触摸和鼠标左键，包含黑边。
+    pub fn queryRaw(rect: math.Rect) State {
+        return queryArea(rect, true);
+    }
+
+    // 复用区域查询，仅切换触点和鼠标使用的位置字段。
+    fn queryArea(rect: math.Rect, comptime useRaw: bool) State {
         var result: State = .{};
-        if (mouse.hover(rect)) {
+        const mousePosition = if (useRaw) mouse.raw else mouse.pos;
+        if (rect.contains(mousePosition)) {
             result.held = mouse.held(.LEFT);
             result.pressed = mouse.pressed(.LEFT);
             result.released = mouse.released(.LEFT);
@@ -254,7 +265,8 @@ pub const touch = struct {
 
         for (points) |slot| {
             const point = slot orelse continue;
-            if (!rect.contains(point.pos)) continue;
+            const position = if (useRaw) point.raw else point.pos;
+            if (!rect.contains(position)) continue;
             result.held = result.held or point.state == .held;
             result.pressed = result.pressed or point.began;
             result.released = result.released or point.state == .ended;

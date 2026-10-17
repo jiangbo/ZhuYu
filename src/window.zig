@@ -31,8 +31,8 @@ pub const Info = struct {
     maxFileSize: usize = 1 * 1024 * 1024, // 最大加载文件大小
 };
 
-pub var size: math.Vector = .zero;
-pub var clientSize: math.Vector = .zero;
+pub var size: math.Vector = .zero; // 默认绘制坐标尺寸。
+pub var rawSize: math.Vector = .zero; // 实际窗口像素尺寸，包含黑边。
 pub var viewRect: math.Rect = undefined;
 pub var scale: math.Vector = .one;
 pub var info: Info = undefined; // 当前窗口配置
@@ -108,26 +108,26 @@ export fn windowEvent(event: ?*const Event) void {
 }
 
 pub fn computeViewRect() void {
-    clientSize = .xy(sk.app.widthf(), sk.app.heightf());
-    const ratio = clientSize.div(size);
+    rawSize = .xy(sk.app.widthf(), sk.app.heightf());
+    const ratio = rawSize.div(size);
     viewRect = switch (info.scaleEnum) {
-        .none => .init(clientSize.sub(size).mul(info.alignment), size),
-        .stretch => .init(.zero, clientSize),
+        .none => .init(rawSize.sub(size).mul(info.alignment), size),
+        .stretch => .init(.zero, rawSize),
         .fit => blk: {
             const minSize = size.scale(@min(ratio.x, ratio.y));
-            const position = clientSize.sub(minSize).mul(info.alignment);
+            const position = rawSize.sub(minSize).mul(info.alignment);
             break :blk .init(position, minSize);
         },
         .fill => blk: {
             const maxSize = size.scale(@max(ratio.x, ratio.y));
-            const position = clientSize.sub(maxSize).mul(info.alignment);
+            const position = rawSize.sub(maxSize).mul(info.alignment);
             break :blk .init(position, maxSize);
         },
         .integer => blk: {
             const min = @min(ratio.x, ratio.y);
             const usedScale = if (min < 1) min else @trunc(min);
             const intSize = size.scale(usedScale);
-            const position = clientSize.sub(intSize).mul(info.alignment);
+            const position = rawSize.sub(intSize).mul(info.alignment);
             break :blk .init(position, intSize);
         },
     };

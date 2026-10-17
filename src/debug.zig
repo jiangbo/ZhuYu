@@ -139,8 +139,8 @@ pub fn draw(rows: []const Row) void {
         frameTime,
     }, "用时 {d:.2} ms", .{usedTime});
     writeFormatLine(&columns, "窗口", "{d:.0}x{d:.0}", .{
-        window.clientSize.x,
-        window.clientSize.y,
+        window.rawSize.x,
+        window.rawSize.y,
     }, "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
     writeFormatLine(&columns, "显示", "屏幕 {d:.0}%", .{
         sk.app.dpiScale() * 100,
