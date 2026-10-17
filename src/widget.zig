@@ -409,6 +409,8 @@ pub const Menu = struct {
     buttons: []const Button = &.{},
     // 所有键盘导航触发的时机。
     trigger: Trigger = .press,
+    // 鼠标和触摸点击按钮时触发的时机。
+    touchTrigger: Trigger = .release,
     navKeys: NavKeys = .{},
     cancelEvent: ?usize = null,
     hoverSound: ?[:0]const u8 = null,
@@ -486,7 +488,10 @@ pub const Menu = struct {
         }
 
         if (newPressed) |index| self.pressed = index;
-        const clicked = if (state.released) self.pressed else null;
+        const clicked = switch (self.touchTrigger) {
+            .press => newPressed,
+            .release => if (state.released) self.pressed else null,
+        };
         if (state.released or !state.held) self.pressed = null;
 
         if (moved) {
