@@ -36,17 +36,23 @@ pub const Option = struct {
 
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
-    scissor: ?math.Rect, // 裁剪区域
+    viewport: AreaCommand, // 视口及其绘制坐标范围
+    scissor: AreaCommand, // 裁剪区域及其绘制坐标范围
     draw: DrawCommand, // 绘制命令
 };
 
 pub const TargetCommand = struct { color: Color, pass: RenderPass };
+// 视口和裁剪命令共用区域结构，坐标含义由命令类型决定。
+pub const AreaCommand = struct {
+    rect: math.Rect, // 视口使用实际像素，裁剪使用绘制坐标。
+    size: Vector2, // 记录命令时的绘制坐标范围。
+};
 pub const DrawCommand = struct {
     start: u32 = 0, // 起始顶点索引
     end: usize = 0, // 结束顶点索引
     view: graphics.View = .{}, // 纹理视图
     camera: camera.Camera, // 绘制命令相机
-    size: Vector2, // 视口大小
+    size: Vector2, // 绘制坐标范围
     pipeline: sk.gfx.Pipeline, // 渲染流水线
     sampler: sk.gfx.Sampler = .{}, // 采样器
 };
@@ -98,10 +104,22 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     });
 }
 
+// 在当前渲染通道内切换视口和绘制坐标范围，同时重置裁剪区域。
+pub fn useViewport(rect: math.Rect, size: Vector2) void {
+    endCommand();
+    commands.appendAssumeCapacity(.{
+        .viewport = .{ .rect = rect, .size = size },
+    });
+    drawState.size = size;
+}
+
 // 设置逻辑坐标裁剪区域，null 恢复当前视口。
 pub fn useScissor(rect: ?math.Rect) void {
     if (currentDraw()) |draw| draw.end = vertices.items.len;
-    commands.appendAssumeCapacity(.{ .scissor = rect });
+    commands.appendAssumeCapacity(.{ .scissor = .{
+        .rect = rect orelse math.Rect.init(.zero, drawState.size),
+        .size = drawState.size,
+    } });
 }
 
 pub fn usePipeline(value: ?sk.gfx.Pipeline) void {
@@ -331,7 +349,13 @@ pub fn flush() void {
                 drawState.pipeline = .{};
                 activePass = true;
             },
-            .scissor => |rect| applyScissor(rect, viewport, drawState.size),
+            .viewport => |view| {
+                viewport = view.rect;
+                sk.gfx.applyViewportf(viewport.min.x, viewport.min.y, //
+                    viewport.size.x, viewport.size.y, true);
+                applyScissor(.init(.zero, view.size), viewport, view.size);
+            },
+            .scissor => |clip| applyScissor(clip.rect, viewport, clip.size),
             .draw => |draw| doDraw(draw, flipY),
         }
     }
@@ -346,11 +370,11 @@ pub fn endDraw() void {
     graphics.commit();
 }
 
-fn applyScissor(rect: ?math.Rect, view: math.Rect, size: Vector2) void {
-    const area = rect orelse math.Rect.init(.zero, size);
+// 将绘制坐标中的裁剪区域换算为实际像素。
+fn applyScissor(rect: math.Rect, view: math.Rect, size: Vector2) void {
     const ratio = view.size.div(size);
-    const pos = view.min.add(area.min.mul(ratio));
-    const clip = area.size.mul(ratio);
+    const pos = view.min.add(rect.min.mul(ratio));
+    const clip = rect.size.mul(ratio);
     sk.gfx.applyScissorRectf(pos.x, pos.y, clip.x, clip.y, true);
 }
 

@@ -223,7 +223,7 @@ pub const touch = struct {
     };
 
     // 区域内的触摸状态，包含鼠标左键。
-    pub const PressState = struct {
+    pub const State = struct {
         held: bool = false,
         pressed: bool = false,
         released: bool = false,
@@ -244,8 +244,8 @@ pub const touch = struct {
     }
 
     // 统一查询触摸和鼠标左键，每个位置只判断一次。
-    pub fn query(rect: math.Rect) PressState {
-        var result: PressState = .{};
+    pub fn query(rect: math.Rect) State {
+        var result: State = .{};
         if (mouse.hover(rect)) {
             result.held = mouse.held(.LEFT);
             result.pressed = mouse.pressed(.LEFT);

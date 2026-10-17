@@ -470,7 +470,7 @@ pub const Menu = struct {
         var touched: ?usize = null; // 触摸或鼠标左键当前所在的按钮。
         var newPressed: ?usize = null; // 本帧按下的按钮，取第一个。
         // 保存按下按钮的查询结果，禁用的按钮保持空状态。
-        var state: input.touch.PressState = .{};
+        var state: input.touch.State = .{};
         for (self.buttons, 0..) |button, index| {
             if (self.isDisabled(index)) continue;
             const rect = button.rect.move(self.position);
