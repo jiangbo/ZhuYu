@@ -14,7 +14,7 @@ const Vector2 = math.Vector2;
 // 默认按钮使用 usize 事件编号。
 pub const Button = ButtonT(usize);
 
-// 事件类型由调用方决定，配置和绘制供 Menu、Touch 共用。
+// 事件类型由调用方决定，提供按钮配置和绘制。
 pub fn ButtonT(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -30,7 +30,6 @@ pub fn ButtonT(comptime T: type) type {
         shape: math.Shape, // 命中和绘制共用的矩形或圆形区域。
         event: T,
         label: []const u8 = "",
-        visible: bool = true,
         patch: ?graphics.NineImage.Patch = null,
         normal: Style = .{},
         hover: Style = .{},
@@ -49,7 +48,6 @@ pub fn ButtonT(comptime T: type) type {
 
         // 根据形状绘制背景，并在区域内绘制图片。
         pub fn drawImage(self: Self, state: State, offset: Vector2) void {
-            if (!self.visible) return;
             const visual = self.style(state);
             const shape = self.shape.move(offset);
             const rect = shape.toRect();
@@ -72,7 +70,7 @@ pub fn ButtonT(comptime T: type) type {
 
         // 在区域中心绘制按钮文字，不切换文字流水线。
         pub fn drawText(self: Self, state: State, offset: Vector2) void {
-            if (!self.visible or self.label.len == 0) return;
+            if (self.label.len == 0) return;
             var option = self.style(state).text;
             const position = self.shape.center().add(offset);
             if (option.anchor == null) option.anchor = .center;
@@ -606,7 +604,6 @@ pub fn MenuT(comptime T: type) type {
         }
 
         fn isDisabled(self: Self, index: usize) bool {
-            if (!self.buttons[index].visible) return true;
             for (self.disabled) |d| if (d == index) return true;
             return false;
         }

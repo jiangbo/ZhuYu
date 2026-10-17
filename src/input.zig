@@ -3,18 +3,25 @@ const builtin = @import("builtin");
 const sk = @import("sokol");
 const math = @import("math.zig");
 
-// 当前帧收到的输入变化。
-pub const Change = struct {
+// 当前帧收到的按压变化。
+pub const Press = struct {
     pressed: bool = false,
     released: bool = false,
+    cancelled: bool = false, // 触摸被取消，单独记录，不作为正常释放。
 
-    pub fn any(self: Change) bool {
-        return self.pressed or self.released;
+    // 本帧是否收到按下、释放或取消。
+    pub fn changed(self: Press) bool {
+        return self.pressed or self.released or self.cancelled;
     }
 };
 
-// 当前帧收到的键盘、鼠标按钮和触屏按下、松开变化。
-pub var change: Change = .{};
+// 当前帧收到的键盘、鼠标按钮和触屏按下、松开及触摸取消。
+pub var press: Press = .{};
+
+// 本帧是否有按压变化、鼠标移动或触点移动。
+pub fn anyChanged() bool {
+    return press.changed() or mouse.moved or touch.moved;
+}
 
 // 本次事件使用的坐标转换参数，默认保持原始坐标。
 pub const Option = struct {
@@ -22,7 +29,7 @@ pub const Option = struct {
     scale: math.Vector = .one, // 视口缩放比例。
 };
 
-// 键盘和鼠标按钮写入按键状态，触摸保存触点并记录按下、松开。
+// 键盘和鼠标按钮写入按键状态，鼠标左键同时转换为触点。
 pub fn handle(ev: *const sk.app.Event, option: Option) void {
     switch (ev.type) {
         .KEY_DOWN, .KEY_UP => {
@@ -34,11 +41,34 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
             mouse.moved = true;
             mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
             mouse.pos = mouse.raw.sub(option.offset).div(option.scale);
+            if (touch.points[touch.mouseIndex]) |*point| {
+                if (point.state == .held) {
+                    point.raw, point.pos = .{ mouse.raw, mouse.pos };
+                    touch.moved = true;
+                }
+            }
         },
         .MOUSE_DOWN, .MOUSE_UP => {
             // 鼠标编号加一，对应 MOUSE_LEFT、MOUSE_RIGHT、MOUSE_MIDDLE。
             const code = @backingInt(ev.mouse_button) + 1;
             key.set(@fromBackingInt(code), ev.type == .MOUSE_DOWN);
+            mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
+            mouse.pos = mouse.raw.sub(option.offset).div(option.scale);
+            if (ev.mouse_button != .LEFT) return;
+
+            // 鼠标左键固定使用最后一个槽位，结束后同样保留到帧末。
+            if (ev.type == .MOUSE_DOWN) {
+                touch.points[touch.mouseIndex] = .{
+                    .id = 0,
+                    .start = mouse.raw,
+                    .raw = mouse.raw,
+                    .pos = mouse.pos,
+                };
+                touch.moved = true;
+            } else if (touch.points[touch.mouseIndex]) |*point| {
+                point.raw, point.pos = .{ mouse.raw, mouse.pos };
+                point.state = .ended;
+            }
         },
         .MOUSE_SCROLL => mouse.scrollY += ev.scroll_y,
         .TOUCHES_BEGAN, .TOUCHES_MOVED, .TOUCHES_ENDED, .TOUCHES_CANCELLED => {
@@ -47,9 +77,10 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 const raw: math.Vector = .xy(point.pos_x, point.pos_y);
                 const pos = raw.sub(option.offset).div(option.scale);
                 if (ev.type == .TOUCHES_BEGAN) {
-                    change.pressed = true;
-                    // 新触点占用第一个空槽位，ID 不直接作为数组索引。
-                    const index = for (touch.points, 0..) |slot, i| {
+                    press.pressed = true;
+                    // 真实触点不使用鼠标槽位，ID 不作为数组索引。
+                    const points = touch.points[0..touch.mouseIndex];
+                    const index = for (points, 0..) |slot, i| {
                         if (slot == null) break i;
                     } else @panic("too many touch points");
                     touch.points[index] = std.mem.zeroInit(touch.Point, .{
@@ -64,10 +95,13 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 switch (ev.type) {
                     .TOUCHES_BEGAN, .TOUCHES_MOVED => touch.moved = true,
                     .TOUCHES_ENDED => {
-                        change.released = true;
+                        press.released = true;
                         saved.state = .ended;
                     },
-                    .TOUCHES_CANCELLED => saved.state = .cancelled,
+                    .TOUCHES_CANCELLED => {
+                        press.cancelled = true;
+                        saved.state = .cancelled;
+                    },
                     else => unreachable,
                 }
             }
@@ -80,7 +114,7 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
 pub fn update() void {
     key.lastState = key.state;
     mouse.scrollY = 0;
-    change = .{};
+    press = .{};
     mouse.moved = false;
     touch.moved = false;
 
@@ -99,7 +133,7 @@ pub fn reset() void {
     key.state = .empty;
     key.lastState = .empty;
     mouse.scrollY = 0;
-    change = .{};
+    press = .{};
     mouse.moved = false;
 }
 
@@ -137,8 +171,8 @@ pub const key = struct {
     // 直接写入统一按键状态，并记录本帧输入变化。
     pub fn set(keyCode: Code, down: bool) void {
         const code: usize = @intCast(@backingInt(keyCode));
-        change.pressed = change.pressed or down;
-        change.released = change.released or !down;
+        press.pressed = press.pressed or down;
+        press.released = press.released or !down;
         state.setValue(code, down);
     }
 
@@ -187,8 +221,11 @@ pub const mouse = struct {
 };
 
 pub const touch = struct {
+    // 鼠标槽位紧跟 Sokol 提供的真实触点槽位。
+    const mouseIndex = (sk.app.Event{}).touches.len;
+
     pub const Point = struct {
-        id: usize, // 系统分配的触点标识。
+        id: usize, // 真实触点使用系统标识，鼠标固定为 0。
         start: math.Vector, // 按下时的原始像素坐标，后续保持不变。
         raw: math.Vector, // 原始像素坐标。
         pos: math.Vector, // 游戏逻辑坐标。
@@ -203,14 +240,14 @@ pub const touch = struct {
         released: bool = false,
     };
 
-    // 结束的触点保留到帧末，游戏可以读取本帧发生的所有变化标记。
-    pub var points: [8]?Point = @splat(null);
+    // 真实触点之后是鼠标左键，结束的触点保留到帧末。
+    pub var points: [mouseIndex + 1]?Point = @splat(null);
     // 本帧是否有触点按下或移动。
     pub var moved: bool = false;
 
-    // 根据触点 ID 返回槽位中实际触点的指针。
+    // 根据系统触点 ID 查找真实触点，不搜索鼠标槽位。
     fn find(id: usize) ?*Point {
-        for (&points) |*slot| {
+        for (points[0..mouseIndex]) |*slot| {
             const point = &(slot.* orelse continue);
             if (point.id == id) return point;
         }
@@ -227,16 +264,9 @@ pub const touch = struct {
         return queryArea(area, true);
     }
 
-    // 复用区域查询，仅切换触点和鼠标使用的位置字段。
+    // 统一查询所有触点，仅切换使用的位置字段。
     fn queryArea(area: anytype, comptime useRaw: bool) State {
         var result: State = .{};
-        const mousePosition = if (useRaw) mouse.raw else mouse.pos;
-        if (area.contains(mousePosition)) {
-            result.held = key.held(.MOUSE_LEFT);
-            result.pressed = key.pressed(.MOUSE_LEFT);
-            result.released = key.released(.MOUSE_LEFT);
-        }
-
         for (points) |slot| {
             const point = slot orelse continue;
             const position = if (useRaw) point.raw else point.pos;
