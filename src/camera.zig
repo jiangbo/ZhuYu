@@ -1,4 +1,5 @@
 const std = @import("std");
+const sk = @import("sokol");
 
 const math = @import("math.zig");
 const key = @import("input.zig").key;
@@ -7,10 +8,15 @@ const window = @import("window.zig");
 const Vector2 = math.Vector2;
 
 pub const Camera = struct {
-    position: Vector2,
+    position: Vector2 = .zero,
     scale: Vector2 = .one,
 
-    pub const window: Camera = .{ .position = .zero };
+    pub const window: Camera = .{};
+
+    // 创建按窗口 DPI 缩放的相机。
+    pub fn windowDpi() Camera {
+        return .{ .scale = .square(sk.app.dpiScale()) };
+    }
 
     pub fn windowAt(origin: Vector2) Camera {
         return .{ .position = origin.neg() };

@@ -46,9 +46,9 @@ pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
     memory.init(gpa);
     window.io = io;
     if (@import("builtin").os.tag == .emscripten) {
-        // 主要指针是手指时，推测当前环境没有键盘。
-        key.mayHave = std.os.emscripten.emscripten_run_script_int(
-            "!window.matchMedia('(pointer: coarse)').matches",
+        // 主要指针为粗略指针时，推测可能没有实体键盘。
+        key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
+            "window.matchMedia('(pointer: coarse)').matches",
         ) != 0;
     }
 }

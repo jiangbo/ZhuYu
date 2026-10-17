@@ -13,7 +13,7 @@ pub const Change = struct {
     }
 };
 
-// 当前帧收到的所有键盘和鼠标按钮变化。
+// 当前帧收到的键盘、鼠标按钮和触屏按下、松开变化。
 pub var change: Change = .{};
 
 // 本次事件使用的坐标转换参数，默认保持原始坐标。
@@ -22,7 +22,7 @@ pub const Option = struct {
     scale: math.Vector = .one, // 视口缩放比例。
 };
 
-// 键盘和鼠标按钮统一写入按键状态，触摸单独保存触点。
+// 键盘和鼠标按钮写入按键状态，触摸保存触点并记录按下、松开。
 pub fn handle(ev: *const sk.app.Event, option: Option) void {
     switch (ev.type) {
         .KEY_DOWN, .KEY_UP => {
@@ -47,6 +47,7 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 const raw: math.Vector = .xy(point.pos_x, point.pos_y);
                 const pos = raw.sub(option.offset).div(option.scale);
                 if (ev.type == .TOUCHES_BEGAN) {
+                    change.pressed = true;
                     // 新触点占用第一个空槽位，ID 不直接作为数组索引。
                     const index = for (touch.points, 0..) |slot, i| {
                         if (slot == null) break i;
@@ -62,7 +63,10 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 saved.raw, saved.pos = .{ raw, pos };
                 switch (ev.type) {
                     .TOUCHES_BEGAN, .TOUCHES_MOVED => touch.moved = true,
-                    .TOUCHES_ENDED => saved.state = .ended,
+                    .TOUCHES_ENDED => {
+                        change.released = true;
+                        saved.state = .ended;
+                    },
                     .TOUCHES_CANCELLED => saved.state = .cancelled,
                     else => unreachable,
                 }
@@ -122,9 +126,9 @@ pub const key = struct {
         break :code @Enum(i32, .exhaustive, &names, &values);
     };
 
-    // 根据平台推测是否有键盘，浏览器在引擎初始化时查询主要指针类型。
-    pub var mayHave: bool = !builtin.target.abi.isAndroid() and
-        builtin.os.tag != .ios;
+    // 根据平台推测可能没有实体键盘，浏览器初始化时查询主要指针类型。
+    pub var mayNotHave: bool = builtin.target.abi.isAndroid() or
+        builtin.os.tag == .ios;
 
     // 键盘键和鼠标按钮共用当前帧与上一帧的状态。
     var lastState: std.StaticBitSet(512) = .empty;
