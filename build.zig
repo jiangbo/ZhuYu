@@ -33,6 +33,8 @@ pub fn build(b: *std.Build) !void {
         const em = sokolDep.builder.dependency("emsdk", .{});
         const include = em.path("upstream/emscripten/cache/sysroot/include");
         zhu.addSystemIncludePath(include);
+        // 静态接入浏览器存档函数，无需应用额外配置链接参数。
+        zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
     }
     try addVorbis(b, zhu);
 
