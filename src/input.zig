@@ -125,6 +125,12 @@ pub fn update() void {
             if (point.state != .held) slot.* = null;
         }
     }
+
+    // 保存本帧状态后，按顺序回放虚拟按键，供下一帧读取变化。
+    for (key.events[0..key.eventCount]) |event| {
+        key.set(event.code, event.down);
+    }
+    key.eventCount = 0;
 }
 
 pub fn reset() void {
@@ -132,6 +138,7 @@ pub fn reset() void {
     touch.moved = false;
     key.state = .empty;
     key.lastState = .empty;
+    key.eventCount = 0;
     mouse.scrollY = 0;
     press = .{};
     mouse.moved = false;
@@ -168,12 +175,23 @@ pub const key = struct {
     var lastState: std.StaticBitSet(512) = .empty;
     var state: std.StaticBitSet(512) = .empty;
 
+    // 按产生顺序暂存虚拟按键，避免分开保存按下和释放导致顺序变化。
+    const Event = struct { code: Code, down: bool };
+    var events: [16]Event = undefined;
+    var eventCount: u8 = 0;
+
     // 直接写入统一按键状态，并记录本帧输入变化。
     pub fn set(keyCode: Code, down: bool) void {
         const code: usize = @intCast(@backingInt(keyCode));
         press.pressed = press.pressed or down;
         press.released = press.released or !down;
         state.setValue(code, down);
+    }
+
+    // 暂存按键变化，帧末回放后在下一帧生效。
+    pub fn queue(keyCode: Code, down: bool) void {
+        events[eventCount] = .{ .code = keyCode, .down = down };
+        eventCount += 1;
     }
 
     pub fn held(keyCode: Code) bool {

@@ -93,7 +93,7 @@ pub fn patch(option: Option) void {
     if (option.shape) |shape| value.shape = shape;
 }
 
-// 未打补丁时自动恢复默认配置，再处理按钮的按键状态变化。
+// 未打补丁时自动恢复默认配置，暂存按钮变化供下一帧读取。
 pub fn update() void {
     if (!enabled) return;
     if (window.resized) layout();
@@ -120,19 +120,19 @@ pub fn update() void {
             if (code.* != null) continue;
 
             const key = option.key.?;
-            input.key.set(key, true);
+            input.key.queue(key, true);
             code.* = key;
         } else if (code.*) |key| {
-            input.key.set(key, false);
+            input.key.queue(key, false);
             code.* = null;
         }
     }
 }
 
-// 淡出或停止更新界面前，释放虚拟按键。
+// 淡出或停止更新界面前，暂存虚拟按键的释放。
 pub fn reset() void {
     for (pressedKeys.values) |code| {
-        if (code) |key| input.key.set(key, false);
+        if (code) |key| input.key.queue(key, false);
     }
     pressedKeys = .initFill(null);
 }
