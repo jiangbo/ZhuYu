@@ -13,9 +13,12 @@ pub const Option = struct {
     label: ?[]const u8 = null, // 空切片表示不显示文字。
     shape: ?math.Shape = null,
     hidden: bool = false,
+
+    // 将菜单按钮改为返回键。
+    pub const back: Option = .{ .index = 5, .key = .ESCAPE, .label = "返回" };
 };
 
-// 右侧依次为确定、菜单、功能和帮助，默认形状由布局设置。
+// 右侧依次为确定、菜单、功能和预留按钮，默认形状由布局设置。
 pub var defaults: [8]Option = .{
     .{ .index = 0, .key = .UP, .label = "上" },
     .{ .index = 1, .key = .LEFT, .label = "左" },
@@ -23,8 +26,8 @@ pub var defaults: [8]Option = .{
     .{ .index = 3, .key = .DOWN, .label = "下" },
     .{ .index = 4, .key = .F, .label = "确定" },
     .{ .index = 5, .key = .E, .label = "菜单" },
-    .{ .index = 6, .key = .G, .label = "调试" },
-    .{ .index = 7, .key = .H, .label = "帮助" },
+    .{ .index = 6, .key = .G, .label = "功能" },
+    .{ .index = 7, .hidden = true },
 };
 // 更新恢复默认值，绘制直接使用。
 var current: [defaults.len]Option = undefined;
@@ -37,7 +40,7 @@ var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换�
 pub fn init() void {
     enabled = input.key.mayNotHave;
     layout();
-    @memcpy(&current, &defaults);
+    mergeOptions(&.{});
 }
 
 // 相机统一处理 DPI，右侧按钮向窗口内侧留出握持空间。
@@ -60,16 +63,21 @@ fn layout() void {
     defaults[7].shape = .{ .circle = .init(size.addXY(-148, -156), 26) };
 }
 
-// 更新布局和配置，再处理按钮的按键状态变化。
-pub fn update(options: []const Option) void {
+// 更新单个按钮配置，null 表示使用默认配置。
+pub fn update(option: ?Option) void {
+    updateMany(if (option) |value| &.{value} else &.{});
+}
+
+// 更新布局和多个按钮配置，再处理按钮的按键状态变化。
+pub fn updateMany(options: []const Option) void {
     if (!enabled) return;
     if (window.resized) layout();
     mergeOptions(options);
 
-    // 首次按下时记录按键，持续按住时保留，松手或隐藏时释放。
+    // 首次按下时记录按键，松手、隐藏或取消绑定时释放原按键。
     for (current, &pressedKeys) |option, *code| {
         const down = if (option.shape) |shape|
-            input.touch.queryDpi(shape).held
+            option.key != null and input.touch.queryDpi(shape).held
         else
             false;
 
