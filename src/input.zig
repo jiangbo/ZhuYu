@@ -44,7 +44,6 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
             if (touch.points[touch.mouseIndex]) |*point| {
                 if (point.state == .held) {
                     point.raw, point.pos = .{ mouse.raw, mouse.pos };
-                    point.dpi = mouse.raw.div(.square(sk.app.dpiScale()));
                     touch.moved = true;
                 }
             }
@@ -56,7 +55,6 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
             mouse.raw = .xy(ev.mouse_x, ev.mouse_y);
             mouse.pos = mouse.raw.sub(option.offset).div(option.scale);
             if (ev.mouse_button != .LEFT) return;
-            const dpi = mouse.raw.div(.square(sk.app.dpiScale()));
 
             // 鼠标左键固定使用最后一个槽位，结束后同样保留到帧末。
             if (ev.type == .MOUSE_DOWN) {
@@ -65,12 +63,10 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                     .start = mouse.raw,
                     .raw = mouse.raw,
                     .pos = mouse.pos,
-                    .dpi = dpi,
                 };
                 touch.moved = true;
             } else if (touch.points[touch.mouseIndex]) |*point| {
                 point.raw, point.pos = .{ mouse.raw, mouse.pos };
-                point.dpi = dpi;
                 point.state = .ended;
             }
         },
@@ -80,7 +76,6 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 if (!point.changed) continue;
                 const raw: math.Vector = .xy(point.pos_x, point.pos_y);
                 const pos = raw.sub(option.offset).div(option.scale);
-                const dpi = raw.div(.square(sk.app.dpiScale()));
                 if (ev.type == .TOUCHES_BEGAN) {
                     press.pressed = true;
                     // 真实触点不使用鼠标槽位，ID 不作为数组索引。
@@ -97,7 +92,6 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
                 // 所有触摸事件统一查找触点，并更新当前位置。
                 const saved = touch.find(point.identifier).?;
                 saved.raw, saved.pos = .{ raw, pos };
-                saved.dpi = dpi;
                 switch (ev.type) {
                     .TOUCHES_BEGAN, .TOUCHES_MOVED => touch.moved = true,
                     .TOUCHES_ENDED => {
@@ -235,7 +229,6 @@ pub const touch = struct {
         start: math.Vector, // 按下时的原始像素坐标，后续保持不变。
         raw: math.Vector, // 原始像素坐标。
         pos: math.Vector, // 游戏逻辑坐标。
-        dpi: math.Vector, // 原始像素坐标除以窗口 DPI 比例，包含黑边。
         state: enum { held, ended, cancelled } = .held, // 当前触点状态。
         began: bool = true, // 本帧是否按下。
     };
@@ -261,23 +254,12 @@ pub const touch = struct {
         return null;
     }
 
-    // 按默认坐标查询矩形、圆形等区域内的触摸和鼠标左键。
+    // 按游戏逻辑坐标查询矩形、圆形等区域内的触摸和鼠标左键。
     pub fn query(area: anytype) State {
-        return queryArea(area, false);
-    }
-
-    // 按窗口 DPI 坐标查询区域内的触摸和鼠标左键，包含黑边。
-    pub fn queryDpi(area: anytype) State {
-        return queryArea(area, true);
-    }
-
-    // 统一查询所有触点，仅切换使用的位置字段。
-    fn queryArea(area: anytype, comptime useDpi: bool) State {
         var result: State = .{};
         for (points) |slot| {
             const point = slot orelse continue;
-            const position = if (useDpi) point.dpi else point.pos;
-            if (!area.contains(position)) continue;
+            if (!area.contains(point.pos)) continue;
             result.held = result.held or point.state == .held;
             result.pressed = result.pressed or point.began;
             result.released = result.released or point.state == .ended;

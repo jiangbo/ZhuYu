@@ -87,13 +87,21 @@ pub fn updateMany(options: []const Option) void {
     if (window.resized) layout();
     mergeOptions(options);
 
-    // 首次按下时记录按键，松手、隐藏或取消绑定时释放原按键。
-    for (current.values, &pressedKeys.values) |option, *code| {
-        const down = if (option.shape) |shape|
-            option.key != null and input.touch.queryDpi(shape).held
-        else
-            false;
+    // 每个按住的触点只转换一次，汇总各按钮是否按住。
+    var held: std.EnumArray(Button, bool) = .initFill(false);
+    for (input.touch.points) |slot| {
+        const point = slot orelse continue;
+        if (point.state != .held) continue;
+        const pos = buttonCamera.toWorld(point.raw);
+        for (current.values, &held.values) |option, *down| {
+            const shape = option.shape orelse continue;
+            if (option.key != null and shape.contains(pos)) down.* = true;
+        }
+    }
 
+    // 首次按下时记录按键，松手、隐藏或取消绑定时释放原按键。
+    const keys = &pressedKeys.values;
+    for (current.values, held.values, keys) |option, down, *code| {
         if (down) {
             if (code.* != null) continue;
 
@@ -137,6 +145,7 @@ pub fn draw() void {
     if (!enabled) return;
     const size = window.rawSize;
     batch.useViewport(.init(.zero, size), size);
+    defer batch.useViewport(window.viewRect, camera.size);
     camera.push(buttonCamera);
     defer camera.pop();
 
