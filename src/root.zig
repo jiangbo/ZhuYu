@@ -18,6 +18,7 @@ pub const key = input.key;
 pub const mouse = input.mouse;
 
 pub const extend = struct {
+    pub const pad = @import("extend/pad.zig");
     pub const tiled = @import("extend/tiled.zig");
 };
 

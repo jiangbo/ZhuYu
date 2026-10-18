@@ -7,6 +7,10 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
+    // 编译期决定菜单文字是否自动使用 MSDF 管线。
+    const msdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
+    const buildOptions = b.addOptions();
+    buildOptions.addOption(bool, "msdf", msdf);
 
     const sokolDep = b.dependency("sokol", .{
         .target = target,
@@ -24,6 +28,7 @@ pub fn build(b: *std.Build) !void {
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
+    zhu.addOptions("build_options", buildOptions);
     if (web) {
         const em = sokolDep.builder.dependency("emsdk", .{});
         const include = em.path("upstream/emscripten/cache/sysroot/include");
