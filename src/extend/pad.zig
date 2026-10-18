@@ -1,3 +1,4 @@
+const std = @import("std");
 const input = @import("../input.zig");
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
@@ -6,33 +7,40 @@ const batch = @import("../batch.zig");
 const text = @import("../text.zig");
 const Color = @import("../graphics.zig").Color;
 
+// 按钮角色，实际绑定按键和显示文字可由游戏修改。
+pub const Button = enum { enter, menu, extra, spare, up, left, right, down };
+
 // 单个按钮配置，未指定按键、文字和形状时沿用默认值。
 pub const Option = struct {
-    index: usize,
+    button: Button,
     key: ?input.key.Code = null,
     label: ?[]const u8 = null, // 空切片表示不显示文字。
     shape: ?math.Shape = null,
     hidden: bool = false,
 
     // 将菜单按钮改为返回键。
-    pub const back: Option = .{ .index = 5, .key = .ESCAPE, .label = "返回" };
+    pub const back: Option = .{
+        .button = .menu,
+        .key = .ESCAPE,
+        .label = "返回",
+    };
 };
 
-// 右侧依次为确定、菜单、功能和预留按钮，默认形状由布局设置。
-pub var defaults: [8]Option = .{
-    .{ .index = 0, .key = .UP, .label = "上" },
-    .{ .index = 1, .key = .LEFT, .label = "左" },
-    .{ .index = 2, .key = .RIGHT, .label = "右" },
-    .{ .index = 3, .key = .DOWN, .label = "下" },
-    .{ .index = 4, .key = .F, .label = "确定" },
-    .{ .index = 5, .key = .E, .label = "菜单" },
-    .{ .index = 6, .key = .G, .label = "功能" },
-    .{ .index = 7, .hidden = true },
-};
+// 按角色保存默认配置，避免外部依赖按钮排列顺序。
+pub var defaults: std.EnumArray(Button, Option) = .init(.{
+    .enter = .{ .button = .enter, .key = .F, .label = "确定" },
+    .menu = .{ .button = .menu, .key = .E, .label = "菜单" },
+    .extra = .{ .button = .extra, .key = .G, .label = "功能" },
+    .spare = .{ .button = .spare, .hidden = true },
+    .up = .{ .button = .up, .key = .UP, .label = "上" },
+    .left = .{ .button = .left, .key = .LEFT, .label = "左" },
+    .right = .{ .button = .right, .key = .RIGHT, .label = "右" },
+    .down = .{ .button = .down, .key = .DOWN, .label = "下" },
+});
 // 更新恢复默认值，绘制直接使用。
-var current: [defaults.len]Option = undefined;
+var current: std.EnumArray(Button, Option) = undefined;
 // 每个按钮本次按住的键，null 表示未按住。
-var pressedKeys: [defaults.len]?input.key.Code = @splat(null);
+var pressedKeys: std.EnumArray(Button, ?input.key.Code) = .initFill(null);
 pub var enabled: bool = false; // 统一控制虚拟按钮的输入与绘制。
 var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换。
 
@@ -47,20 +55,25 @@ pub fn init() void {
 fn layout() void {
     buttonCamera = .windowDpi();
     const size = buttonCamera.toWorld(window.rawSize);
-    defaults[0].shape = .{ .circle = .init(.xy(88, size.y - 148), 26) };
-    defaults[1].shape = .{ .circle = .init(.xy(32, size.y - 92), 26) };
-    defaults[2].shape = .{ .circle = .init(.xy(144, size.y - 92), 26) };
-    defaults[3].shape = .{ .circle = .init(.xy(88, size.y - 36), 26) };
-    defaults[4].shape = .{ .circle = .init(size.addXY(-80, -84), 38) };
+    const confirm: math.Circle = .init(size.addXY(-80, -84), 38);
     // 菜单贴齐确定键的底边，功能键贴齐确定键的右边。
-    const confirm = defaults[4].shape.?.circle;
     const bottom = confirm.center.y + confirm.radius;
     const right = confirm.center.x + confirm.radius;
     const menuY = bottom - 26;
     const extraX = right - 26;
-    defaults[5].shape = .{ .circle = .init(.xy(size.x - 160, menuY), 26) };
-    defaults[6].shape = .{ .circle = .init(.xy(extraX, size.y - 168), 26) };
-    defaults[7].shape = .{ .circle = .init(size.addXY(-148, -156), 26) };
+    const circles: std.EnumArray(Button, math.Circle) = .init(.{
+        .enter = confirm,
+        .menu = .init(.xy(size.x - 160, menuY), 26),
+        .extra = .init(.xy(extraX, size.y - 168), 26),
+        .spare = .init(size.addXY(-148, -156), 26),
+        .up = .init(.xy(88, size.y - 148), 26),
+        .left = .init(.xy(32, size.y - 92), 26),
+        .right = .init(.xy(144, size.y - 92), 26),
+        .down = .init(.xy(88, size.y - 36), 26),
+    });
+    for (&defaults.values, circles.values) |*option, circle| {
+        option.shape = .{ .circle = circle };
+    }
 }
 
 // 更新单个按钮配置，null 表示使用默认配置。
@@ -75,7 +88,7 @@ pub fn updateMany(options: []const Option) void {
     mergeOptions(options);
 
     // 首次按下时记录按键，松手、隐藏或取消绑定时释放原按键。
-    for (current, &pressedKeys) |option, *code| {
+    for (current.values, &pressedKeys.values) |option, *code| {
         const down = if (option.shape) |shape|
             option.key != null and input.touch.queryDpi(shape).held
         else
@@ -96,9 +109,9 @@ pub fn updateMany(options: []const Option) void {
 
 // 恢复默认配置，合入本次修改，并清空隐藏按钮的形状。
 fn mergeOptions(options: []const Option) void {
-    @memcpy(&current, &defaults);
+    current = defaults;
     for (options) |option| {
-        const value = &current[option.index];
+        const value = current.getPtr(option.button);
         value.hidden = option.hidden;
         if (option.key) |key| value.key = key;
         if (option.label) |label| {
@@ -106,17 +119,17 @@ fn mergeOptions(options: []const Option) void {
         }
         if (option.shape) |shape| value.shape = shape;
     }
-    for (&current) |*option| {
+    for (&current.values) |*option| {
         if (option.hidden) option.shape = null;
     }
 }
 
 // 淡出或停止更新界面前，释放虚拟按键。
 pub fn reset() void {
-    for (pressedKeys) |code| {
+    for (pressedKeys.values) |code| {
         if (code) |key| input.key.set(key, false);
     }
-    pressedKeys = @splat(null);
+    pressedKeys = .initFill(null);
 }
 
 // 启用时切换到全窗口视口，绘制形状的边框、填充和文字。
@@ -133,14 +146,14 @@ pub fn draw() void {
 
 // 遍历可见按钮，绘制边框和填充。
 pub fn drawImage() void {
-    for (current, pressedKeys) |option, code| {
+    for (current.values, pressedKeys.values) |option, code| {
         const shape = option.shape orelse continue;
         drawShape(shape, code != null);
     }
 }
 
 // 根据按住状态选择颜色，绘制单个按钮的形状。
-fn drawShape(shape: math.Shape, down: bool) void {
+pub fn drawShape(shape: math.Shape, down: bool) void {
     // 普通与按住状态的边框色和填充色。
     const normalBorder = Color.rgba(1, 1, 1, 0.4);
     const pressedBorder = Color.rgba(0.65, 0.88, 1, 0.95);
@@ -173,7 +186,7 @@ pub fn drawText() void {
     if (comptime text.useMsdf) text.msdf.begin();
     defer if (comptime text.useMsdf) text.msdf.end();
 
-    for (current) |option| {
+    for (current.values) |option| {
         const shape = option.shape orelse continue;
         const label = option.label orelse continue;
         text.draw(label, shape.center(), .{
