@@ -96,6 +96,7 @@ export fn windowInit() void {
     call(root, "init", .{memory.allocator});
 }
 
+// 本帧窗口尺寸是否变化，供游戏读取，帧末清除。
 pub var resized: bool = false;
 
 export fn windowEvent(event: ?*const Event) void {
@@ -132,7 +133,6 @@ pub fn computeViewRect() void {
         },
     };
     scale = viewRect.size.div(size);
-    resized = false;
 }
 
 pub var frameTicks: u64 = 0;
@@ -143,6 +143,7 @@ export fn windowFrame() void {
     const delta: f32 = @floatCast(sk.app.frameDuration());
     call(root, "frame", .{delta});
     input.update();
+    resized = false;
     frameTicks = sk.time.since(frameStart);
 }
 

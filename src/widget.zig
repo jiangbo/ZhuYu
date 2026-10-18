@@ -427,10 +427,8 @@ pub fn MenuT(comptime T: type) type {
             option: text.Option = .{ .anchor = .center },
         } = .{},
         buttons: []const ButtonT(T) = &.{},
-        // 所有键盘导航触发的时机。
-        trigger: Trigger = .press,
-        // 鼠标和触摸点击按钮时触发的时机。
-        touchTrigger: Trigger = .release,
+        // 键盘导航、鼠标和触摸点击共用的触发时机。
+        trigger: Trigger = .release,
         navKeys: NavKeys = .{},
         cancelEvent: ?T = null,
         hoverSound: ?[:0]const u8 = null,
@@ -508,7 +506,7 @@ pub fn MenuT(comptime T: type) type {
             }
 
             if (newPressed) |index| self.pressed = index;
-            const clicked = switch (self.touchTrigger) {
+            const clicked = switch (self.trigger) {
                 .press => newPressed,
                 .release => if (state.released) self.pressed else null,
             };
