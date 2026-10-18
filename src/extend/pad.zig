@@ -15,15 +15,16 @@ pub const Option = struct {
     button: Button,
     key: ?input.key.Code = null,
     label: ?[]const u8 = null, // 空切片表示不显示文字。
-    shape: ?math.Shape = null,
-    hidden: bool = false,
+    shape: ?math.Shape = null, // 未指定时沿用默认布局。
+    hidden: bool = false, // 同时控制输入和绘制，不修改形状。
 
     // 将菜单按钮改为返回键。
-    pub const back: Option = .{
-        .button = .menu,
-        .key = .ESCAPE,
-        .label = "返回",
-    };
+    pub const back: Option = .init(.menu, .ESCAPE, "返回");
+
+    // 创建按钮、按键和文字配置，其余字段采用默认值。
+    pub fn init(b: Button, key: input.key.Code, label: []const u8) Option {
+        return .{ .button = b, .key = key, .label = label };
+    }
 };
 
 // 按角色保存默认配置，避免外部依赖按钮排列顺序。
@@ -37,8 +38,9 @@ pub var defaults: std.EnumArray(Button, Option) = .init(.{
     .right = .{ .button = .right, .key = .RIGHT, .label = "右" },
     .down = .{ .button = .down, .key = .DOWN, .label = "下" },
 });
-// 更新恢复默认值，绘制直接使用。
+// 最近一次更新使用的配置，绘制时保持不变。
 var current: std.EnumArray(Button, Option) = undefined;
+var hasPatch: bool = false; // 本轮更新前是否已经合入补丁。
 // 每个按钮本次按住的键，null 表示未按住。
 var pressedKeys: std.EnumArray(Button, ?input.key.Code) = .initFill(null);
 pub var enabled: bool = false; // 统一控制虚拟按钮的输入与绘制。
@@ -48,7 +50,8 @@ var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换�
 pub fn init() void {
     enabled = input.key.mayNotHave;
     layout();
-    mergeOptions(&.{});
+    current = defaults;
+    hasPatch = false;
 }
 
 // 相机统一处理 DPI，右侧按钮向窗口内侧留出握持空间。
@@ -76,16 +79,26 @@ fn layout() void {
     }
 }
 
-// 更新单个按钮配置，null 表示使用默认配置。
-pub fn update(option: ?Option) void {
-    updateMany(if (option) |value| &.{value} else &.{});
+// 更新前逐个合入补丁，本轮首次调用时自动恢复默认配置。
+pub fn patch(option: Option) void {
+    if (!hasPatch) current = defaults;
+    hasPatch = true;
+
+    const value = current.getPtr(option.button);
+    value.hidden = option.hidden;
+    if (option.key) |key| value.key = key;
+    if (option.label) |label| {
+        value.label = if (label.len == 0) null else label;
+    }
+    if (option.shape) |shape| value.shape = shape;
 }
 
-// 更新布局和多个按钮配置，再处理按钮的按键状态变化。
-pub fn updateMany(options: []const Option) void {
+// 未打补丁时自动恢复默认配置，再处理按钮的按键状态变化。
+pub fn update() void {
     if (!enabled) return;
     if (window.resized) layout();
-    mergeOptions(options);
+    if (!hasPatch) current = defaults;
+    hasPatch = false;
 
     // 每个按住的触点只转换一次，汇总各按钮是否按住。
     var held: std.EnumArray(Button, bool) = .initFill(false);
@@ -94,8 +107,9 @@ pub fn updateMany(options: []const Option) void {
         if (point.state != .held) continue;
         const pos = buttonCamera.toWorld(point.raw);
         for (current.values, &held.values) |option, *down| {
-            const shape = option.shape orelse continue;
-            if (option.key != null and shape.contains(pos)) down.* = true;
+            if (option.hidden) continue;
+            const contains = option.shape.?.contains(pos);
+            if (option.key != null and contains) down.* = true;
         }
     }
 
@@ -112,23 +126,6 @@ pub fn updateMany(options: []const Option) void {
             input.key.set(key, false);
             code.* = null;
         }
-    }
-}
-
-// 恢复默认配置，合入本次修改，并清空隐藏按钮的形状。
-fn mergeOptions(options: []const Option) void {
-    current = defaults;
-    for (options) |option| {
-        const value = current.getPtr(option.button);
-        value.hidden = option.hidden;
-        if (option.key) |key| value.key = key;
-        if (option.label) |label| {
-            value.label = if (label.len == 0) null else label;
-        }
-        if (option.shape) |shape| value.shape = shape;
-    }
-    for (&current.values) |*option| {
-        if (option.hidden) option.shape = null;
     }
 }
 
@@ -156,8 +153,8 @@ pub fn draw() void {
 // 遍历可见按钮，绘制边框和填充。
 pub fn drawImage() void {
     for (current.values, pressedKeys.values) |option, code| {
-        const shape = option.shape orelse continue;
-        drawShape(shape, code != null);
+        if (option.hidden) continue;
+        drawShape(option.shape.?, code != null);
     }
 }
 
@@ -196,9 +193,9 @@ pub fn drawText() void {
     defer if (comptime text.useMsdf) text.msdf.end();
 
     for (current.values) |option| {
-        const shape = option.shape orelse continue;
+        if (option.hidden) continue;
         const label = option.label orelse continue;
-        text.draw(label, shape.center(), .{
+        text.draw(label, option.shape.?.center(), .{
             .anchor = .center,
         });
     }
