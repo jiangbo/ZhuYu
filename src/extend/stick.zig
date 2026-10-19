@@ -91,8 +91,11 @@ pub fn draw() void {
 // 复用 pad 绘制功能按钮，操作时额外绘制浮动摇杆。
 pub fn drawImage() void {
     pad.drawImage();
-    if (offset) |value| {
-        pad.drawShape(.{ .circle = .init(center, 56) }, false);
-        pad.drawShape(.{ .circle = .init(center.add(value), 26) }, true);
-    }
+    const value = offset orelse return;
+    // 先用长度平方判断越界，仅越界时开根号，输入仍保留原始位移。
+    var shift = value;
+    const len2 = value.length2();
+    if (len2 > 56 * 56) shift = value.scale(56 / @sqrt(len2));
+    pad.drawShape(.{ .circle = .init(center, 56) }, false);
+    pad.drawShape(.{ .circle = .init(center.add(shift), 26) }, true);
 }
