@@ -56,21 +56,23 @@ pub fn init() void {
 fn layout() void {
     buttonCamera = .windowDpi();
     const size = buttonCamera.toWorld(window.rawSize);
-    const confirm: math.Circle = .init(size.addXY(-80, -84), 38);
+    const confirm: math.Circle = .init(size.addXY(-100, -84), 44);
     // 菜单贴齐确定键的底边，功能键贴齐确定键的右边。
     const bottom = confirm.center.y + confirm.radius;
     const right = confirm.center.x + confirm.radius;
-    const menuY = bottom - 26;
-    const extraX = right - 26;
+    const menuY = bottom - 32;
+    const extraX = right - 32;
     const circles: std.EnumArray(Button, math.Circle) = .init(.{
         .enter = confirm,
-        .menu = .init(.xy(size.x - 160, menuY), 26),
-        .extra = .init(.xy(extraX, size.y - 168), 26),
-        .spare = .init(size.addXY(-148, -156), 26),
-        .up = .init(.xy(88, size.y - 148), 26),
-        .left = .init(.xy(32, size.y - 92), 26),
-        .right = .init(.xy(144, size.y - 92), 26),
-        .down = .init(.xy(88, size.y - 36), 26),
+        // 与确定键的圆形边缘间距约 10。
+        .menu = .init(.xy(size.x - 185.2, menuY), 32),
+        .extra = .init(.xy(extraX, size.y - 169.2), 32),
+        .spare = .init(size.addXY(-168, -156), 32),
+        // 相邻方向按钮边缘间距约 20，保留左边距 6 和底边距 10。
+        .up = .init(.xy(97.4, size.y - 160.8), 32),
+        .left = .init(.xy(38, size.y - 101.4), 32),
+        .right = .init(.xy(156.8, size.y - 101.4), 32),
+        .down = .init(.xy(97.4, size.y - 42), 32),
     });
     for (&defaults.values, circles.values) |*option, circle| {
         option.shape = .{ .circle = circle };
