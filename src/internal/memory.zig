@@ -26,12 +26,12 @@ pub fn reinterpret(comptime T: type, value: anytype) T {
 
 // 格式化到缓冲区，空间不足时直接终止。
 pub fn format(buf: []u8, comptime fmt: []const u8, args: anytype) []u8 {
-    return std.fmt.bufPrint(buf, fmt, args) catch @panic("buffer too small");
+    return std.mem.print(buf, fmt, args) catch @panic("buffer too small");
 }
 
 // 格式化为以零结尾的字符串，缓冲区不足时直接终止。
 pub fn formatZ(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]u8 {
-    return std.fmt.bufPrintSentinel(buf, fmt, args, 0) catch
+    return std.mem.printSentinel(buf, fmt, args, 0) catch
         @panic("buffer too small");
 }
 

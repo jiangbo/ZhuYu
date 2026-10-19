@@ -87,7 +87,7 @@ pub fn log(
         .debug => 3,
     };
     var buffer: [4000]u8 = undefined;
-    const message = std.fmt.bufPrintSentinel(&buffer, //
+    const message = std.mem.printSentinel(&buffer, //
         prefix ++ format, args, 0) catch {
         const suffix = "...[truncated]";
         @memcpy(buffer[buffer.len - suffix.len - 1 ..][0..suffix.len], suffix);
