@@ -10,7 +10,7 @@ pub const Option = pad.Option;
 pub const patch = pad.patch;
 pub const drawText = pad.drawText;
 
-// 摇杆启动区域，使用 DPI 坐标，布局默认设置为左下四分之一屏幕。
+// 摇杆启动区域，使用 DPI 坐标，布局默认设置为屏幕最左侧四分之一。
 pub var area: math.Rect = undefined;
 var stickCamera: camera.Camera = .window; // 摇杆输入和绘制共用 DPI 变换。
 // 摇杆只跟踪一个触点，中心在本次操作中保持不变。
@@ -33,7 +33,7 @@ pub fn init() void {
 fn layout() void {
     stickCamera = .windowDpi();
     const size = stickCamera.toWorld(window.rawSize);
-    area = .init(.xy(0, size.y * 0.5), size.scale(0.5));
+    area = .init(.zero, .xy(size.x * 0.25, size.y));
 }
 
 // 更新功能按钮并返回摇杆原始位移，每帧与 update 二选一调用。
