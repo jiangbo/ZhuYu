@@ -79,5 +79,6 @@ test "compile zhu modules" {
     std.testing.refAllDecls(input);
     std.testing.refAllDecls(widget);
     std.testing.refAllDecls(text);
+    std.testing.refAllDecls(extend.touch.stick);
     std.testing.refAllDecls(extend.tiled);
 }

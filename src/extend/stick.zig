@@ -17,6 +17,8 @@ var stickCamera: camera.Camera = .window; // 摇杆输入和绘制共用 DPI 变
 var touchIndex: ?usize = null;
 var center: math.Vector2 = .zero;
 var offset: ?math.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
+// 记录摇杆产生的上、下、左、右按键，只在状态变化时发送事件。
+var held: [4]bool = @splat(false);
 
 // 初始化时隐藏方向按钮，功能按钮交给 pad 处理。
 pub fn init() void {
@@ -41,6 +43,27 @@ pub fn update() ?math.Vector2 {
     if (window.resized) layout();
     offset = updateStick();
     return offset;
+}
+
+// 更新摇杆和功能按钮，将位移转换为四方向按键，下一帧生效。
+// 每帧与 update 二选一调用，位移未超过 12 个界面单位时不触发方向键。
+pub fn updateKeys() void {
+    const value = update() orelse math.Vector2.zero;
+    const deadZone = 12; // 摇杆中心不触发方向键的范围，使用界面单位。
+    // 只取偏移较大的轴，一次仅产生一个方向。
+    const horizontal = @abs(value.x) > @abs(value.y);
+    const down: [4]bool = .{
+        !horizontal and value.y < -deadZone,
+        !horizontal and value.y > deadZone,
+        horizontal and value.x < -deadZone,
+        horizontal and value.x > deadZone,
+    };
+    const keys = [_]input.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
+    for (keys, down, &held) |key, pressed, *previous| {
+        if (pressed == previous.*) continue;
+        input.key.queue(key, pressed);
+        previous.* = pressed;
+    }
 }
 
 // 空闲时捕获区域内新按下的触点，之后持续跟踪同一槽位。
@@ -68,9 +91,13 @@ fn updateStick() ?math.Vector2 {
     return null;
 }
 
-// 场景切换前释放功能按键，并结束摇杆操作。
+// 场景切换前释放功能按键和摇杆产生的方向键，并结束摇杆操作。
 pub fn reset() void {
     pad.reset();
+    const keys = [_]input.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
+    for (keys, held) |key, down| if (down) input.key.queue(key, false);
+
+    held = @splat(false);
     touchIndex = null;
     offset = null;
 }
