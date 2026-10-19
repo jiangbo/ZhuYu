@@ -20,7 +20,7 @@ var offset: ?math.Vector2 = null; // 原始位移，null 表示没有摇杆操�
 // 记录摇杆产生的上、下、左、右按键，只在状态变化时发送事件。
 var held: [4]bool = @splat(false);
 
-// 初始化时隐藏方向按钮，功能按钮交给 pad 处理。
+// 初始化时隐藏四个方向按钮，功能按钮交给 pad 处理。
 pub fn init() void {
     for ([_]pad.Button{ .up, .left, .right, .down }) |button| {
         pad.defaults.getPtr(button).hidden = true;
@@ -36,9 +36,8 @@ fn layout() void {
     area = .init(.xy(0, size.y * 0.5), size.scale(0.5));
 }
 
-// 更新 pad 的功能按钮，再计算摇杆位移。
-pub fn update() ?math.Vector2 {
-    if (!pad.enabled) return null;
+// 更新功能按钮并返回摇杆原始位移，每帧与 update 二选一调用。
+pub fn updateOffset() ?math.Vector2 {
     pad.update();
     if (window.resized) layout();
     offset = updateStick();
@@ -46,9 +45,9 @@ pub fn update() ?math.Vector2 {
 }
 
 // 更新摇杆和功能按钮，将位移转换为四方向按键，下一帧生效。
-// 每帧与 update 二选一调用，位移未超过 12 个界面单位时不触发方向键。
-pub fn updateKeys() void {
-    const value = update() orelse math.Vector2.zero;
+// 每帧与 updateOffset 二选一调用，位移未超过 12 个界面单位时不触发方向键。
+pub fn update() void {
+    const value = updateOffset() orelse math.Vector2.zero;
     const deadZone = 12; // 摇杆中心不触发方向键的范围，使用界面单位。
     // 只取偏移较大的轴，一次仅产生一个方向。
     const horizontal = @abs(value.x) > @abs(value.y);
@@ -104,7 +103,6 @@ pub fn reset() void {
 
 // 在窗口 DPI 坐标下绘制浮动摇杆和功能键盘。
 pub fn draw() void {
-    if (!pad.enabled) return;
     const size = window.rawSize;
     batch.useViewport(.init(.zero, size), size);
     defer batch.useViewport(window.viewRect, camera.size);

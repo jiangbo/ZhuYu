@@ -43,12 +43,10 @@ var current: std.EnumArray(Button, Option) = undefined;
 var hasPatch: bool = false; // 本轮更新前是否已经合入补丁。
 // 每个按钮本次按住的键，null 表示未按住。
 var pressedKeys: std.EnumArray(Button, ?input.key.Code) = .initFill(null);
-pub var enabled: bool = false; // 统一控制虚拟按钮的输入与绘制。
 var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换。
 
-// 根据输入环境决定是否启用，并设置初始布局。
+// 设置按钮的初始布局和当前配置。
 pub fn init() void {
-    enabled = input.key.mayNotHave;
     layout();
     current = defaults;
     hasPatch = false;
@@ -95,7 +93,6 @@ pub fn patch(option: Option) void {
 
 // 未打补丁时自动恢复默认配置，暂存按钮变化供下一帧读取。
 pub fn update() void {
-    if (!enabled) return;
     if (window.resized) layout();
     if (!hasPatch) current = defaults;
     hasPatch = false;
@@ -137,9 +134,8 @@ pub fn reset() void {
     pressedKeys = .initFill(null);
 }
 
-// 启用时切换到全窗口视口，绘制形状的边框、填充和文字。
+// 切换到全窗口视口，绘制形状的边框、填充和文字。
 pub fn draw() void {
-    if (!enabled) return;
     const size = window.rawSize;
     batch.useViewport(.init(.zero, size), size);
     defer batch.useViewport(window.viewRect, camera.size);

@@ -18,10 +18,7 @@ pub const key = input.key;
 pub const mouse = input.mouse;
 
 pub const extend = struct {
-    pub const touch = struct {
-        pub const pad = @import("extend/pad.zig");
-        pub const stick = @import("extend/stick.zig");
-    };
+    pub const touch = @import("extend/touch.zig");
     pub const tiled = @import("extend/tiled.zig");
 };
 
@@ -79,6 +76,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(input);
     std.testing.refAllDecls(widget);
     std.testing.refAllDecls(text);
+    std.testing.refAllDecls(extend.touch);
     std.testing.refAllDecls(extend.touch.stick);
     std.testing.refAllDecls(extend.tiled);
 }
