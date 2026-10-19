@@ -43,6 +43,39 @@ pub fn build(b: *std.Build) !void {
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
+// 在应用中注册 pack 命令，用宿主平台的工具追加资源并安装打包产物。
+pub fn packAssets(
+    b: *std.Build,
+    dep: *std.Build.Dependency,
+    options: struct {
+        exe: *std.Build.Step.Compile,
+        assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
+        output: ?[]const u8 = null, // 默认使用“程序名称-packed”。
+    },
+) void {
+    // 仅为 Linux 程序注册资源追加打包命令。
+    if (options.exe.rootModuleTarget().os.tag != .linux) return;
+
+    const tool = b.addExecutable(.{
+        .name = "zhuyu-pack",
+        .root_module = b.createModule(.{
+            .root_source_file = dep.path("tools/pack.zig"),
+            .target = b.graph.host,
+            .optimize = .safe,
+        }),
+    });
+    const pack = b.addRunArtifact(tool);
+    // 打包命令每次读取当前资源，不登记资源变化依赖。
+    pack.has_side_effects = true;
+    pack.addArtifactArg(options.exe);
+    pack.addDirectoryArg(b.path(options.assets));
+    const name = options.output orelse b.fmt("{s}-packed", .{options.exe.name});
+    const program = pack.addOutputFileArg(name);
+    const install = b.addInstallBinFile(program, name);
+    b.step("pack", "Append assets to the Linux executable")
+        .dependOn(&install.step);
+}
+
 // 游戏提供动态库名称和模块，安卓平台配置由引擎统一处理。
 pub const AndroidOptions = struct {
     name: []const u8,
