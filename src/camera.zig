@@ -1,5 +1,4 @@
 const std = @import("std");
-const sk = @import("sokol");
 
 const math = @import("math.zig");
 const key = @import("input.zig").key;
@@ -13,9 +12,9 @@ pub const Camera = struct {
 
     pub const window: Camera = .{};
 
-    // 创建按窗口 DPI 缩放的相机。
+    // 将平台界面尺寸转换为渲染像素，供触摸控件布局和绘制共用。
     pub fn windowDpi() Camera {
-        return .{ .scale = .square(sk.app.dpiScale()) };
+        return .{ .scale = .square(@import("window.zig").dpi()) };
     }
 
     pub fn windowAt(origin: Vector2) Camera {

@@ -1,9 +1,21 @@
 #define _BSD_SOURCE 1
 #include <android/asset_manager.h>
+#include <android/configuration.h>
 #include <android/native_activity.h>
 #include <stdio.h>
 #include <string.h>
 #include "sokol_app.h"
+
+// 返回安卓界面密度，将界面尺寸转换为原生窗口像素。
+float zhu_android_density(void) {
+    ANativeActivity* activity =
+        (ANativeActivity*)sapp_android_get_native_activity();
+    AConfiguration* config = AConfiguration_new();
+    AConfiguration_fromAssetManager(config, activity->assetManager);
+    const int density = AConfiguration_getDensity(config);
+    AConfiguration_delete(config);
+    return (float)density / 160.0f;
+}
 
 static int asset_read(void* asset, char* buffer, int size) {
     return AAsset_read((AAsset*)asset, buffer, size);

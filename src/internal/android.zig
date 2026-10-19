@@ -20,6 +20,9 @@ const Activity = extern struct {
 pub var threaded: std.Io.Threaded = undefined;
 pub var desc: ?sk.app.Desc = null;
 
+// 从安卓配置读取界面密度，1 表示每个界面单位对应一个窗口像素。
+pub extern fn zhu_android_density() f32;
+
 // 初始化安卓运行环境，再调用游戏入口取得窗口配置。
 export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {
     const gpa = std.heap.c_allocator;

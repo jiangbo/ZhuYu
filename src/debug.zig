@@ -142,8 +142,9 @@ pub fn draw(rows: []const Row) void {
         window.rawSize.x,
         window.rawSize.y,
     }, "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
-    writeFormatLine(&columns, "显示", "屏幕 {d:.0}%", .{
-        sk.app.dpiScale() * 100,
+    // 显示触摸控件采用的界面倍率，与按钮相机使用同一计算。
+    writeFormatLine(&columns, "显示", "界面 {d:.0}%", .{
+        window.dpi() * 100,
     }, "画面 {d:.0}%", .{
         window.viewRect.size.x / window.size.x * 100,
     });

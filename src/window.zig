@@ -154,6 +154,13 @@ export fn windowDeinit() void {
     if (builtin.abi.isAndroid()) platform.threaded.deinit();
 }
 
+// 返回界面单位到渲染像素的倍率，安卓额外应用系统界面密度。
+pub fn dpi() f32 {
+    const bufferScale = sk.app.dpiScale();
+    if (!builtin.abi.isAndroid()) return bufferScale;
+    return bufferScale * platform.zhu_android_density();
+}
+
 // 查询触摸或鼠标左键是否释放，包含黑边。
 pub fn touchReleased() bool {
     const rect = math.Rect.init(.square(-1000000), .square(10000000));
