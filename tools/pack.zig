@@ -3,6 +3,7 @@ const std = @import("std");
 // 路径仅供打包时读取和计算哈希，偏移指向资源包内的文件内容。
 const Entry = struct {
     path: [:0]const u8,
+    hash: u32, // 收集文件时计算并检查，写索引时直接使用。
     offset: u32 = 0,
     size: u32 = 0,
 
@@ -25,12 +26,22 @@ pub fn main(init: std.process.Init) !void {
     defer walker.deinit();
 
     var entries: std.ArrayList(Entry) = .empty;
+    // 写入产物前检查路径哈希，发生冲突时指出两个文件。
+    var pathsByHash: std.AutoHashMapUnmanaged(u32, []const u8) = .empty;
     while (try walker.next(io)) |file| {
         if (file.kind != .file) continue;
         const path = try allocator.dupeSentinel(u8, file.path, 0);
         // Windows 宿主也使用资源接口约定的正斜杠路径。
         std.mem.replaceScalar(u8, path, '\\', '/');
-        try entries.append(allocator, .{ .path = path });
+        const hash = std.hash.Fnv1a_32.hash(path);
+        const entry = try pathsByHash.getOrPut(allocator, hash);
+        if (entry.found_existing) {
+            std.debug.panic("asset hash conflict: {s} and {s} ({x})", .{
+                entry.value_ptr.*, path, hash,
+            });
+        }
+        entry.value_ptr.* = path;
+        try entries.append(allocator, .{ .path = path, .hash = hash });
     }
     std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
 
@@ -59,13 +70,12 @@ pub fn main(init: std.process.Init) !void {
         archiveSize += entry.size;
     }
 
-    // 每条索引 16 字节：FNV-1a 64 路径哈希、偏移和大小，整数采用小端序。
+    // 每条索引 12 字节：FNV-1a 32 路径哈希、偏移和大小，整数采用小端序。
     for (entries.items) |entry| {
-        const hash = std.hash.Fnv1a_64.hash(entry.path);
-        try bytes.writeInt(u64, hash, .little);
+        try bytes.writeInt(u32, entry.hash, .little);
         try bytes.writeInt(u32, entry.offset, .little);
         try bytes.writeInt(u32, entry.size, .little);
-        archiveSize += 16;
+        archiveSize += 12;
     }
     archiveSize += 12;
     try bytes.writeInt(u32, @intCast(entries.items.len), .little);
