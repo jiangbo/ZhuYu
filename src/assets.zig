@@ -24,21 +24,17 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     allocator = memory.allocator.raw;
     maxFileSize = maxSize;
 
+    // 三个桌面系统都自动识别程序末尾的资源包。
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos or
+        (builtin.os.tag == .linux and !builtin.abi.isAndroid()))
+    {
+        file.init() catch |err| {
+            std.debug.panic("asset pack init failed: {}", .{err});
+        };
+    }
+
     sampler.init();
-
-    sk.fetch.setup(.{
-        .num_lanes = fileBuffer.len,
-        .logger = .{ .func = sk.log.func },
-        .allocator = memory.sokolAllocator(sk.fetch.Allocator),
-    });
-}
-
-pub fn initCaches(allocator_: std.mem.Allocator) void {
-    allocator, imageCache = .{ allocator_, .empty };
-    atlas.cache = .empty;
-    view.cache, file.cache = .{ .empty, .empty };
-    sound.cache, music.cache = .{ .empty, .empty };
-    gpu.pipelines, gpu.shaders = .{ .empty, .empty };
 }
 
 pub fn deinit() void {
@@ -68,11 +64,14 @@ pub fn loadImage(path: Path, option: ImageOption) Image {
         return entry.value_ptr.*;
     }
 
+    const imageView = sk.gfx.allocView();
     entry.value_ptr.* = .{
-        .view = view.load(path),
+        .view = imageView,
         .sampler = smp,
         .size = option.size,
     };
+    view.cache.put(allocator, id(path), imageView) catch oom();
+    _ = file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
 
@@ -249,13 +248,6 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
 const view = struct {
     var cache: std.AutoHashMapUnmanaged(Id, sk.gfx.View) = .empty;
 
-    fn load(path: Path) sk.gfx.View {
-        const imageView = sk.gfx.allocView();
-        cache.put(allocator, id(path), imageView) catch oom();
-        _ = file.load(path, imageView.id, handler);
-        return imageView;
-    }
-
     fn handler(resp: Response) bool {
         const img = png.load(allocator, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
@@ -306,7 +298,7 @@ const sound = struct {
 
         entry.value_ptr.* = .{ .option = option };
         _ = file.load(path, 0, handler);
-        return entry.value_ptr.*;
+        return .{};
     }
 
     fn handler(resp: Response) bool {
@@ -402,6 +394,52 @@ pub const file = struct {
     };
 
     var cache: std.AutoHashMapUnmanaged(Id, FileCache) = .empty;
+    var mapping: ?std.Io.File.MemoryMap = null; // 原始资源切片的共同所有者。
+
+    // 直接映射当前程序，将包内资源登记为已加载的借用数据。
+    fn init() !void {
+        const exe = try std.process.openExecutable(io, .{});
+        errdefer exe.close(io);
+        const stat = try exe.stat(io);
+        var mapped = try exe.createMemoryMap(io, .{
+            .len = @intCast(stat.size),
+            .protection = .{ .read = true },
+            .populate = false,
+        });
+        errdefer mapped.destroy(io);
+        const bytes = mapped.memory;
+        if (!std.mem.endsWith(u8, bytes, "b0b0")) {
+            mapped.destroy(io);
+            exe.close(io);
+            return;
+        }
+
+        initPack(bytes);
+        mapping = mapped;
+    }
+
+    // 资源模块初始化后调用；切片必须是有效 pack，并保持到资源模块销毁。
+    // 只借用包内数据，不复制或释放调用方提供的切片。
+    pub fn initPack(bytes: []const u8) void {
+        std.debug.assert(std.mem.endsWith(u8, bytes, "b0b0"));
+        const footer = bytes[bytes.len - 12 ..];
+        const count = memory.readInt(u32, footer[0..4]);
+        const size = memory.readInt(u32, footer[4..8]);
+        const start = bytes.len - size;
+        const indexStart = bytes.len - 12 - count * 12;
+        cache.ensureUnusedCapacity(allocator, count) catch oom();
+        for (0..count) |i| {
+            const entry = bytes[indexStart + i * 12 ..][0..12];
+            const hash = memory.readInt(u32, entry[0..4]);
+            const offset = start + memory.readInt(u32, entry[4..8]);
+            const length = memory.readInt(u32, entry[8..12]);
+            cache.putAssumeCapacity(hash, .{
+                .state = .loaded,
+                .data = .{ .bytes = bytes[offset..][0..length] },
+            });
+        }
+        std.log.info("loaded asset pack: {} files", .{count});
+    }
 
     pub fn put(path: Path, data: Data) void {
         const entry = cache.getOrPut(allocator, id(path)) catch oom();
@@ -426,6 +464,15 @@ pub const file = struct {
         }
 
         entry.value_ptr.* = .{ .index = index, .handler = handler };
+
+        // 缓存和 pack 都未命中时，首次按需启动异步加载器。
+        if (!sk.fetch.valid()) {
+            sk.fetch.setup(.{
+                .num_lanes = fileBuffer.len,
+                .logger = .{ .func = sk.log.func },
+                .allocator = memory.sokolAllocator(sk.fetch.Allocator),
+            });
+        }
 
         var buffer: [1024]u8 = undefined;
         std.debug.assert(buffer.len == sk.fetch.maxPath());
@@ -464,6 +511,7 @@ pub const file = struct {
         fileBuffer[resp.lane] = &.{};
     }
 
+    // 同步和异步加载共用数据释放逻辑，回调自行决定是否保留原始数据。
     fn handleLoaded(path: Path, value: *FileCache, size: usize) void {
         const response: Response = .{
             .index = value.index,
@@ -472,6 +520,9 @@ pub const file = struct {
         };
 
         const owned = value.data.owned;
+        // 回调期间禁止使文件缓存指针失效的操作。
+        cache.lockPointers();
+        defer cache.unlockPointers();
         if (!value.handler(response)) {
             if (owned) allocator.free(value.data.bytes);
             value.data = .{ .bytes = &.{} };
@@ -488,6 +539,12 @@ pub const file = struct {
             if (value.data.owned) allocator.free(value.data.bytes);
         }
         cache.deinit(allocator);
+        // 所有资源使用者销毁后，再释放它们借用的映射内存。
+        if (mapping) |*mapped| {
+            const exe = mapped.file;
+            mapped.destroy(io);
+            exe.close(io);
+        }
     }
 };
 

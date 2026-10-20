@@ -13,14 +13,14 @@ const Entry = struct {
     }
 };
 
-// 参数依次为原始程序、资源目录、输出程序。
+// 参数依次为资源目录、输出资源包。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
 
     const cwd = std.Io.Dir.cwd();
-    var assets = try cwd.openDir(io, args[2], .{ .iterate = true });
+    var assets = try cwd.openDir(io, args[1], .{ .iterate = true });
     defer assets.close(io);
     var walker = try assets.walk(allocator);
     defer walker.deinit();
@@ -45,19 +45,11 @@ pub fn main(init: std.process.Init) !void {
     }
     std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
 
-    const output = try cwd.createFile(io, args[3], .{
-        .permissions = .executable_file,
-    });
+    const output = try cwd.createFile(io, args[2], .{});
     defer output.close(io);
     var buffer: [64 * 1024]u8 = undefined;
     var writer = output.writer(io, &buffer);
     const bytes = &writer.interface;
-
-    // 原样复制程序，再顺序写入资源；不修改编译器缓存中的程序。
-    const exe = try cwd.openFile(io, args[1], .{});
-    defer exe.close(io);
-    var exeReader = exe.reader(io, &.{});
-    _ = try bytes.sendFileAll(&exeReader, .unlimited);
 
     var archiveSize: u32 = 0; // 只计算资源包，不包含原始程序。
     for (entries.items) |*entry| {

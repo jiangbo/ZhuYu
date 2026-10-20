@@ -43,19 +43,16 @@ pub fn build(b: *std.Build) !void {
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
-// 在应用中注册 pack 命令，用宿主平台的工具追加资源并安装打包产物。
+// 注册 pack 和 append 命令，分别生成资源包和尾部附有资源的程序。
 pub fn packAssets(
     b: *std.Build,
     dep: *std.Build.Dependency,
     options: struct {
         exe: *std.Build.Step.Compile,
         assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
-        output: ?[]const u8 = null, // 默认使用“程序名称-packed”。
+        output: []const u8 = "assets.pack", // 独立资源包的输出名称。
     },
 ) void {
-    // 仅为 Linux 程序注册资源追加打包命令。
-    if (options.exe.rootModuleTarget().os.tag != .linux) return;
-
     const tool = b.addExecutable(.{
         .name = "zhuyu-pack",
         .root_module = b.createModule(.{
@@ -67,13 +64,37 @@ pub fn packAssets(
     const pack = b.addRunArtifact(tool);
     // 打包命令每次读取当前资源，不登记资源变化依赖。
     pack.has_side_effects = true;
-    pack.addArtifactArg(options.exe);
     pack.addDirectoryArg(b.path(options.assets));
-    const name = options.output orelse b.fmt("{s}-packed", .{options.exe.name});
-    const program = pack.addOutputFileArg(name);
-    const install = b.addInstallBinFile(program, name);
-    b.step("pack", "Append assets to the Linux executable")
+    const output = pack.addOutputFileArg(options.output);
+    const install = b.addInstallFile(output, options.output);
+    b.step("pack", "Pack assets")
         .dependOn(&install.step);
+
+    // pack 不限制目标平台，append 面向三个桌面系统。
+    const target = options.exe.rootModuleTarget();
+    if (target.os.tag != .windows and target.os.tag != .macos and
+        target.os.tag != .linux) return;
+    if (target.abi.isAndroid()) return;
+
+    const appendTool = b.addExecutable(.{
+        .name = "zhuyu-append",
+        .root_module = b.createModule(.{
+            .root_source_file = dep.path("tools/append.zig"),
+            .target = b.graph.host,
+            .optimize = .safe,
+        }),
+    });
+    const append = b.addRunArtifact(appendTool);
+    // 文件参数自动建立依赖：先编译程序、生成 pack，再执行追加。
+    append.addArtifactArg(options.exe);
+    append.addFileArg(output);
+    const name = b.fmt("{s}-packed{s}", .{
+        options.exe.name, target.exeFileExt(),
+    });
+    const program = append.addOutputFileArg(name);
+    const installProgram = b.addInstallBinFile(program, name);
+    b.step("append", "Append asset pack to the executable")
+        .dependOn(&installProgram.step);
 }
 
 // 游戏提供动态库名称和模块，安卓平台配置由引擎统一处理。

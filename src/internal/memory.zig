@@ -24,6 +24,11 @@ pub fn reinterpret(comptime T: type, value: anytype) T {
     return @as(*const T, @ptrCast(&source)).*;
 }
 
+// 按小端字节序读取整数。
+pub fn readInt(comptime T: type, bytes: anytype) T {
+    return std.mem.readInt(T, bytes, .little);
+}
+
 // 格式化到缓冲区，空间不足时直接终止。
 pub fn format(buf: []u8, comptime fmt: []const u8, args: anytype) []u8 {
     return std.mem.print(buf, fmt, args) catch @panic("buffer too small");

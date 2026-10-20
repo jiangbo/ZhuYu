@@ -138,7 +138,8 @@ pub fn computeViewRect() void {
 pub var frameTicks: u64 = 0;
 export fn windowFrame() void {
     const frameStart = sk.time.now();
-    sk.fetch.dowork();
+    // 异步加载器按需启动，启动后才推进文件请求。
+    if (sk.fetch.valid()) sk.fetch.dowork();
     if (resized) computeViewRect();
     const delta: f32 = @floatCast(sk.app.frameDuration());
     call(root, "frame", .{delta});
