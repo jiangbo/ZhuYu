@@ -43,6 +43,53 @@ pub fn build(b: *std.Build) !void {
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
+// 游戏提供程序名称、模块和解压后的 macOS SDK 根目录。
+pub const MacOSOptions = struct {
+    name: []const u8,
+    root_module: *std.Build.Module,
+    sdk: []const u8, // 指向 MacOSX*.sdk，而不是其上级目录。
+};
+
+// 为目标程序和 Sokol 配置同一套 SDK，宿主平台的打包工具不受影响。
+pub fn buildMacOS(
+    b: *std.Build,
+    dep: *std.Build.Dependency,
+    options: MacOSOptions,
+) *std.Build.Step.Compile {
+    const mod = options.root_module;
+    const zhu = dep.module("zhu");
+    const sokolDep = dep.builder.dependency("sokol", .{
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+    const sokolLib = sokolDep.artifact("sokol_clib");
+    const include = b.pathJoin(&.{ options.sdk, "usr", "include" });
+    const libraries = b.pathJoin(&.{ options.sdk, "usr", "lib" });
+    const frameworks = b.pathJoin(&.{
+        options.sdk, "System", "Library", "Frameworks",
+    });
+    for ([_]*std.Build.Module{ mod, zhu, sokolLib.root_module }) |module| {
+        module.addSystemIncludePath(.{ .cwd_relative = include });
+        module.addSystemFrameworkPath(.{ .cwd_relative = frameworks });
+        module.addLibraryPath(.{ .cwd_relative = libraries });
+    }
+
+    // libc 配置由 SDK 路径直接生成到缓存，游戏无需维护额外文件。
+    const config = b.fmt(
+        "include_dir={s}\nsys_include_dir={s}\ncrt_dir={s}\ncc_dir=\n" ++
+            "msvc_lib_dir=\nkernel32_lib_dir=\ndarwin_sdk_dir={s}\n",
+        .{ include, include, libraries, options.sdk },
+    );
+    const libc = b.addWriteFiles().add("macos-libc.conf", config);
+    sokolLib.setLibCFile(libc);
+    const exe = b.addExecutable(.{
+        .name = options.name,
+        .root_module = mod,
+    });
+    exe.setLibCFile(libc);
+    return exe;
+}
+
 // 注册 pack 和 append 命令，分别生成资源包和尾部附有资源的程序。
 pub fn packAssets(
     b: *std.Build,
