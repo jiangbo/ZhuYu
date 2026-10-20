@@ -1,5 +1,5 @@
 const std = @import("std");
-const buildOptions = @import("build_options");
+const options = @import("options");
 
 const sk = @import("sokol");
 const shader = @import("shader");
@@ -15,7 +15,7 @@ const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
 // 菜单绘制文字时是否自动使用 MSDF，由构建选项决定。
-pub const useMsdf = buildOptions.msdf;
+pub const useMsdf = options.msdf;
 
 pub const Font = struct {
     size: f32,

@@ -24,11 +24,8 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     allocator = memory.allocator.raw;
     maxFileSize = maxSize;
 
-    // 三个桌面系统都自动识别程序末尾的资源包。
-    const builtin = @import("builtin");
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos or
-        (builtin.os.tag == .linux and !builtin.abi.isAndroid()))
-    {
+    // 编译期开关决定是否探测程序尾部的资源包。
+    if (@import("options").append) {
         file.init() catch |err| {
             std.debug.panic("asset pack init failed: {}", .{err});
         };

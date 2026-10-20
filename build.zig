@@ -9,8 +9,11 @@ pub fn build(b: *std.Build) !void {
     const web = target.result.os.tag == .emscripten;
     // 编译期决定菜单文字是否自动使用 MSDF 管线。
     const msdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
-    const buildOptions = b.addOptions();
-    buildOptions.addOption(bool, "msdf", msdf);
+    // 应用创建依赖时传入，默认关闭程序尾部的资源探测和追加。
+    const append = b.option(bool, "append", "Append asset pack") orelse false;
+    const options = b.addOptions();
+    options.addOption(bool, "msdf", msdf);
+    options.addOption(bool, "append", append);
 
     const sokolDep = b.dependency("sokol", .{
         .target = target,
@@ -28,7 +31,7 @@ pub fn build(b: *std.Build) !void {
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
-    zhu.addOptions("build_options", buildOptions);
+    zhu.addOptions("options", options);
     if (web) {
         const em = sokolDep.builder.dependency("emsdk", .{});
         const include = em.path("upstream/emscripten/cache/sysroot/include");
@@ -90,8 +93,8 @@ pub fn buildMacOS(
     return exe;
 }
 
-// 注册 pack 和 append 命令，分别生成资源包和尾部附有资源的程序。
-pub fn packAssets(
+// 注册 pack 命令，通过 append 选项控制是否自动追加资源包。
+pub fn addPackStep(
     b: *std.Build,
     dep: *std.Build.Dependency,
     options: struct {
@@ -117,11 +120,14 @@ pub fn packAssets(
     b.step("pack", "Pack assets")
         .dependOn(&install.step);
 
+    // 依赖的布尔参数保存为字符串，未传入时保持关闭。
+    const opt = dep.builder.user_input_options.get("append") orelse return;
+    if (!std.mem.eql(u8, opt.scalar, "true")) return;
+
     // pack 不限制目标平台，append 面向三个桌面系统。
     const target = options.exe.rootModuleTarget();
     if (target.os.tag != .windows and target.os.tag != .macos and
-        target.os.tag != .linux) return;
-    if (target.abi.isAndroid()) return;
+        (target.os.tag != .linux or target.abi.isAndroid())) return;
 
     const appendTool = b.addExecutable(.{
         .name = "zhuyu-append",
@@ -140,8 +146,7 @@ pub fn packAssets(
     });
     const program = append.addOutputFileArg(name);
     const installProgram = b.addInstallBinFile(program, name);
-    b.step("append", "Append asset pack to the executable")
-        .dependOn(&installProgram.step);
+    b.getInstallStep().dependOn(&installProgram.step);
 }
 
 // 游戏提供动态库名称和模块，安卓平台配置由引擎统一处理。
