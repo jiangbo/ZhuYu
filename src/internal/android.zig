@@ -20,8 +20,50 @@ const Activity = extern struct {
 pub var threaded: std.Io.Threaded = undefined;
 pub var desc: ?sk.app.Desc = null;
 
+// NDK 管理的不透明配置对象。
+const Configuration = opaque {};
+
+extern fn AConfiguration_new() *Configuration;
+extern fn AConfiguration_delete(*Configuration) void;
+extern fn AConfiguration_fromAssetManager(*Configuration, ?*anyopaque) void;
+extern fn AConfiguration_getDensity(*Configuration) i32;
+
 // 从安卓配置读取界面密度，1 表示每个界面单位对应一个窗口像素。
-pub extern fn zhu_android_density() f32;
+pub fn density() f32 {
+    const activity: *const Activity =
+        @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
+    const config = AConfiguration_new();
+    defer AConfiguration_delete(config);
+    AConfiguration_fromAssetManager(config, activity.assetManager);
+    const value = AConfiguration_getDensity(config);
+    return @as(f32, @floatFromInt(value)) / 160.0;
+}
+
+extern fn AAssetManager_open(?*anyopaque, [*:0]const u8, c_int) ?*anyopaque;
+extern fn AAsset_getLength64(*anyopaque) i64;
+extern fn AAsset_read(*anyopaque, [*]u8, usize) c_int;
+extern fn AAsset_close(*anyopaque) void;
+
+// 后台线程直接读取 APK 资源，避免 FILE 和 funopen 的中转。
+pub fn readAsset(path: [:0]const u8, buffer: []u8) ![]const u8 {
+    const activity: *const Activity =
+        @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
+    const asset = AAssetManager_open(activity.assetManager, path, 2) orelse
+        return error.FileNotFound;
+    defer AAsset_close(asset);
+    const size: usize = @intCast(AAsset_getLength64(asset));
+    if (size > buffer.len) return error.BufferTooSmall;
+    const data = buffer[0..size];
+    // AAsset_read 返回本次读取量，持续读取到文件声明的长度。
+    var offset: usize = 0;
+    while (offset < data.len) {
+        const count = AAsset_read(asset, data[offset..].ptr, data.len - offset);
+        if (count < 0) return error.ReadFailed;
+        if (count == 0) return error.UnexpectedEof;
+        offset += @intCast(count);
+    }
+    return data;
+}
 
 // 初始化安卓运行环境，再调用游戏入口取得窗口配置。
 export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {

@@ -281,12 +281,6 @@ pub fn buildAndroid(
         }
     }
 
-    try patchFetch(b, sokolDep);
-    zhu.addIncludePath(sokolDep.path("src/sokol/c"));
-    zhu.addCSourceFile(.{
-        .file = dep.path("src/internal/android.c"),
-    });
-
     // 游戏动态库直接复用同一份库路径和 libc 配置。
     mod.pic = true;
     mod.link_libc = true;
@@ -301,56 +295,6 @@ pub fn buildAndroid(
     lib.link_z_max_page_size = 16384;
     lib.link_z_common_page_size = 16384;
     return lib;
-}
-
-// 只替换构建缓存中的 fetch 实现，保留 Sokol 原来的线程和回调流程。
-fn patchFetch(b: *std.Build, dep: *std.Build.Dependency) !void {
-    const header = dep.path("src/sokol/c/sokol_fetch.h");
-    b.dependOnFileContents(header);
-    const path = try dep.builder.root.joinString(
-        b.allocator,
-        "src/sokol/c/sokol_fetch.h",
-    );
-    const source = try std.Io.Dir.cwd().readFileAlloc(
-        b.graph.io,
-        path,
-        b.allocator,
-        .unlimited,
-    );
-    const old = "return fopen(path->buf, \"rb\");";
-    if (std.mem.count(u8, source, old) != 1) return error.FetchPatchMismatch;
-    const patched = try std.mem.replaceOwned(
-        u8,
-        b.allocator,
-        source,
-        old,
-        "return zhu_android_fopen(path->buf);",
-    );
-    const files = b.addWriteFiles();
-    _ = files.add("sokol_fetch.h", patched);
-    const wrapper = files.add("sokol_fetch.c",
-        \\#include "sokol_defines.h"
-        \\#include <stdio.h>
-        \\extern FILE* zhu_android_fopen(const char* path);
-        \\#define SOKOL_FETCH_IMPL
-        \\#include "sokol_fetch.h"
-    );
-    const module = dep.artifact("sokol_clib").root_module;
-    module.addIncludePath(dep.path("src/sokol/c"));
-    var count: usize = 0;
-    for (module.link_objects.items) |object| {
-        switch (object) {
-            .c_source_file => |file| {
-                if (file.file != .src_path) continue;
-                const name = std.fs.path.basename(file.file.src_path.sub_path);
-                if (!std.mem.eql(u8, name, "sokol_fetch.c")) continue;
-                file.file = wrapper;
-                count += 1;
-            },
-            else => {},
-        }
-    }
-    if (count != 1) return error.FetchSourceMismatch;
 }
 
 fn createShader(

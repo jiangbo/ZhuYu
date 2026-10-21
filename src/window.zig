@@ -138,8 +138,7 @@ pub fn computeViewRect() void {
 pub var frameTicks: u64 = 0;
 export fn windowFrame() void {
     const frameStart = sk.time.now();
-    // 异步加载器按需启动，启动后才推进文件请求。
-    if (sk.fetch.valid()) sk.fetch.dowork();
+    assets.update();
     if (resized) computeViewRect();
     const delta: f32 = @floatCast(sk.app.frameDuration());
     call(root, "frame", .{delta});
@@ -159,7 +158,7 @@ export fn windowDeinit() void {
 pub fn dpi() f32 {
     const bufferScale = sk.app.dpiScale();
     if (!builtin.abi.isAndroid()) return bufferScale;
-    return bufferScale * platform.zhu_android_density();
+    return bufferScale * platform.density();
 }
 
 // 查询触摸或鼠标左键是否释放，包含黑边。

@@ -1,0 +1,183 @@
+//! 整文件异步加载，参考 sokol_fetch.h 的请求调度和主线程回调。
+//! 上游基准（floooh/sokol）：
+//! https://github.com/floooh/sokol/commit/5ee4b0b381e747884fdcf50c062369afc66c4f54
+//! 对应 sokol-zig 提交：ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f。
+const std = @import("std");
+const builtin = @import("builtin");
+
+pub const Response = struct {
+    path: [:0]const u8,
+    buffer: []u8, // 缓冲区交给回调，回调负责保留或释放。
+    result: anyerror![]const u8,
+};
+
+const Request = struct {
+    path: [:0]const u8, // 提交时复制，回调结束后释放。
+    callback: *const fn (Response) void,
+};
+
+const Slot = struct {
+    state: std.atomic.Value(enum(u8) { idle, queued, done }) = .init(.idle),
+    request: Request = undefined,
+    buffer: []u8 = &.{},
+    result: anyerror![]const u8 = undefined,
+};
+
+var allocator: std.mem.Allocator = undefined;
+var io: std.Io = undefined;
+var maxFileSize: usize = 0;
+var requests: std.ArrayList(Request) = .empty; // 仅主线程访问的等待队列。
+var nextRequest: usize = 0;
+var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
+var worker: ?std.Thread = null;
+var wake: std.Io.Event = .unset;
+var stop: std.atomic.Value(bool) = .init(false);
+pub var started: bool = false; // 仅主线程读写加载器生命周期。
+
+// 首次加载时启动；Web 通过 JS 发起请求，不创建线程。
+pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
+    std.debug.assert(!started);
+    io = fileIo;
+    allocator = gpa;
+    maxFileSize = maxSize;
+    if (builtin.os.tag != .emscripten) {
+        worker = std.Thread.spawn(.{}, run, .{}) catch |err|
+            std.debug.panic("start asset reader: {}", .{err});
+    }
+    started = true;
+}
+
+// 路径和队列在主线程分配，后台线程不访问引擎分配器。
+pub fn send(path: [:0]const u8, callback: *const fn (Response) void) void {
+    std.debug.assert(started);
+    const owned = allocator.dupeSentinel(u8, path, 0) catch
+        @panic("out of memory");
+    requests.append(allocator, .{ .path = owned, .callback = callback }) catch
+        @panic("out of memory");
+}
+
+// 主线程接收结果并补充请求，回调可以继续提交资源加载。
+pub fn dowork() void {
+    if (!started) return;
+    for (&slots, 0..) |*slot, lane| {
+        if (slot.state.load(.acquire) == .done) {
+            const request = slot.request;
+            const buffer = slot.buffer;
+            slot.buffer = &.{};
+            request.callback(.{
+                .path = request.path,
+                .buffer = buffer,
+                .result = slot.result,
+            });
+            allocator.free(request.path);
+            slot.state.store(.idle, .release);
+        }
+        if (slot.state.load(.acquire) != .idle) continue;
+        if (nextRequest == requests.items.len) continue;
+        slot.request = requests.items[nextRequest];
+        nextRequest += 1;
+        slot.buffer = allocator.alloc(u8, maxFileSize) catch
+            @panic("out of memory");
+        slot.state.store(.queued, .release);
+        if (builtin.os.tag == .emscripten) {
+            zhu_fetch_start(
+                @intCast(lane),
+                slot.request.path.ptr,
+                slot.buffer.ptr,
+                @intCast(slot.buffer.len),
+            );
+        } else {
+            wake.set(io);
+        }
+    }
+    if (nextRequest == requests.items.len) {
+        requests.clearRetainingCapacity();
+        nextRequest = 0;
+    }
+}
+
+// 先等待读取线程退出，再释放仍在途的路径和缓冲区。
+pub fn shutdown() void {
+    if (!started) return;
+    if (builtin.os.tag == .emscripten) {
+        zhu_fetch_stop();
+    } else {
+        stop.store(true, .release);
+        wake.set(io);
+        worker.?.join();
+        worker = null;
+    }
+    for (requests.items[nextRequest..]) |request| allocator.free(request.path);
+    requests.deinit(allocator);
+    requests = .empty;
+    nextRequest = 0;
+    for (&slots) |*slot| {
+        if (slot.state.load(.acquire) == .idle) continue;
+        allocator.free(slot.request.path);
+        allocator.free(slot.buffer);
+        slot.* = .{};
+    }
+    stop.store(false, .release);
+    wake.reset();
+    started = false;
+}
+
+// 与主线程通过槽位状态交接所有权，保持一个后台读取线程。
+fn run() void {
+    while (true) {
+        wake.waitUncancelable(io);
+        wake.reset();
+        if (stop.load(.acquire)) return;
+        for (&slots) |*slot| {
+            if (stop.load(.acquire)) return;
+            if (slot.state.load(.acquire) != .queued) continue;
+            slot.result = read(slot.request.path, slot.buffer);
+            slot.state.store(.done, .release);
+        }
+    }
+}
+
+// 桌面读取普通文件；Android 的 assets/ 路径直接读取 APK。
+fn read(path: [:0]const u8, buffer: []u8) ![]const u8 {
+    if (builtin.abi.isAndroid()) {
+        if (std.mem.startsWith(u8, path, "assets/")) {
+            return @import("android.zig").readAsset(path[7.. :0], buffer);
+        }
+    }
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const size = try file.length(io);
+    if (size > buffer.len) return error.BufferTooSmall;
+    const data = buffer[0..@intCast(size)];
+    if (try file.readPositionalAll(io, data, 0) != size) {
+        return error.UnexpectedEof;
+    }
+    return data;
+}
+
+extern fn zhu_fetch_start(
+    lane: c_int,
+    path: [*:0]const u8,
+    buffer: [*]u8,
+    size: c_int,
+) void;
+extern fn zhu_fetch_stop() void;
+
+// 由浏览器事件循环回传结果，资源回调仍由下一帧 dowork 执行。
+fn webDone(lane: c_int, size: c_int, status: c_int) callconv(.c) void {
+    const slot = &slots[@intCast(lane)];
+    slot.result = switch (status) {
+        0 => slot.buffer[0..@intCast(size)],
+        1 => error.HttpFailed,
+        2 => error.BufferTooSmall,
+        3 => error.NetworkFailed,
+        else => unreachable,
+    };
+    slot.state.store(.done, .release);
+}
+
+comptime {
+    if (builtin.os.tag == .emscripten) {
+        @export(&webDone, .{ .name = "zhu_fetch_done" });
+    }
+}

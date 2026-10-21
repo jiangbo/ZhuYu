@@ -6,6 +6,53 @@ EM_JS_DEPS(zhu_storage, "$UTF8ToString");
 // 让静态库链接器带入本文件中的 JavaScript 函数描述。
 void zhu_file_keep(void) {}
 
+extern void zhu_fetch_done(int lane, int size, int status);
+
+// 让 emcc 导出完成入口，JS 只登记结果，下一帧再执行资源回调。
+EMSCRIPTEN_KEEPALIVE void zhu_fetch_complete(int lane, int size, int status) {
+    zhu_fetch_done(lane, size, status);
+}
+
+// 每个槽位只保留一个请求，停止后禁止写入已释放的 Wasm 缓冲区。
+EM_JS(void, zhu_fetch_start,
+    (int lane, const char *path, unsigned char *out, int len), {
+    const jobs = Module.zhu_fetch_jobs ||= [];
+    const job = new AbortController();
+    jobs[lane] = job;
+    fetch(UTF8ToString(path), { signal: job.signal }).then(async response => {
+        if (!response.ok) {
+            if (jobs[lane] === job) {
+                jobs[lane] = null;
+                _zhu_fetch_complete(lane, 0, 1);
+            }
+            return;
+        }
+        const data = new Uint8Array(await response.arrayBuffer());
+        if (jobs[lane] !== job) return;
+        jobs[lane] = null;
+        if (data.length > len) {
+            _zhu_fetch_complete(lane, 0, 2);
+        } else {
+            HEAPU8.set(data, out);
+            _zhu_fetch_complete(lane, data.length, 0);
+        }
+    }).catch(() => {
+        if (jobs[lane] !== job) return;
+        jobs[lane] = null;
+        _zhu_fetch_complete(lane, 0, 3);
+    });
+});
+
+// 资源系统关闭时中止全部请求，旧 Promise 不再访问缓冲区。
+EM_JS(void, zhu_fetch_stop, (void), {
+    const jobs = Module.zhu_fetch_jobs || [];
+    for (let lane = 0; lane < jobs.length; lane++) {
+        const job = jobs[lane];
+        jobs[lane] = null;
+        if (job) job.abort();
+    }
+});
+
 // 检查浏览器中是否存在存档。
 EM_JS(int, zhu_file_exists, (const char *name), {
     const path = UTF8ToString(name);

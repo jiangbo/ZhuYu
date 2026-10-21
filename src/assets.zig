@@ -5,6 +5,7 @@ const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const png = @import("internal/png.zig");
 const memory = @import("internal/memory.zig");
+const fetch = @import("internal/fetch.zig");
 const options = @import("options");
 
 const oom = memory.oom;
@@ -34,15 +35,17 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     sampler.init();
 }
 
+// 推进异步加载，并在主线程执行资源回调。
+pub const update = fetch.dowork;
+
 pub fn deinit() void {
     imageCache.deinit(allocator);
     atlas.cache.deinit(allocator);
     view.cache.deinit(allocator);
     sound.deinit();
     music.deinit();
+    fetch.shutdown();
     file.deinit();
-    if (sk.fetch.valid()) sk.fetch.shutdown();
-    for (&fileBuffer) |buf| if (buf.len != 0) allocator.free(buf);
     gpu.deinit();
     sk.gfx.destroySampler(sampler.nearest);
     sk.gfx.destroySampler(sampler.linear);
@@ -344,7 +347,6 @@ pub const Response = struct {
     data: []const u8 = &.{},
 };
 
-var fileBuffer: [4][]u8 = @splat(&.{});
 pub const file = struct {
     pub const Data = struct { bytes: []const u8, owned: bool = false };
 
@@ -431,49 +433,34 @@ pub const file = struct {
         entry.value_ptr.* = .{ .index = index, .handler = handler };
 
         // 缓存和 pack 都未命中时，首次按需启动异步加载器。
-        if (!sk.fetch.valid()) {
-            sk.fetch.setup(.{
-                .num_lanes = fileBuffer.len,
-                .logger = .{ .func = sk.log.func },
-                .allocator = memory.sokolAllocator(sk.fetch.Allocator),
-            });
+        if (!fetch.started) {
+            fetch.setup(io, allocator, maxFileSize);
         }
 
         var buffer: [1024]u8 = undefined;
-        std.debug.assert(buffer.len == sk.fetch.maxPath());
         const fmt = assetRoot ++ "{s}";
         const filePath = memory.formatZ(&buffer, fmt, .{path});
         std.log.info("loading {s}", .{filePath});
-        _ = sk.fetch.send(.{ .path = filePath, .callback = callback });
+        fetch.send(filePath, callback);
 
         entry.value_ptr.state = .loading;
         return entry.value_ptr;
     }
 
-    fn callback(responses: [*c]const sk.fetch.Response) callconv(.c) void {
-        const resp = responses[0];
-        if (resp.failed) {
-            const msg = "assets load failed, path: {s}, error code: {}";
-            std.debug.panic(msg, .{ resp.path, resp.error_code });
-        }
-        if (resp.dispatched) {
-            std.debug.assert(fileBuffer[resp.lane].len == 0);
-            const len = maxFileSize;
-            fileBuffer[resp.lane] = allocator.alloc(u8, len) catch oom();
-            const buffer = sk.fetch.asRange(fileBuffer[resp.lane]);
-            sk.fetch.bindBuffer(resp.handle, buffer);
-            return;
-        }
-
-        const filePath = std.mem.span(resp.path);
+    // 缓冲区在主线程移交给缓存，后续沿用资源自身的释放流程。
+    fn callback(resp: fetch.Response) void {
+        const data = resp.result catch |err| {
+            const msg = "assets load failed, path: {s}, error: {}";
+            std.debug.panic(msg, .{ resp.path, err });
+        };
+        const filePath = resp.path;
         std.log.info("loaded from: {s}", .{filePath});
         const path = filePath[assetRoot.len..];
 
         const value = cache.getPtr(id(path)).?;
-        value.data = .{ .bytes = fileBuffer[resp.lane], .owned = true };
+        value.data = .{ .bytes = resp.buffer, .owned = true };
         value.state = .loaded;
-        handleLoaded(path, value, resp.data.size);
-        fileBuffer[resp.lane] = &.{};
+        handleLoaded(path, value, data.len);
     }
 
     // 同步和异步加载共用数据释放逻辑，回调自行决定是否保留原始数据。
