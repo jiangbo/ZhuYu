@@ -1,21 +1,24 @@
 const std = @import("std");
 
 const sk = @import("sokol");
-const assets = @import("assets.zig");
-const audio = @import("audio.zig");
-const batch = @import("batch.zig");
-const camera = @import("camera.zig");
-const graphics = @import("graphics.zig");
-const input = @import("input.zig");
-const memory = @import("internal/memory.zig");
-const text = @import("text.zig");
-const window = @import("window.zig");
+const assets = @import("../assets.zig");
+const audio = @import("../audio.zig");
+const batch = @import("../batch.zig");
+const camera = @import("../camera.zig");
+const graphics = @import("../graphics.zig");
+const input = @import("../input.zig");
+const memory = @import("../internal/memory.zig");
+const text = @import("../text.zig");
+const window = @import("../window.zig");
 
 const Color = graphics.Color;
-const Vector2 = @import("math.zig").Vector2;
-const Rect = @import("math.zig").Rect;
+const Vector2 = @import("../math.zig").Vector2;
+const Rect = @import("../math.zig").Rect;
 
 const basePadding = Vector2.xy(10, 9);
+
+// 是否启用调试面板绘制，ZON 热重载独立运行。
+pub var enabled: bool = false;
 
 pub const Row = struct {
     label: []const u8,
@@ -107,6 +110,7 @@ var frameTime: f64 = 0;
 var usedTime: f64 = 0;
 
 pub fn draw(rows: []const Row) void {
+    if (!enabled) return;
     const time = sk.time.now();
     const frame = window.frameCount();
 
@@ -132,55 +136,53 @@ pub fn draw(rows: []const Row) void {
     const gfxStats = sk.gfx.queryStats();
     const frameStats = gfxStats.prev_frame;
     const totalStats = gfxStats.total;
-    writeFormatLine(&columns, "后端", "{s}", .{
-        @tagName(graphics.queryBackend()),
-    }, "帧率 {}", .{fps});
-    writeFormatLine(&columns, "帧时", "{d:.2} ms", .{
-        frameTime,
-    }, "用时 {d:.2} ms", .{usedTime});
-    writeFormatLine(&columns, "窗口", "{d:.0}x{d:.0}", .{
-        window.rawSize.x,
-        window.rawSize.y,
-    }, "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
+    // 左右列的格式串与参数成对排列，便于对应面板内容。
+    // zig fmt: off
+    writeFormatLine(&columns, "后端",
+        "{s}", .{@tagName(graphics.queryBackend())},
+        "帧率 {}", .{fps});
+    writeFormatLine(&columns, "帧时",
+        "{d:.2} ms", .{frameTime},
+        "用时 {d:.2} ms", .{usedTime});
+    writeFormatLine(&columns, "窗口",
+        "{d:.0}x{d:.0}", .{ window.rawSize.x, window.rawSize.y },
+        "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
     // 显示触摸控件采用的界面倍率，与按钮相机使用同一计算。
-    writeFormatLine(&columns, "显示", "界面 {d:.0}%", .{
-        window.dpi() * 100,
-    }, "画面 {d:.0}%", .{
-        window.viewRect.size.x / window.size.x * 100,
-    });
-    writeFormatLine(&columns, "图形", "纹理 {}", .{
-        totalStats.images.alive,
-    }, "顶点 {} KB", .{
-        batch.vertices.items.len * @sizeOf(batch.Vertex) / 1024,
-    });
+    writeFormatLine(&columns, "显示",
+        "界面 {d:.0}%", .{window.dpi() * 100},
+        "画面 {d:.0}%", .{window.viewRect.size.x / window.size.x * 100});
+    writeFormatLine(&columns, "图形",
+        "纹理 {}", .{totalStats.images.alive},
+        "顶点 {} KB", .{batch.vertices.items.len * @sizeOf(batch.Vertex) / 1024});
     const batchUsed: f32 = @floatFromInt(batch.vertices.items.len);
     const batchCap: f32 = @floatFromInt(batch.vertices.capacity);
-    writeFormatLine(&columns, "绘制", "批次 {}", .{
-        frameStats.num_draw,
-    }, "容量 {d:.0}%", .{batchUsed / batchCap * 100});
-    writeFormatLine(&columns, "对象", "精灵 {}", .{
-        batch.vertices.items.len,
-    }, "文字 {}", .{graphics.stats.text});
-    writeFormatLine(&columns, "内存", "使用 {} KB", .{
-        memory.counter.used / 1024,
-    }, "最高 {} KB", .{memory.counter.max / 1024});
-    writeFormatLine(&columns, "鼠标", "{d:.1}, {d:.1}", .{
-        input.mouse.raw.x,
-        input.mouse.raw.y,
-    }, "{d:.1}, {d:.1}", .{ input.mouse.pos.x, input.mouse.pos.y });
-    writeFormatLine(&columns, "相机", "{d:.1}, {d:.1}", .{
-        camera.main.position.x,
-        camera.main.position.y,
-    }, "缩放 {d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
+    writeFormatLine(&columns, "绘制",
+        "批次 {}", .{frameStats.num_draw},
+        "容量 {d:.0}%", .{batchUsed / batchCap * 100});
+    writeFormatLine(&columns, "对象",
+        "精灵 {}", .{batch.vertices.items.len},
+        "文字 {}", .{graphics.stats.text});
+    writeFormatLine(&columns, "内存",
+        "使用 {} KB", .{memory.counter.used / 1024},
+        "最高 {} KB", .{memory.counter.max / 1024});
+    writeFormatLine(&columns, "鼠标",
+        "{d:.1}, {d:.1}", .{ input.mouse.raw.x, input.mouse.raw.y },
+        "{d:.1}, {d:.1}", .{ input.mouse.pos.x, input.mouse.pos.y });
+    writeFormatLine(&columns, "相机",
+        "{d:.1}, {d:.1}", .{ camera.main.position.x, camera.main.position.y },
+        "缩放 {d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
     // 获取当前已加载的资源统计数据
     const assetStats = assets.queryStats();
-    writeFormatLine(&columns, "资源", "文件 {}", .{assetStats.file}, //
+    writeFormatLine(&columns, "资源",
+        "文件 {}", .{assetStats.file},
         "图片 {}", .{assetStats.image});
-    writeFormatLine(&columns, "音频", "音乐 {}", .{assetStats.music}, //
+    writeFormatLine(&columns, "音频",
+        "音乐 {}", .{assetStats.music},
         "音效 {}", .{assetStats.sound});
-    writeFormatLine(&columns, "音量", "音乐 {d:.0}%", .{
-        audio.musicVolume.load(.acquire) * 100,
-    }, "音效 {d:.0}%", .{audio.soundVolume.load(.acquire) * 100});
+    writeFormatLine(&columns, "音量",
+        "音乐 {d:.0}%", .{audio.musicVolume.load(.acquire) * 100},
+        "音效 {d:.0}%", .{audio.soundVolume.load(.acquire) * 100});
+    // zig fmt: on
     for (rows) |row| writeRow(&columns, row);
     const labels = labelBuffer[0 .. columns.label.end - 1];
     const left = leftBuffer[0 .. columns.left.end - 1];
