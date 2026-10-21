@@ -1,11 +1,11 @@
 const std = @import("std");
 
 const sk = @import("sokol");
-const c = @import("internal/c.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const png = @import("internal/png.zig");
 const memory = @import("internal/memory.zig");
+const options = @import("options");
 
 const oom = memory.oom;
 const Image = graphics.Image;
@@ -25,7 +25,7 @@ pub fn init(io_: std.Io, maxSize: usize) void {
     maxFileSize = maxSize;
 
     // 编译期开关决定是否探测程序尾部的资源包。
-    if (@import("options").append) {
+    if (options.append) {
         file.init() catch |err| {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
@@ -76,7 +76,7 @@ pub fn loadSound(path: Path, o: audio.Sound.Option) audio.Sound {
     return sound.load(path, o);
 }
 
-pub fn loadMusic(path: Path, loop: bool) ?*c.stbAudio.Audio {
+pub fn loadMusic(path: Path, loop: bool) ?audio.MusicSource {
     return music.load(path, loop);
 }
 
@@ -279,14 +279,11 @@ const view = struct {
 
 const sound = struct {
     var cache: std.AutoHashMapUnmanaged(Id, audio.Sound) = .empty;
-    // 音效解码回调串行执行，首次分配后复用工作缓冲区。
-    var buffer: ?[]align(8) u8 = null;
 
     fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |value| allocator.free(value.samples);
+        while (iterator.next()) |value| value.deinit(allocator);
         cache.deinit(allocator);
-        if (buffer) |value| allocator.free(value);
     }
 
     fn load(path: Path, option: audio.Sound.Option) audio.Sound {
@@ -299,73 +296,44 @@ const sound = struct {
     }
 
     fn handler(resp: Response) bool {
-        if (buffer == null) {
-            buffer = c.stbAudio.allocBuffer(allocator) catch oom();
-        }
-        const stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer.?);
-        defer stbAudio.unload();
-
-        const channels: u8 = @intCast(stbAudio.getInfo().channels);
-        std.debug.assert(channels == 1 or channels == 2);
-        const size = stbAudio.getSampleCapacity();
-        const samples = allocator.alloc(f32, size) catch oom();
-        const decoded = stbAudio.fillSamples(samples, channels);
-        // 音效必须至少解码出一帧，避免循环播放时无法推进。
-        std.debug.assert(decoded > 0);
+        const decoded = audio.Sound.init(allocator, resp.data) catch |err|
+            std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
-        soundCache.* = .{ .samples = samples, .channels = channels };
+        soundCache.* = decoded;
         _ = audio.playSoundOption(resp.path, option);
         return false;
     }
 };
 
 const music = struct {
-    const Music = struct {
-        source: ?*c.stbAudio.Audio,
-        // 独立分配，缓存表扩容时工作缓冲区的地址保持不变。
-        buffer: []align(8) u8,
+    var cache: std.AutoHashMapUnmanaged(Id, ?audio.MusicSource) = .empty;
 
-        const empty: Music = .{ .source = null, .buffer = &.{} };
-
-        fn deinit(self: *Music) void {
-            if (self.source) |source| source.unload();
-            allocator.free(self.buffer);
-        }
-    };
-    var cache: std.AutoHashMapUnmanaged(Id, Music) = .empty;
-
-    fn load(path: Path, loop: bool) ?*c.stbAudio.Audio {
+    fn load(path: Path, loop: bool) ?audio.MusicSource {
         const entry = cache.getOrPut(allocator, id(path)) catch oom();
-        if (entry.found_existing) return entry.value_ptr.source;
+        if (entry.found_existing) return entry.value_ptr.*;
 
-        entry.value_ptr.* = .empty;
+        entry.value_ptr.* = null;
         _ = file.load(path, if (loop) 1 else 0, handler);
         return null;
     }
 
     fn handler(resp: Response) bool {
-        var buffer = c.stbAudio.allocBuffer(allocator) catch oom();
-        var stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer);
-        const size = stbAudio.getBufferSize();
-        if (size < buffer.len and allocator.resize(buffer, size)) {
-            // resize 不移动地址且保留全部长期数据，旧解码器只用于关闭。
-            stbAudio.unload();
-            buffer = buffer[0..size];
-            stbAudio = c.stbAudio.loadFromMemory(resp.data, buffer);
-        }
-        // 音乐必须包含可播放的帧。
-        std.debug.assert(stbAudio.getSampleCount() > 0);
-        const musicCache = cache.getPtr(id(resp.path)).?;
-        musicCache.* = .{ .source = stbAudio, .buffer = buffer };
+        const rate: u32 = @intCast(sk.audio.sampleRate());
+        const source = audio.MusicSource.init(allocator, resp.data, rate) catch |err|
+            std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
+        cache.getPtr(id(resp.path)).?.* = source;
         audio.playMusicOption(resp.path, resp.index == 1);
-        return true;
+        // 播放器已经持有解码所需的数据，文件缓存可以释放原始文件。
+        return false;
     }
 
     pub fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |value| value.deinit();
+        while (iterator.next()) |value| {
+            if (value.*) |source| source.deinit(allocator);
+        }
         cache.deinit(allocator);
     }
 };

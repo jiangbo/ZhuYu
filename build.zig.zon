@@ -8,10 +8,6 @@
             .url = "git+https://github.com/floooh/sokol-zig#ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f",
             .hash = "sokol-0.1.0-pb1HKygbQQCINV-qSe4SFm92QWaT_95VpWTJkwYqzOrX",
         },
-        .stb = .{
-            .url = "git+https://github.com/nothings/stb#31c1ad37456438565541f4919958214b6e762fb4",
-            .hash = "N-V-__8AAN1DTgAKvlSQnjJwSg4ZY2JP5OHmzKOcA4BewA4Y",
-        },
     },
     .paths = .{
         "build.zig",
@@ -20,5 +16,6 @@
         "tools",
         "README.md",
         "LICENSE",
+        "licenses",
     },
 }

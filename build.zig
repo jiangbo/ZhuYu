@@ -11,9 +11,12 @@ pub fn build(b: *std.Build) !void {
     const msdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
     // 应用创建依赖时传入，默认关闭程序尾部的资源探测和追加。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
+    // 不使用 MIDI 的应用不编译播放器和内置音色。
+    const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     const options = b.addOptions();
     options.addOption(bool, "msdf", msdf);
     options.addOption(bool, "append", append);
+    options.addOption(bool, "midi", midi);
 
     const sokolDep = b.dependency("sokol", .{
         .target = target,
@@ -39,7 +42,6 @@ pub fn build(b: *std.Build) !void {
         // 静态接入浏览器存档函数，无需应用额外配置链接参数。
         zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
     }
-    try addVorbis(b, zhu);
 
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
@@ -287,51 +289,6 @@ pub fn buildAndroid(
     lib.link_z_max_page_size = 16384;
     lib.link_z_common_page_size = 16384;
     return lib;
-}
-
-// 添加 Vorbis 解码器，在缓存副本中处理单声道和双声道转换。
-fn addVorbis(b: *std.Build, zhu: *std.Build.Module) !void {
-    const stb = b.dependency("stb", .{
-        .target = zhu.resolved_target.?,
-        .optimize = zhu.optimize.?,
-    });
-    // 单声道复制到左右，双声道取平均合为单声道，仅修改构建缓存中的副本。
-    b.dependOnFileContents(stb.path("stb_vorbis.c"));
-    const sourcePath = try stb.builder.root.joinString(b.allocator, "stb_vorbis.c");
-    const source = try std.Io.Dir.cwd().readFileAlloc(
-        b.graph.io,
-        sourcePath,
-        b.allocator,
-        .unlimited,
-    );
-    const patched = try std.mem.replaceOwned(u8, b.allocator, source,
-        \\         for (i=0; i < z; ++i)
-        \\            *buffer++ = f->channel_buffers[i][f->channel_buffer_start+j];
-        \\         for (   ; i < channels; ++i)
-        \\            *buffer++ = 0;
-    ,
-        \\         for (i=0; i < z; ++i) {
-        \\            float sample = f->channel_buffers[i][f->channel_buffer_start+j];
-        \\            if (channels == 1 && f->channels == 2)
-        \\               sample = (sample +
-        \\                  f->channel_buffers[1][f->channel_buffer_start+j]) * 0.5f;
-        \\            *buffer++ = sample;
-        \\         }
-        \\         for (   ; i < channels; ++i)
-        \\            *buffer++ = f->channels == 1 && channels == 2
-        \\               ? f->channel_buffers[0][f->channel_buffer_start+j] : 0;
-    );
-    if (std.mem.eql(u8, source, patched)) return error.VorbisPatchMismatch;
-    const vorbis = b.addWriteFiles().add("stb_vorbis.c", patched);
-    zhu.addCSourceFile(.{
-        .file = vorbis,
-        .flags = &.{
-            "-O2",
-            "-DSTB_VORBIS_NO_PUSHDATA_API",
-            "-DSTB_VORBIS_NO_INTEGER_CONVERSION",
-            "-DSTB_VORBIS_NO_STDIO",
-        },
-    });
 }
 
 // 只替换构建缓存中的 fetch 实现，保留 Sokol 原来的线程和回调流程。

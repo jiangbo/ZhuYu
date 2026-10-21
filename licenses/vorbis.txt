@@ -1,0 +1,32 @@
+src/internal/vorbis.zig 是纯 Zig Ogg Vorbis 解码器。
+
+码本构造、短码查表、Floor 1 整数折线、Residue 和窗口重叠参考
+stb_vorbis 1.22，采用该项目提供的 MIT 许可。
+来源：https://github.com/nothings/stb/blob/31c1ad37456438565541f4919958214b6e762fb4/stb_vorbis.c
+
+码流格式和 Floor 1 逆分贝表参考 Xiph.Org 的 Vorbis I 规范：
+https://xiph.org/vorbis/doc/Vorbis_I_spec.html
+
+逆 MDCT 使用 N/4 点复数 FFT 计算 DCT-IV，再按逆 MDCT 对称性展开。
+
+MIT License
+
+Copyright (c) 2017 Sean Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

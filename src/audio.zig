@@ -2,7 +2,10 @@ const std = @import("std");
 const sk = @import("sokol");
 const assets = @import("assets.zig");
 const memory = @import("internal/memory.zig");
-const stbAudio = @import("internal/c.zig").stbAudio;
+const vorbis = @import("internal/vorbis.zig");
+const options = @import("options");
+
+const Allocator = std.mem.Allocator;
 
 var mutex: std.Io.Mutex = .init;
 pub var paused: std.atomic.Value(bool) = .init(false);
@@ -57,8 +60,63 @@ var music: Music = .{ .state = .stopped };
 
 pub const StateEnum = enum { playing, paused, stopped };
 
+/// 统一管理音乐解码器，格式选择和编译期开关只在此处处理。
+pub const MusicSource = struct {
+    const midi = if (options.midi) @import("extend/midi.zig") else void;
+
+    decoder: if (options.midi) union(enum) {
+        vorbis: *vorbis.Player,
+        midi: *midi.Player,
+    } else union(enum) {
+        vorbis: *vorbis.Player,
+    },
+
+    /// 按文件头创建播放器；只有 MIDI 使用输出采样率。
+    pub fn init(gpa: Allocator, data: []const u8, sampleRate: u32) !MusicSource {
+        if (std.mem.startsWith(u8, data, "MThd")) {
+            if (options.midi) {
+                const player = try gpa.create(midi.Player);
+                errdefer gpa.destroy(player);
+                player.* = try midi.Player.init(gpa, data, sampleRate);
+                return .{ .decoder = .{ .midi = player } };
+            } else @panic("MIDI music requires the midi build option");
+        }
+
+        const player = try gpa.create(vorbis.Player);
+        errdefer gpa.destroy(player);
+        player.* = try vorbis.Player.init(gpa, data);
+        // 音乐必须包含可播放的帧。
+        std.debug.assert(player.sampleCount > 0);
+        return .{ .decoder = .{ .vorbis = player } };
+    }
+
+    /// 释放播放器及其持有的数据；使用创建时的同一个分配器。
+    pub fn deinit(self: MusicSource, gpa: Allocator) void {
+        switch (self.decoder) {
+            inline else => |player| {
+                player.deinit();
+                gpa.destroy(player);
+            },
+        }
+    }
+
+    /// 将当前格式的解码器复位到音乐开头。
+    pub fn reset(self: MusicSource) void {
+        switch (self.decoder) {
+            inline else => |player| player.reset(),
+        }
+    }
+
+    /// 生成交错 PCM，两种解码器均返回实际填充的帧数。
+    pub fn fillSamples(self: MusicSource, buffer: []f32, channels: i32) i32 {
+        return switch (self.decoder) {
+            inline else => |player| player.fillSamples(buffer, channels),
+        };
+    }
+};
+
 pub const Music = struct {
-    source: *stbAudio.Audio = undefined,
+    source: MusicSource = undefined,
     state: StateEnum = .playing,
     loop: bool = true,
 };
@@ -97,6 +155,24 @@ pub const Sound = struct {
     index: usize = 0,
     channels: u8 = 0,
     state: StateEnum = .playing,
+
+    /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
+    pub fn init(gpa: Allocator, data: []const u8) !Sound {
+        var player = try vorbis.Player.init(gpa, data);
+        defer player.deinit();
+
+        const channels = player.channels;
+        const samples = try gpa.alloc(f32, player.sampleCount * channels);
+        const decoded = player.fillSamples(samples, channels);
+        // 音效必须至少解码出一帧，避免循环播放时无法推进。
+        std.debug.assert(decoded > 0);
+        return .{ .samples = samples, .channels = channels };
+    }
+
+    /// 由持有 PCM 的缓存调用；播放槽位仅借用采样，不负责释放。
+    pub fn deinit(self: Sound, gpa: Allocator) void {
+        gpa.free(self.samples);
+    }
 };
 
 pub var soundVolume: std.atomic.Value(f32) = .init(1);
