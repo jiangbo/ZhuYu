@@ -8,13 +8,13 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
     // 编译期决定菜单文字是否自动使用 MSDF 管线。
-    const msdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
+    const useMsdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
     // 应用创建依赖时传入，默认关闭程序尾部的资源探测和追加。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     const options = b.addOptions();
-    options.addOption(bool, "msdf", msdf);
+    options.addOption(bool, "msdf", useMsdf);
     options.addOption(bool, "append", append);
     options.addOption(bool, "midi", midi);
 
@@ -47,6 +47,18 @@ pub fn build(b: *std.Build) !void {
     const runTests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
+
+// BMFont 的参数和生成流程由工具自身管理。
+pub const bmfont = struct {
+    pub const Options = @import("tools/bmfont.zig").Options;
+    pub const addStep = @import("tools/bmfont.zig").addStep;
+};
+
+// MSDF 的参数和生成流程由工具自身管理。
+pub const msdf = struct {
+    pub const Options = @import("tools/msdf.zig").Options;
+    pub const addStep = @import("tools/msdf.zig").addStep;
+};
 
 // 游戏提供程序名称、模块和解压后的 macOS SDK 根目录。
 pub const MacOSOptions = struct {
