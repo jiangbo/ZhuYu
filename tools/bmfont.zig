@@ -1,4 +1,6 @@
 const std = @import("std");
+const Build = std.Build;
+const Dependency = Build.Dependency;
 const text = @import("text");
 
 // BMFont 使用字体文件及其 Windows 字体名称，额外字符直接传入 UTF-8 文本。
@@ -15,11 +17,7 @@ pub const Options = struct {
 };
 
 // 配置由 build 写入缓存，命令直接生成 PNG 和引擎字体描述。
-pub fn addStep(
-    b: *std.Build,
-    dep: *std.Build.Dependency,
-    options: Options,
-) void {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const generate = b.addSystemCommand(&.{ options.exe, "-c" });
     generate.setCwd(b.path("."));
     generate.addFileArg(createConfig(b, options));
@@ -65,7 +63,7 @@ pub fn addStep(
 // 固定生成 BMFont v3 二进制描述和 PNG，匹配字体解析和引擎采样方式。
 // fontDescFormat=2 选择二进制描述，供下方按 v3 块结构读取。
 // RGB 固定为白色，字形覆盖率存入 alpha，绘制时再乘文字颜色。
-fn createConfig(b: *std.Build, options: Options) std.Build.LazyPath {
+fn createConfig(b: *Build, options: Options) Build.LazyPath {
     const fontPath = b.root.joinString(b.allocator, options.font) catch
         @panic("Out of memory");
     return b.addWriteFiles().add("font.bmfc", b.fmt(

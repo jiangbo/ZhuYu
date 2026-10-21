@@ -60,6 +60,17 @@ pub const msdf = struct {
     pub const addStep = @import("tools/msdf.zig").addStep;
 };
 
+// 资源转换工具在宿主上运行，按需注册游戏项目的构建命令。
+pub const atlas = struct {
+    pub const Options = @import("tools/atlas.zig").Options;
+    pub const addStep = @import("tools/atlas.zig").addStep;
+};
+
+pub const tiled = struct {
+    pub const Options = @import("tools/tiled.zig").Options;
+    pub const addStep = @import("tools/tiled.zig").addStep;
+};
+
 // 游戏提供程序名称、模块和解压后的 macOS SDK 根目录。
 pub const MacOSOptions = struct {
     name: []const u8,

@@ -1,10 +1,12 @@
 const std = @import("std");
+const Build = std.Build;
+const Dependency = Build.Dependency;
 const text = @import("text");
 
 // 游戏配置字体生成，路径以游戏项目为起点。
 pub const Options = struct {
     font: []const u8,
-    charset: ?std.Build.LazyPath = null, // 默认生成 ASCII，沿用官方字符集语法。
+    charset: ?Build.LazyPath = null, // 默认生成 ASCII，沿用官方字符集语法。
     exe: []const u8 = "msdf-atlas-gen",
     size: u16,
     spacing: u8 = 1, // 距离场边界之外增加的字形间距。
@@ -13,11 +15,7 @@ pub const Options = struct {
 };
 
 // 注册生成和转换步骤，根 build 无需了解工具参数和中间文件。
-pub fn addStep(
-    b: *std.Build,
-    dep: *std.Build.Dependency,
-    options: Options,
-) void {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const generate = b.addSystemCommand(&.{ options.exe, "-font" });
     generate.setCwd(b.path("."));
     generate.addFileArg(b.path(options.font));
