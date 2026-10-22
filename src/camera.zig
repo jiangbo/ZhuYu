@@ -82,6 +82,19 @@ pub fn directFollow(pos: Vector2) void {
     clampBound();
 }
 
+// 目标使用世界坐标，死区大小使用画面逻辑单位，越界后立即跟随。
+pub fn deadFollow(pos: Vector2, deadSize: Vector2) void {
+    // 死区居中，画面上的宽高不受相机缩放影响。
+    const min = size.sub(deadSize).scale(0.5);
+    const max = min.add(deadSize);
+    const point = main.toWindow(pos);
+
+    // 将超出死区的距离换回世界单位，只移动越界的部分。
+    const moved = point.sub(point.clamp(min, max)).div(main.scale);
+    main.position = main.position.add(moved);
+    clampBound();
+}
+
 // 将位置对齐到目标的实际像素。
 pub fn round(position: Vector2, scale: ?Vector2) Vector2 {
     const viewScale = scale orelse window.scale;
