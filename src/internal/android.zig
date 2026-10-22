@@ -2,11 +2,52 @@ const std = @import("std");
 const root = @import("root");
 const sk = @import("sokol");
 
+// JNI 固定槽位，只声明本模块调用的方法，其余位置保留指针大小。
+const Jni = extern struct {
+    beforeDelete: [23]?*anyopaque,
+    DeleteLocalRef: *const fn (*Env, ?*anyopaque) callconv(.c) void,
+    beforeClass: [7]?*anyopaque,
+    GetObjectClass: *const fn (*Env, ?*anyopaque) callconv(.c) ?*anyopaque,
+    isInstanceOf: ?*anyopaque,
+    GetMethodID: *const fn (
+        *Env,
+        ?*anyopaque,
+        [*:0]const u8,
+        [*:0]const u8,
+    ) callconv(.c) ?*anyopaque,
+    beforeObject: [2]?*anyopaque,
+    CallObjectMethodA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) ?*anyopaque,
+    beforeVoid: [26]?*anyopaque,
+    CallVoidMethodA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) void,
+};
+
+// JNIEnv 是函数表指针，NDK 向应用提供它的地址。
+const Env = *const Jni;
+
+// 当前只传 jint；jlong 保持 JNI jvalue 的大小和对齐。
+const Value = extern union { int: c_int, long: i64 };
+
+// 只访问焦点回调，保留它之前的六个生命周期回调槽位。
+const Callbacks = extern struct {
+    beforeFocus: [6]?*anyopaque,
+    onWindowFocusChanged: *const fn (*Activity, c_int) callconv(.c) void,
+};
+
 // 对应 NDK android/native_activity.h，保持完整字段顺序和 C 内存布局。
 const Activity = extern struct {
-    callbacks: ?*anyopaque,
+    callbacks: *Callbacks,
     vm: ?*anyopaque,
-    env: ?*anyopaque,
+    env: *Env,
     clazz: ?*anyopaque,
     internalDataPath: [*:0]const u8,
     externalDataPath: ?[*:0]const u8,
@@ -15,6 +56,48 @@ const Activity = extern struct {
     assetManager: ?*anyopaque,
     obbPath: ?[*:0]const u8,
 };
+
+extern fn ANativeActivity_onCreate(*Activity, ?*anyopaque, usize) void;
+
+// 保存 Sokol 的焦点回调，系统 UI 操作仍在 Android UI 线程执行。
+var focus: *const fn (*Activity, c_int) callconv(.c) void = undefined;
+
+// 保留兼容旧系统的沉浸式全屏调用，不提高最低 Android 版本。
+fn fullScreen(activity: *Activity) void {
+    const env = activity.env;
+    const jni = env.*;
+    var class = jni.GetObjectClass(env, activity.clazz).?;
+    var method = jni.GetMethodID(env, class, "getWindow", "()Landroid/view/Window;").?;
+    const window = jni.CallObjectMethodA(env, activity.clazz, method, null).?;
+    jni.DeleteLocalRef(env, class);
+
+    class = jni.GetObjectClass(env, window).?;
+    method = jni.GetMethodID(env, class, "getDecorView", "()Landroid/view/View;").?;
+    const view = jni.CallObjectMethodA(env, window, method, null).?;
+    jni.DeleteLocalRef(env, class);
+    jni.DeleteLocalRef(env, window);
+
+    class = jni.GetObjectClass(env, view).?;
+    method = jni.GetMethodID(env, class, "setSystemUiVisibility", "(I)V").?;
+    // 沿用沉浸式全屏与布局标志，调用参数使用数组而非 C 可变参数。
+    jni.CallVoidMethodA(env, view, method, &.{.{ .int = 0x1706 }});
+    jni.DeleteLocalRef(env, class);
+    jni.DeleteLocalRef(env, view);
+}
+
+// 先转交 Sokol，再恢复沉浸式全屏。
+fn onFocus(activity: *Activity, hasFocus: c_int) callconv(.c) void {
+    focus(activity, hasFocus);
+    if (hasFocus != 0) fullScreen(activity);
+}
+
+// APK 的 NativeActivity 入口，线程、窗口和输入仍由 Sokol 管理。
+export fn zhuyu_main(activity: *Activity, state: ?*anyopaque, size: usize) void {
+    ANativeActivity_onCreate(activity, state, size);
+    focus = activity.callbacks.onWindowFocusChanged;
+    activity.callbacks.onWindowFocusChanged = onFocus;
+    fullScreen(activity);
+}
 
 // 游戏回调继续使用 IO，窗口配置由 window.run 写入后返回给 Sokol。
 pub var threaded: std.Io.Threaded = undefined;

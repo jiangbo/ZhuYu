@@ -71,6 +71,13 @@ pub const tiled = struct {
     pub const addStep = @import("tools/tiled.zig").addStep;
 };
 
+// Android 应用属性与 APK 打包步骤。
+pub const apk = struct {
+    pub const AppConfig = @import("tools/apk.zig").AppConfig;
+    pub const Options = @import("tools/apk.zig").Options;
+    pub const addStep = @import("tools/apk.zig").addStep;
+};
+
 // 游戏提供程序名称、模块和解压后的 macOS SDK 根目录。
 pub const MacOSOptions = struct {
     name: []const u8,
