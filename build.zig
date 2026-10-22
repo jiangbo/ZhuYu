@@ -42,6 +42,23 @@ pub fn build(b: *std.Build) !void {
         // 静态接入浏览器存档函数，无需应用额外配置链接参数。
         zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
     }
+    if (target.result.os.tag == .macos) {
+        // 本机默认由 Zig 查找 SDK，交叉编译时可由应用显式提供路径。
+        if (b.option([]const u8, "macos_sdk", "macOS SDK directory")) |sdk| {
+            const include = b.pathJoin(&.{ sdk, "usr", "include" });
+            const libraries = b.pathJoin(&.{ sdk, "usr", "lib" });
+            const frameworks = b.pathJoin(&.{
+                sdk, "System", "Library", "Frameworks",
+            });
+            const sokolRoot = sokolDep.artifact("sokol_clib").root_module;
+            // 引擎模块与 Sokol 使用同一套 SDK，路径随模块参与最终链接。
+            for ([_]*std.Build.Module{ zhu, sokolRoot }) |module| {
+                module.addSystemIncludePath(.{ .cwd_relative = include });
+                module.addSystemFrameworkPath(.{ .cwd_relative = frameworks });
+                module.addLibraryPath(.{ .cwd_relative = libraries });
+            }
+        }
+    }
 
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
@@ -77,53 +94,6 @@ pub const apk = struct {
     pub const Options = @import("tools/apk.zig").Options;
     pub const addStep = @import("tools/apk.zig").addStep;
 };
-
-// 游戏提供程序名称、模块和解压后的 macOS SDK 根目录。
-pub const MacOSOptions = struct {
-    name: []const u8,
-    root_module: *std.Build.Module,
-    sdk: []const u8, // 指向 MacOSX*.sdk，而不是其上级目录。
-};
-
-// 为目标程序和 Sokol 配置同一套 SDK，宿主平台的打包工具不受影响。
-pub fn buildMacOS(
-    b: *std.Build,
-    dep: *std.Build.Dependency,
-    options: MacOSOptions,
-) *std.Build.Step.Compile {
-    const mod = options.root_module;
-    const zhu = dep.module("zhu");
-    const sokolDep = dep.builder.dependency("sokol", .{
-        .target = mod.resolved_target.?,
-        .optimize = mod.optimize.?,
-    });
-    const sokolLib = sokolDep.artifact("sokol_clib");
-    const include = b.pathJoin(&.{ options.sdk, "usr", "include" });
-    const libraries = b.pathJoin(&.{ options.sdk, "usr", "lib" });
-    const frameworks = b.pathJoin(&.{
-        options.sdk, "System", "Library", "Frameworks",
-    });
-    for ([_]*std.Build.Module{ mod, zhu, sokolLib.root_module }) |module| {
-        module.addSystemIncludePath(.{ .cwd_relative = include });
-        module.addSystemFrameworkPath(.{ .cwd_relative = frameworks });
-        module.addLibraryPath(.{ .cwd_relative = libraries });
-    }
-
-    // libc 配置由 SDK 路径直接生成到缓存，游戏无需维护额外文件。
-    const config = b.fmt(
-        "include_dir={s}\nsys_include_dir={s}\ncrt_dir={s}\ncc_dir=\n" ++
-            "msvc_lib_dir=\nkernel32_lib_dir=\ndarwin_sdk_dir={s}\n",
-        .{ include, include, libraries, options.sdk },
-    );
-    const libc = b.addWriteFiles().add("macos-libc.conf", config);
-    sokolLib.setLibCFile(libc);
-    const exe = b.addExecutable(.{
-        .name = options.name,
-        .root_module = mod,
-    });
-    exe.setLibCFile(libc);
-    return exe;
-}
 
 // 注册 pack 命令，通过 append 选项控制是否自动追加资源包。
 pub fn addPackStep(
@@ -185,7 +155,7 @@ pub fn addPackStep(
 pub const AndroidOptions = struct {
     name: []const u8,
     root_module: *std.Build.Module,
-    ndk: []const u8, // Android NDK 目录，由游戏构建选项传入。
+    sdk: ?[]const u8 = null, // 未指定时读取 ANDROID_HOME，NDK 从 SDK 中查找。
 };
 
 // 在游戏构建缓存中补充安卓入口配置，生成 NativeActivity 加载的动态库。
@@ -194,6 +164,11 @@ pub fn buildAndroid(
     dep: *std.Build.Dependency,
     options: AndroidOptions,
 ) !*std.Build.Step.Compile {
+    // 自动查找时重新读取环境变量，避免配置缓存保留旧的 SDK 路径。
+    if (options.sdk == null) b.graph.poisonCache();
+    const sdk = options.sdk orelse b.graph.environ_map.get("ANDROID_HOME") orelse
+        return error.AndroidSdkNotFound;
+    const ndk = try findNdk(b, sdk);
     const mod = options.root_module;
     const zhu = dep.module("zhu");
     // 按模块对象查找游戏设置的导入名，不要求用户使用固定别名。
@@ -239,7 +214,7 @@ pub fn buildAndroid(
         else => @panic("Unsupported NDK host"),
     };
     const sysroot = b.pathJoin(&.{
-        options.ndk,
+        ndk,
         "toolchains",
         "llvm",
         "prebuilt",
@@ -313,6 +288,19 @@ pub fn buildAndroid(
     lib.link_z_max_page_size = 16384;
     lib.link_z_common_page_size = 16384;
     return lib;
+}
+
+// 从 SDK 的 ndk 目录选择第一个已安装的版本。
+fn findNdk(b: *std.Build, sdk: []const u8) ![]const u8 {
+    const path = b.pathJoin(&.{ sdk, "ndk" });
+    b.dependOnDirectoryContents(.{ .cwd_relative = path });
+    var dir = try std.Io.Dir.cwd().openDir(b.graph.io, path, .{ .iterate = true });
+    defer dir.close(b.graph.io);
+    var iterator = dir.iterate();
+    while (try iterator.next(b.graph.io)) |entry| {
+        if (entry.kind == .directory) return b.pathJoin(&.{ path, entry.name });
+    }
+    return error.AndroidNdkNotFound;
 }
 
 fn createShader(
