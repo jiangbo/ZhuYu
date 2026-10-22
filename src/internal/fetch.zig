@@ -1,7 +1,8 @@
 //! 整文件异步加载，参考 sokol_fetch.h 的请求调度和主线程回调。
+//! 基准随 Sokol 依赖更新；升级时检查上游差异并同步适用修复。
 //! 上游基准（floooh/sokol）：
-//! https://github.com/floooh/sokol/commit/5ee4b0b381e747884fdcf50c062369afc66c4f54
-//! 对应 sokol-zig 提交：ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f。
+//! https://github.com/floooh/sokol/commit/efeb77603e24daea7d1dd6445b9358bb5d82533b
+//! 对应 sokol-zig 提交：3990b6629704f988041ac7e76ed010348eabd098。
 const std = @import("std");
 const builtin = @import("builtin");
 

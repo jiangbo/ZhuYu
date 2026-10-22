@@ -10,8 +10,8 @@
             .lazy = true,
         },
         .sokol = .{
-            .url = "git+https://github.com/floooh/sokol-zig#ff40f04d4f51c73b2bf460d87fd2d7aa0dedc22f",
-            .hash = "sokol-0.1.0-pb1HKygbQQCINV-qSe4SFm92QWaT_95VpWTJkwYqzOrX",
+            .url = "https://codeload.github.com/floooh/sokol-zig/tar.gz/3990b6629704f988041ac7e76ed010348eabd098",
+            .hash = "sokol-0.1.0-pb1HK6dlQgAVK2z6p9B8rDIzrWEdxn0DeVTcpZrXmATG",
         },
     },
     .paths = .{
