@@ -5,6 +5,7 @@
 //! 对应 sokol-zig 提交：3990b6629704f988041ac7e76ed010348eabd098。
 const std = @import("std");
 const builtin = @import("builtin");
+const platform = @import("../window.zig").platform;
 
 pub const Response = struct {
     path: [:0]const u8,
@@ -138,11 +139,11 @@ fn run() void {
     }
 }
 
-// 桌面读取普通文件；Android 的 assets/ 路径直接读取 APK。
+// Android 的 assets/ 路径直接读取 APK，其余文件相对于当前目录读取。
 fn read(path: [:0]const u8, buffer: []u8) ![]const u8 {
     if (builtin.abi.isAndroid()) {
         if (std.mem.startsWith(u8, path, "assets/")) {
-            return @import("android.zig").readAsset(path[7.. :0], buffer);
+            return platform.readAsset(path[7.. :0], buffer);
         }
     }
     const file = try std.Io.Dir.cwd().openFile(io, path, .{});

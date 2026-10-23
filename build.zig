@@ -42,9 +42,14 @@ pub fn build(b: *std.Build) !void {
         // 静态接入浏览器存档函数，无需应用额外配置链接参数。
         zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
     }
-    if (target.result.os.tag == .macos) {
+    const isIos = target.result.os.tag == .ios;
+    if (target.result.os.tag == .macos or isIos) {
+        // Sokol 的 Metal 后端使用 CoreGraphics 的色彩空间接口。
+        if (isIos) zhu.linkFramework("CoreGraphics", .{});
+
+        const sdkOption = if (isIos) "ios_sdk" else "macos_sdk";
         // 本机默认由 Zig 查找 SDK，交叉编译时可由应用显式提供路径。
-        if (b.option([]const u8, "macos_sdk", "macOS SDK directory")) |sdk| {
+        if (b.option([]const u8, sdkOption, "Apple SDK directory")) |sdk| {
             const include = b.pathJoin(&.{ sdk, "usr", "include" });
             const libraries = b.pathJoin(&.{ sdk, "usr", "lib" });
             const frameworks = b.pathJoin(&.{
@@ -93,6 +98,13 @@ pub const apk = struct {
     pub const AppConfig = @import("tools/apk.zig").AppConfig;
     pub const Options = @import("tools/apk.zig").Options;
     pub const addStep = @import("tools/apk.zig").addStep;
+};
+
+// iOS 应用包同时用于真机和模拟器，SDK 配置由引擎依赖接收。
+pub const ios = struct {
+    pub const AppConfig = @import("tools/ios.zig").AppConfig;
+    pub const Options = @import("tools/ios.zig").Options;
+    pub const addStep = @import("tools/ios.zig").addStep;
 };
 
 // 注册 pack 命令，通过 append 选项控制是否自动追加资源包。

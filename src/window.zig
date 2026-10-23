@@ -38,7 +38,8 @@ pub var scale: math.Vector = .one;
 pub var info: Info = undefined; // 当前窗口配置
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
-const platform = if (builtin.os.tag == .windows) struct {
+// 平台实现统一在这里选择，供入口、窗口和资源加载共用。
+pub const platform = if (builtin.os.tag == .windows) struct {
     // 使用 Zig 自带的导入库名称，Linux 交叉编译时也能找到。
     pub extern "imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
 } else if (builtin.abi.isAndroid())

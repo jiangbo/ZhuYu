@@ -19,6 +19,7 @@ ZhuYu 是一个用 Zig 编写的 2D 游戏开发库，基于 Sokol。
 | 平台 | 最低版本 | 依据 |
 | --- | --- | --- |
 | macOS | 14.0 | 当前 Sokol 的 Metal 窗口使用 `CADisplayLink`，从 macOS 14 提供。 |
+| iOS | 15.0 | 当前 Sokol 使用的 `preferredFrameRateRange` 从 iOS 15 提供。 |
 | Android | 8.0（API 26） | Sokol 音频使用 AAudio，从 API 26 提供。 |
 
 macOS 的依据见 [Sokol 窗口实现]，Android 的依据见 [AAudio 系统要求]。
@@ -32,6 +33,8 @@ macOS 的依据见 [Sokol 窗口实现]，Android 的依据见 [AAudio 系统要
 | --- | --- |
 | macOS Apple Silicon | `aarch64-macos.14.0` |
 | macOS Intel | `x86_64-macos.14.0` |
+| iOS 真机 | `aarch64-ios.15.0` |
+| iOS Apple Silicon 模拟器 | `aarch64-ios.15.0-simulator` |
 | Android ARM64 | `aarch64-linux-android.26` |
 
 其他 Android 架构同样使用 API 26。APK 的 `minSdkVersion` 从编译目标的 API
