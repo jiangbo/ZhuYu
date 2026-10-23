@@ -27,7 +27,7 @@ const Slot = struct {
 
 var allocator: std.mem.Allocator = undefined;
 var io: std.Io = undefined;
-var assetDir: std.Io.Dir = undefined; // 初始化时打开，读取线程退出后关闭。
+var assetDir: std.Io.Dir = undefined; // 首次请求时打开，读取线程退出后关闭。
 var maxFileSize: usize = 0;
 var requests: std.ArrayList(Request) = .empty; // 仅主线程访问的等待队列。
 var nextRequest: usize = 0;
@@ -37,26 +37,28 @@ var wake: std.Io.Event = .unset;
 var stop: std.atomic.Value(bool) = .init(false);
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
-// 资源模块初始化时启动；Web 通过 JS 发起请求，不创建线程。
+// 只保存加载配置，不打开目录或启动线程。
 pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
     std.debug.assert(!started);
     io = fileIo;
     allocator = gpa;
     maxFileSize = maxSize;
-    if (builtin.os.tag != .emscripten) {
-        if (!builtin.abi.isAndroid()) {
-            assetDir = std.Io.Dir.cwd().openDir(io, "assets", .{}) catch |err|
-                std.debug.panic("open assets directory: {}", .{err});
-        }
-        worker = std.Thread.spawn(.{}, run, .{}) catch |err|
-            std.debug.panic("start asset reader: {}", .{err});
-    }
-    started = true;
 }
 
 // 路径和队列在主线程分配，后台线程不访问引擎分配器。
 pub fn send(path: [:0]const u8, callback: *const fn (Response) void) void {
-    std.debug.assert(started);
+    // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
+    if (!started) {
+        if (builtin.os.tag != .emscripten) {
+            if (!builtin.abi.isAndroid()) {
+                assetDir = std.Io.Dir.cwd().openDir(io, "assets", .{}) catch |err|
+                    std.debug.panic("open assets directory: {}", .{err});
+            }
+            worker = std.Thread.spawn(.{}, run, .{}) catch |err|
+                std.debug.panic("start asset reader: {}", .{err});
+        }
+        started = true;
+    }
     const owned = allocator.dupeSentinel(u8, path, 0) catch
         @panic("out of memory");
     requests.append(allocator, .{ .path = owned, .callback = callback }) catch
