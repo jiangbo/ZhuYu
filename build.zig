@@ -180,7 +180,7 @@ pub fn buildAndroid(
     if (options.sdk == null) b.graph.poisonCache();
     const sdk = options.sdk orelse b.graph.environ_map.get("ANDROID_HOME") orelse
         return error.AndroidSdkNotFound;
-    const ndk = try findNdk(b, sdk);
+    const ndk = try findLatestNdk(b, sdk);
     const mod = options.root_module;
     const zhu = dep.module("zhu");
     // 按模块对象查找游戏设置的导入名，不要求用户使用固定别名。
@@ -302,17 +302,24 @@ pub fn buildAndroid(
     return lib;
 }
 
-// 从 SDK 的 ndk 目录选择第一个已安装的版本。
-fn findNdk(b: *std.Build, sdk: []const u8) ![]const u8 {
+// 从 SDK 的 ndk 目录按语义版本选择最高的已安装版本。
+fn findLatestNdk(b: *std.Build, sdk: []const u8) ![]const u8 {
     const path = b.pathJoin(&.{ sdk, "ndk" });
     b.dependOnDirectoryContents(.{ .cwd_relative = path });
     var dir = try std.Io.Dir.cwd().openDir(b.graph.io, path, .{ .iterate = true });
     defer dir.close(b.graph.io);
     var iterator = dir.iterate();
+    var selected: ?[]const u8 = null;
+    var latest: std.SemanticVersion = undefined;
     while (try iterator.next(b.graph.io)) |entry| {
-        if (entry.kind == .directory) return b.pathJoin(&.{ path, entry.name });
+        if (entry.kind != .directory) continue;
+        const version = try std.SemanticVersion.parse(entry.name);
+        if (selected == null or version.order(latest) == .gt) {
+            selected = b.dupe(entry.name);
+            latest = version;
+        }
     }
-    return error.AndroidNdkNotFound;
+    return b.pathJoin(&.{ path, selected orelse return error.AndroidNdkNotFound });
 }
 
 fn createShader(
