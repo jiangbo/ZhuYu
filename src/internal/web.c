@@ -4,7 +4,12 @@
 EM_JS_DEPS(zhu_storage, "$UTF8ToString");
 
 // 让静态库链接器带入本文件中的 JavaScript 函数描述。
-void zhu_file_keep(void) {}
+void zhu_web_keep(void) {}
+
+// 查询主要指针是否为粗略指针，初始化时用于推测是否缺少实体键盘。
+EM_JS(int, zhu_coarse_pointer, (void), {
+    return window.matchMedia('(pointer: coarse)').matches ? 1 : 0;
+});
 
 extern void zhu_fetch_done(int lane, int size, int status);
 

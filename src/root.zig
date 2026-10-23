@@ -45,15 +45,18 @@ pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
 pub const reinterpret = memory.reinterpret;
 
+// 浏览器查询由 web.c 的 EM_JS 提供，保留入口确保静态链接时带入实现。
+extern fn zhu_web_keep() void;
+extern fn zhu_coarse_pointer() c_int;
+
 /// 初始化内存、窗口 IO 和输入设备推测值。
 pub fn init(info: std.process.Init) void {
     memory.init(info.gpa);
     window.io = info.io;
     if (builtin.os.tag == .emscripten) {
+        zhu_web_keep();
         // 主要指针为粗略指针时，推测可能没有实体键盘。
-        key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
-            "window.matchMedia('(pointer: coarse)').matches",
-        ) != 0;
+        key.mayNotHave = zhu_coarse_pointer() != 0;
     }
 }
 
