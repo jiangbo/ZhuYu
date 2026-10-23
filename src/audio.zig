@@ -32,6 +32,7 @@ pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
 }
 
 pub fn deinit() void {
+    if (!sk.audio.isvalid()) return;
     setMusicState(.stopped);
     stopSounds();
     sk.audio.shutdown();
@@ -72,6 +73,7 @@ pub const MusicSource = struct {
     },
 
     /// 按文件头创建播放器；只有 MIDI 使用输出采样率。
+    /// Ogg 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
     pub fn init(gpa: Allocator, data: []const u8, sampleRate: u32) !MusicSource {
         if (std.mem.startsWith(u8, data, "MThd")) {
             if (options.midi) {
@@ -157,6 +159,7 @@ pub const Sound = struct {
     state: StateEnum = .playing,
 
     /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
+    /// 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
     pub fn init(gpa: Allocator, data: []const u8) !Sound {
         var player = try vorbis.Player.init(gpa, data);
         defer player.deinit();

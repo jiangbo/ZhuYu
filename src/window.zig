@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const sk = @import("sokol");
 const math = @import("math.zig");
 const assets = @import("assets.zig");
+const audio = @import("audio.zig");
 const camera = @import("camera.zig");
 const input = @import("input.zig");
 const memory = @import("internal/memory.zig");
@@ -149,6 +150,7 @@ export fn windowFrame() void {
 
 export fn windowDeinit() void {
     call(root, "deinit", .{memory.allocator});
+    audio.deinit();
     assets.deinit();
     sk.gfx.shutdown();
     if (builtin.abi.isAndroid()) platform.threaded.deinit();

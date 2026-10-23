@@ -202,7 +202,7 @@ const atlas = struct {
         }
     }
 
-    fn handler(response: Response) bool {
+    fn handler(response: Response) void {
         const pageIndex: PageIndex = @bitCast(response.index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
@@ -226,7 +226,6 @@ const atlas = struct {
         if (count.* == sk.gfx.queryImageNumSlices(atlasImage)) {
             sk.gfx.sealImage(atlasImage);
         }
-        return false;
     }
 };
 
@@ -234,13 +233,12 @@ pub const Icon = png.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     _ = file.load(path, handle, struct {
-        fn callback(resp: Response) bool {
+        fn callback(resp: Response) void {
             const icon = png.loadIcon(allocator, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
             defer allocator.free(icon.data);
             handler(resp.index, icon);
-            return false;
         }
     }.callback);
 }
@@ -248,7 +246,7 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
 const view = struct {
     var cache: std.AutoHashMapUnmanaged(Id, sk.gfx.View) = .empty;
 
-    fn handler(resp: Response) bool {
+    fn handler(resp: Response) void {
         const img = png.load(allocator, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
@@ -262,7 +260,6 @@ const view = struct {
         // 文件尺寸必须与调用方提供的尺寸一致。
         std.debug.assert(image.size.x == @as(f32, @floatFromInt(img.width)));
         std.debug.assert(image.size.y == @as(f32, @floatFromInt(img.height)));
-        return false;
     }
 
     fn makeImage(w: i32, h: i32, layers: i32, data: anytype) sk.gfx.Image {
@@ -301,7 +298,7 @@ const sound = struct {
         return cache.get(id(path)).?;
     }
 
-    fn handler(resp: Response) bool {
+    fn handler(resp: Response) void {
         const decoded = audio.Sound.init(allocator, resp.data) catch |err|
             std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
 
@@ -309,7 +306,6 @@ const sound = struct {
         const option = soundCache.option;
         soundCache.* = decoded;
         if (resp.index == 0) _ = audio.playSoundOption(resp.path, option);
-        return false;
     }
 };
 
@@ -325,14 +321,12 @@ const music = struct {
         return null;
     }
 
-    fn handler(resp: Response) bool {
+    fn handler(resp: Response) void {
         const rate: u32 = @intCast(sk.audio.sampleRate());
         const source = audio.MusicSource.init(allocator, resp.data, rate) catch |err|
             std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
         cache.getPtr(id(resp.path)).?.* = source;
         audio.playMusicOption(resp.path, resp.index == 1);
-        // 播放器已经持有解码所需的数据，文件缓存可以释放原始文件。
-        return false;
     }
 
     pub fn deinit() void {
@@ -354,7 +348,7 @@ pub const file = struct {
     pub const Data = struct { bytes: []const u8, owned: bool = false };
 
     const FileState = enum { init, loading, loaded, handled };
-    const Handler = *const fn (Response) bool;
+    const Handler = *const fn (Response) void;
 
     const FileCache = struct {
         state: FileState = .init,
@@ -458,7 +452,7 @@ pub const file = struct {
         handleLoaded(path, value, data.len);
     }
 
-    // 同步和异步加载共用数据释放逻辑，回调自行决定是否保留原始数据。
+    // 原始数据仅在回调期间有效，回调结束后释放自有缓冲区并清空引用。
     fn handleLoaded(path: Path, value: *FileCache, size: usize) void {
         const response: Response = .{
             .index = value.index,
@@ -470,13 +464,9 @@ pub const file = struct {
         // 回调期间禁止使文件缓存指针失效的操作。
         cache.lockPointers();
         defer cache.unlockPointers();
-        if (!value.handler(response)) {
-            if (owned) allocator.free(value.data.bytes);
-            value.data = .{ .bytes = &.{} };
-        } else if (owned and allocator.resize(value.data.bytes, size)) {
-            // resize 保证地址不变，音乐可以继续使用加载数据。
-            value.data.bytes = value.data.bytes[0..size];
-        }
+        value.handler(response);
+        if (owned) allocator.free(value.data.bytes);
+        value.data = .{ .bytes = &.{} };
         value.state = .handled;
     }
 

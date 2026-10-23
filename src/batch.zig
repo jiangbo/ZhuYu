@@ -80,6 +80,8 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
         .usage = .{ .write_transient = true },
     });
 
+    // 仅绘制图片时不需要 circle.png；矩形、线和圆等图形需要先登记此资源。
+    // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
     circleImage = assets.getImageByPath("circle.png") orelse return;
     const rect = math.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
