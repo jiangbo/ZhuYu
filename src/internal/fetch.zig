@@ -45,13 +45,22 @@ pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
     maxFileSize = maxSize;
 }
 
+// 打开可执行文件旁边的 assets 目录。
+fn openAssetDir() !std.Io.Dir {
+    var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try std.process.executableDirPath(io, &path);
+    const exeDir = try std.Io.Dir.openDirAbsolute(io, path[0..len], .{});
+    defer exeDir.close(io);
+    return exeDir.openDir(io, "assets", .{});
+}
+
 // 路径和队列在主线程分配，后台线程不访问引擎分配器。
 pub fn send(path: [:0]const u8, callback: *const fn (Response) void) void {
     // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
     if (!started) {
         if (builtin.os.tag != .emscripten) {
             if (!builtin.abi.isAndroid()) {
-                assetDir = std.Io.Dir.cwd().openDir(io, "assets", .{}) catch |err|
+                assetDir = openAssetDir() catch |err|
                     std.debug.panic("open assets directory: {}", .{err});
             }
             worker = std.Thread.spawn(.{}, run, .{}) catch |err|

@@ -148,17 +148,17 @@ pub fn readAsset(path: [:0]const u8, buffer: []u8) ![]const u8 {
     return data;
 }
 
+// 返回系统给出的私有目录绝对路径，路径在进程内一直有效。
+pub fn dataPath() []const u8 {
+    const activity: *const Activity =
+        @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
+    return std.mem.span(activity.internalDataPath);
+}
+
 // 初始化安卓运行环境，再调用游戏入口取得窗口配置。
 export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {
     const gpa = std.heap.c_allocator;
     threaded = .init(gpa, .{});
-
-    const activity: *const Activity =
-        @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
-    // 进入游戏 main 前切换目录，普通文件读写使用应用私有空间。
-    const path = std.mem.span(activity.internalDataPath);
-    std.process.setCurrentPath(threaded.io(), path) catch |err|
-        std.debug.panic("android private directory: {}", .{err});
 
     // 只供 main 初始化阶段使用。
     var arena = std.heap.ArenaAllocator.init(gpa);

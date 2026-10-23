@@ -43,7 +43,7 @@ pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
     if (!result.found_existing) {
         result.value_ptr.* = .{
             .path = path,
-            .mtime = window.statFileTime(path),
+            .mtime = statFileTime(path),
             .reload = file.reload,
             .deinit = file.deinit,
         };
@@ -56,7 +56,7 @@ pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
 pub fn reloadZon() void {
     var iterator = zonMap.valueIterator();
     while (iterator.next()) |entry| {
-        const mtime = window.statFileTime(entry.path);
+        const mtime = statFileTime(entry.path);
         if (mtime == 0 or mtime == entry.mtime) continue;
 
         const loaded = entry.reload();
@@ -81,23 +81,54 @@ const ZonEntry = struct {
 
 var zonMap: std.StringHashMapUnmanaged(ZonEntry) = .empty;
 
+// 查询热重载文件的修改时间，路径相对于当前工作目录。
+fn statFileTime(path: [:0]const u8) i128 {
+    const file = std.Io.Dir.cwd().openFile(window.io, path, .{}) catch return 0;
+    defer file.close(window.io);
+    const stat = file.stat(window.io) catch return 0;
+    return @intCast(stat.mtime.toNanoseconds());
+}
+
 fn ZonFile(comptime T: type, comptime path: [:0]const u8) type {
     return struct {
-        var parsed: ?window.Zon(T) = null;
+        // 每次重载使用独立 arena，解析失败时保留上一次的数据。
+        var parsed: ?struct { value: T, arena: std.heap.ArenaAllocator } = null;
 
         fn reload() bool {
-            const next = window.readZon(T, path, .{}) catch |err| {
+            const gpa = memory.allocator.raw;
+            const source = std.Io.Dir.cwd().readFileAllocOptions(
+                window.io,
+                path,
+                gpa,
+                .unlimited,
+                .of(u8),
+                0,
+            ) catch |err| {
+                std.log.err("zon reload failed: {s}: {}", .{ path, err });
+                return false;
+            };
+            defer gpa.free(source);
+
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            var diagnostics: std.zon.parse.Diagnostics = undefined;
+            const value = std.zon.parse.fromSlice(T, .{
+                .gpa = gpa,
+                .arena = arena.allocator(),
+                .source = source,
+                .diagnostics = &diagnostics,
+            }) catch |err| {
+                arena.deinit();
                 std.log.err("zon reload failed: {s}: {}", .{ path, err });
                 return false;
             };
 
-            if (parsed) |*old| old.deinit();
-            parsed = next;
+            if (parsed) |*old| old.arena.deinit();
+            parsed = .{ .value = value, .arena = arena };
             return true;
         }
 
         fn deinit() void {
-            if (parsed) |*old| old.deinit();
+            if (parsed) |*old| old.arena.deinit();
         }
     };
 }

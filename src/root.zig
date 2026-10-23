@@ -20,6 +20,7 @@ pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
     pub const widget = @import("extend/widget.zig");
     pub const store = @import("extend/store.zig");
+    pub const storage = @import("extend/storage.zig");
     pub const touch = @import("extend/touch.zig");
     pub const tiled = @import("extend/tiled.zig");
 };
@@ -44,26 +45,15 @@ pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
 pub const reinterpret = memory.reinterpret;
 
-/// 初始化内存、窗口 IO、运行目录和输入设备推测值。
-pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
-    memory.init(gpa);
-    window.io = io;
-    switch (builtin.os.tag) {
-        .windows, .linux, .macos, .ios => if (!builtin.abi.isAndroid()) {
-            // 原生程序以可执行文件所在目录作为相对路径的起点。
-            var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
-            const len = std.process.executableDirPath(io, &path) catch |err|
-                std.debug.panic("get executable directory: {}", .{err});
-            std.process.setCurrentPath(io, path[0..len]) catch |err|
-                std.debug.panic("enter executable directory: {}", .{err});
-        },
-        .emscripten => {
-            // 主要指针为粗略指针时，推测可能没有实体键盘。
-            key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
-                "window.matchMedia('(pointer: coarse)').matches",
-            ) != 0;
-        },
-        else => {},
+/// 初始化内存、窗口 IO 和输入设备推测值。
+pub fn init(info: std.process.Init) void {
+    memory.init(info.gpa);
+    window.io = info.io;
+    if (builtin.os.tag == .emscripten) {
+        // 主要指针为粗略指针时，推测可能没有实体键盘。
+        key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
+            "window.matchMedia('(pointer: coarse)').matches",
+        ) != 0;
     }
 }
 
@@ -90,6 +80,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(extend.debug);
     std.testing.refAllDecls(extend.widget);
     std.testing.refAllDecls(extend.store);
+    std.testing.refAllDecls(extend.storage);
     std.testing.refAllDecls(extend.touch);
     std.testing.refAllDecls(extend.touch.stick);
     std.testing.refAllDecls(extend.tiled);

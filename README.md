@@ -1,5 +1,7 @@
 # ZhuYu
 
+任何 AI 未经用户明确许可，不得修改 README 文档。
+
 ZhuYu 是一个用 Zig 编写的 2D 游戏开发库，基于 Sokol。
 名字取自[《山海经·南山经》](https://zh.wikisource.org/zh-hans/山海經/南山經)中的祝余草：形似韭菜，开青色花，传说食之不饥。
 
