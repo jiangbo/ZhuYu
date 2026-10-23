@@ -164,10 +164,12 @@ const Convert = struct {
     fn parseTileSet(self: Convert, id: u32, value: JsonTileSet) !tiled.TileSet {
         var tiles: []tiled.Tile = &.{};
         if (value.tiles) |definitions| {
-            const count = if (value.columns == 0)
-                definitions[definitions.len - 1].id + 1
-            else
-                definitions.len;
+            var count: usize = definitions.len;
+            if (value.columns == 0) {
+                // 显示顺序可以调整，按最大局部 ID 计算容量并保留空洞。
+                count = 0;
+                for (definitions) |tile| count = @max(count, tile.id + 1);
+            }
             tiles = try self.allocator.alloc(tiled.Tile, count);
             if (value.columns == 0) @memset(tiles, std.mem.zeroes(tiled.Tile));
             for (definitions, 0..) |tile, index| {
