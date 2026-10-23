@@ -112,7 +112,8 @@ pub fn handle(ev: *const sk.app.Event, option: Option) void {
 }
 
 pub fn update() void {
-    key.lastState = key.state;
+    key.pressedState = .empty;
+    key.releasedState = .empty;
     mouse.scrollY = 0;
     press = .{};
     mouse.moved = false;
@@ -126,7 +127,7 @@ pub fn update() void {
         }
     }
 
-    // 保存本帧状态后，按顺序回放虚拟按键，供下一帧读取变化。
+    // 清除本帧变化后，按顺序回放虚拟按键，供下一帧读取变化。
     for (key.events[0..key.eventCount]) |event| {
         key.set(event.code, event.down);
     }
@@ -137,7 +138,8 @@ pub fn reset() void {
     touch.points = @splat(null);
     touch.moved = false;
     key.state = .empty;
-    key.lastState = .empty;
+    key.pressedState = .empty;
+    key.releasedState = .empty;
     key.eventCount = 0;
     mouse.scrollY = 0;
     press = .{};
@@ -171,9 +173,10 @@ pub const key = struct {
     pub var mayNotHave: bool = builtin.target.abi.isAndroid() or
         builtin.os.tag == .ios;
 
-    // 键盘键和鼠标按钮共用当前帧与上一帧的状态。
-    var lastState: std.StaticBitSet(512) = .empty;
+    // 键盘键和鼠标按钮共用按住状态，按下和释放分别保留到帧末。
     var state: std.StaticBitSet(512) = .empty;
+    var pressedState: std.StaticBitSet(512) = .empty;
+    var releasedState: std.StaticBitSet(512) = .empty;
 
     // 按产生顺序暂存虚拟按键，避免分开保存按下和释放导致顺序变化。
     const Event = struct { code: Code, down: bool };
@@ -185,7 +188,10 @@ pub const key = struct {
         const code: usize = @intCast(@backingInt(keyCode));
         press.pressed = press.pressed or down;
         press.released = press.released or !down;
+        // 系统重复发送按下事件时，不产生新的按下边沿。
+        if (state.isSet(code) == down) return;
         state.setValue(code, down);
+        if (down) pressedState.set(code) else releasedState.set(code);
     }
 
     // 暂存按键变化，帧末回放后在下一帧生效。
@@ -199,13 +205,11 @@ pub const key = struct {
     }
 
     pub fn pressed(keyCode: Code) bool {
-        const code: usize = @intCast(@backingInt(keyCode));
-        return !lastState.isSet(code) and state.isSet(code);
+        return pressedState.isSet(@intCast(@backingInt(keyCode)));
     }
 
     pub fn released(keyCode: Code) bool {
-        const code: usize = @intCast(@backingInt(keyCode));
-        return lastState.isSet(code) and !state.isSet(code);
+        return releasedState.isSet(@intCast(@backingInt(keyCode)));
     }
 
     pub fn anyHeld(keys: []const Code) bool {
