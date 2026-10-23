@@ -33,9 +33,9 @@ var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
 var worker: ?std.Thread = null;
 var wake: std.Io.Event = .unset;
 var stop: std.atomic.Value(bool) = .init(false);
-pub var started: bool = false; // 仅主线程读写加载器生命周期。
+var started: bool = false; // 仅主线程读写加载器生命周期。
 
-// 首次加载时启动；Web 通过 JS 发起请求，不创建线程。
+// 资源模块初始化时启动；Web 通过 JS 发起请求，不创建线程。
 pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
     std.debug.assert(!started);
     io = fileIo;

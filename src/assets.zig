@@ -18,25 +18,26 @@ const assetRoot = "assets/";
 var allocator: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
-var maxFileSize: usize = 0;
 
 pub fn init(io_: std.Io, maxSize: usize) void {
     io = io_;
     allocator = memory.allocator.raw;
-    maxFileSize = maxSize;
-
-    // 编译期开关决定是否探测程序尾部的资源包。
+    // 开启 append 时只读取程序尾部的资源包，否则启动外部资源加载器。
     if (options.append) {
         file.init() catch |err| {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
+    } else {
+        fetch.setup(io, allocator, maxSize);
     }
 
     sampler.init();
 }
 
 // 推进异步加载，并在主线程执行资源回调。
-pub const update = fetch.dowork;
+pub fn update() void {
+    if (!options.append) fetch.dowork();
+}
 
 pub fn deinit() void {
     imageCache.deinit(allocator);
@@ -44,7 +45,7 @@ pub fn deinit() void {
     view.cache.deinit(allocator);
     sound.deinit();
     music.deinit();
-    fetch.shutdown();
+    if (!options.append) fetch.shutdown();
     file.deinit();
     gpu.deinit();
     sk.gfx.destroySampler(sampler.nearest);
@@ -375,11 +376,7 @@ pub const file = struct {
         });
         errdefer mapped.destroy(io);
         const bytes = mapped.memory;
-        if (!std.mem.endsWith(u8, bytes, "b0b0")) {
-            mapped.destroy(io);
-            exe.close(io);
-            return;
-        }
+        if (!std.mem.endsWith(u8, bytes, "b0b0")) return error.AssetPackNotFound;
 
         initPack(bytes);
         mapping = mapped;
@@ -430,12 +427,12 @@ pub const file = struct {
             return entry.value_ptr;
         }
 
-        entry.value_ptr.* = .{ .index = index, .handler = handler };
-
-        // 缓存和 pack 都未命中时，首次按需启动异步加载器。
-        if (!fetch.started) {
-            fetch.setup(io, allocator, maxFileSize);
+        // append 模式缺少资源时立即报错，不再读取外部文件。
+        if (options.append) {
+            std.debug.panic("asset not found in appended pack: {s}", .{path});
         }
+
+        entry.value_ptr.* = .{ .index = index, .handler = handler };
 
         var buffer: [1024]u8 = undefined;
         const fmt = assetRoot ++ "{s}";
