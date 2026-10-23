@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const sokol = @import("sokol");
 pub const window = @import("window.zig");
@@ -43,15 +44,26 @@ pub const getImage = assets.getImageByPath;
 pub const oom = memory.oom;
 pub const reinterpret = memory.reinterpret;
 
-/// 初始化引擎共用的内存分配器、窗口 IO 和输入设备推测值。
+/// 初始化内存、窗口 IO、运行目录和输入设备推测值。
 pub fn init(io: std.Io, gpa: std.mem.Allocator) void {
     memory.init(gpa);
     window.io = io;
-    if (@import("builtin").os.tag == .emscripten) {
-        // 主要指针为粗略指针时，推测可能没有实体键盘。
-        key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
-            "window.matchMedia('(pointer: coarse)').matches",
-        ) != 0;
+    switch (builtin.os.tag) {
+        .windows, .linux, .macos, .ios => if (!builtin.abi.isAndroid()) {
+            // 原生程序以可执行文件所在目录作为相对路径的起点。
+            var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            const len = std.process.executableDirPath(io, &path) catch |err|
+                std.debug.panic("get executable directory: {}", .{err});
+            std.process.setCurrentPath(io, path[0..len]) catch |err|
+                std.debug.panic("enter executable directory: {}", .{err});
+        },
+        .emscripten => {
+            // 主要指针为粗略指针时，推测可能没有实体键盘。
+            key.mayNotHave = std.os.emscripten.emscripten_run_script_int(
+                "window.matchMedia('(pointer: coarse)').matches",
+            ) != 0;
+        },
+        else => {},
     }
 }
 
