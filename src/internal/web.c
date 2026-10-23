@@ -19,7 +19,8 @@ EM_JS(void, zhu_fetch_start,
     const jobs = Module.zhu_fetch_jobs ||= [];
     const job = new AbortController();
     jobs[lane] = job;
-    fetch(UTF8ToString(path), { signal: job.signal }).then(async response => {
+    fetch("assets/" + UTF8ToString(path), { signal: job.signal })
+    .then(async response => {
         if (!response.ok) {
             if (jobs[lane] === job) {
                 jobs[lane] = null;

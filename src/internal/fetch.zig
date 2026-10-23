@@ -5,7 +5,7 @@
 //! 对应 sokol-zig 提交：3990b6629704f988041ac7e76ed010348eabd098。
 const std = @import("std");
 const builtin = @import("builtin");
-const platform = @import("../window.zig").platform;
+const android = @import("android.zig");
 
 pub const Response = struct {
     path: [:0]const u8,
@@ -27,6 +27,7 @@ const Slot = struct {
 
 var allocator: std.mem.Allocator = undefined;
 var io: std.Io = undefined;
+var assetDir: std.Io.Dir = undefined; // 初始化时打开，读取线程退出后关闭。
 var maxFileSize: usize = 0;
 var requests: std.ArrayList(Request) = .empty; // 仅主线程访问的等待队列。
 var nextRequest: usize = 0;
@@ -43,6 +44,10 @@ pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
     allocator = gpa;
     maxFileSize = maxSize;
     if (builtin.os.tag != .emscripten) {
+        if (!builtin.abi.isAndroid()) {
+            assetDir = std.Io.Dir.cwd().openDir(io, "assets", .{}) catch |err|
+                std.debug.panic("open assets directory: {}", .{err});
+        }
         worker = std.Thread.spawn(.{}, run, .{}) catch |err|
             std.debug.panic("start asset reader: {}", .{err});
     }
@@ -108,6 +113,7 @@ pub fn shutdown() void {
         wake.set(io);
         worker.?.join();
         worker = null;
+        if (!builtin.abi.isAndroid()) assetDir.close(io);
     }
     for (requests.items[nextRequest..]) |request| allocator.free(request.path);
     requests.deinit(allocator);
@@ -139,14 +145,10 @@ fn run() void {
     }
 }
 
-// Android 的 assets/ 路径直接读取 APK，其余文件相对于当前目录读取。
+// 路径统一相对于资源目录，Android 直接读取 APK 中的同名资源。
 fn read(path: [:0]const u8, buffer: []u8) ![]const u8 {
-    if (builtin.abi.isAndroid()) {
-        if (std.mem.startsWith(u8, path, "assets/")) {
-            return platform.readAsset(path[7.. :0], buffer);
-        }
-    }
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    if (builtin.abi.isAndroid()) return android.readAsset(path, buffer);
+    const file = try assetDir.openFile(io, path, .{});
     defer file.close(io);
     const size = try file.length(io);
     if (size > buffer.len) return error.BufferTooSmall;

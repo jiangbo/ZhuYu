@@ -13,7 +13,6 @@ const Image = graphics.Image;
 const Vector2 = graphics.Vector2;
 const Filter = graphics.Filter;
 const Path = [:0]const u8;
-const assetRoot = "assets/";
 
 var allocator: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
@@ -434,11 +433,8 @@ pub const file = struct {
 
         entry.value_ptr.* = .{ .index = index, .handler = handler };
 
-        var buffer: [1024]u8 = undefined;
-        const fmt = assetRoot ++ "{s}";
-        const filePath = memory.formatZ(&buffer, fmt, .{path});
-        std.log.info("loading {s}", .{filePath});
-        fetch.send(filePath, callback);
+        std.log.info("loading {s}", .{path});
+        fetch.send(path, callback);
 
         entry.value_ptr.state = .loading;
         return entry.value_ptr;
@@ -450,9 +446,8 @@ pub const file = struct {
             const msg = "assets load failed, path: {s}, error: {}";
             std.debug.panic(msg, .{ resp.path, err });
         };
-        const filePath = resp.path;
-        std.log.info("loaded from: {s}", .{filePath});
-        const path = filePath[assetRoot.len..];
+        const path = resp.path;
+        std.log.info("loaded from: {s}", .{path});
 
         const value = cache.getPtr(id(path)).?;
         value.data = .{ .bytes = resp.buffer, .owned = true };
