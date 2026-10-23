@@ -294,8 +294,11 @@ const sound = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = .{ .option = option };
-        _ = file.load(path, 0, handler);
-        return .{};
+        // 同步回调只解码，由当前调用负责播放并返回槽位。
+        const request = file.load(path, 1, handler);
+        // 返回后若尚未加载，异步回调负责补播。
+        request.index = 0;
+        return cache.get(id(path)).?;
     }
 
     fn handler(resp: Response) bool {
@@ -305,7 +308,7 @@ const sound = struct {
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
         soundCache.* = decoded;
-        _ = audio.playSoundOption(resp.path, option);
+        if (resp.index == 0) _ = audio.playSoundOption(resp.path, option);
         return false;
     }
 };
