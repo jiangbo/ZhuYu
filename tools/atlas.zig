@@ -8,7 +8,7 @@ const zigimg = @import("zigimg");
 // 输入目录用于计算图片 ID，生成的图片资源与源目录分开。
 pub const Options = struct {
     input: []const u8,
-    images: []const u8 = "atlas", // 相对于游戏 assets 目录。
+    images: []const u8 = "atlas", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/atlas.zon",
     maxSize: u32 = 1024,
     mergeFont: bool = false, // 是否将字体图片路径加入图集。
@@ -103,7 +103,6 @@ fn buildAtlas(io: std.Io, allocator: std.mem.Allocator, options: Options) !void 
     var input = try cwd.openDir(io, options.input, .{ .iterate = true });
     defer input.close(io);
     const outputPath = try std.fs.path.join(allocator, &.{ "assets", options.images });
-    try cwd.createDirPath(io, outputPath);
     if (std.fs.path.dirname(options.output)) |dir| {
         try cwd.createDirPath(io, dir);
     }
@@ -243,6 +242,9 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         }
         fontImages = font.images;
     }
+    // 图集输出目录由生成工具独占，整目录重建以移除旧页面。
+    try cwd.deleteTree(io, output.directory);
+    try cwd.createDirPath(io, output.directory);
     const pixelCount = std.math.mul(
         usize,
         layout.width,

@@ -12,7 +12,7 @@ pub const Options = struct {
     size: u16,
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
     antialias: bool = true,
-    images: []const u8 = "font/bmfont", // 相对于固定 assets 目录的图片目录。
+    images: []const u8 = "font", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/font.zon",
 };
 
@@ -124,6 +124,8 @@ pub fn main(init: std.process.Init) !void {
     const options = @import("options");
     const cwd = std.Io.Dir.cwd();
     const imageDir = try std.fs.path.join(gpa, &.{ "assets", options.images });
+    // 字体输出目录由生成工具独占，整目录重建以移除旧页面。
+    try cwd.deleteTree(io, imageDir);
     try cwd.createDirPath(io, imageDir);
     if (std.fs.path.dirname(options.output)) |dir| {
         try cwd.createDirPath(io, dir);

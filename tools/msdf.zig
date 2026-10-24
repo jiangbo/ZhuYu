@@ -10,7 +10,7 @@ pub const Options = struct {
     exe: []const u8 = "msdf-atlas-gen",
     size: u16,
     spacing: u8 = 1, // 距离场边界之外增加的字形间距。
-    images: []const u8 = "font/msdf", // 相对于固定 assets 目录的图片目录。
+    images: []const u8 = "font", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/font.zon",
 };
 
@@ -79,6 +79,8 @@ pub fn main(init: std.process.Init) !void {
     const options = @import("options");
     const cwd = std.Io.Dir.cwd();
     const imageDir = try std.fs.path.join(gpa, &.{ "assets", options.images });
+    // 与 BMFont 共用字体目录，切换生成方式时移除之前的图片。
+    try cwd.deleteTree(io, imageDir);
     try cwd.createDirPath(io, imageDir);
     if (std.fs.path.dirname(options.output)) |dir| {
         try cwd.createDirPath(io, dir);
