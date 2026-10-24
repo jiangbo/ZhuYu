@@ -20,6 +20,7 @@ pub const useMsdf = options.msdf;
 pub const Font = struct {
     size: f32,
     lineHeight: f32,
+    advance: []const f32, // 按码位保存 128 项 ASCII 字宽，非 ASCII 固定为 1。
     imageSize: Vector2,
     images: []const [:0]const u8,
     pages: []const Page,
@@ -33,7 +34,6 @@ pub const Page = struct {
 
 pub const Char = struct {
     id: u32,
-    advance: f32,
     rect: math.Rect,
     offset: Vector2,
 };
@@ -229,7 +229,8 @@ fn layout(
         }
 
         const glyph = findGlyph(code);
-        const advance = glyph.char.advance * font.size * scale.x;
+        const step = if (code < 128) font.advance[code] else 1;
+        const advance = step * font.size * scale.x;
         if (width > 0 and width + option.spacing + advance > option.max) {
             // 换行后新行的行底超出高度，当前字符留给下一段
             if ((line + 1) * height > maxHeight) {

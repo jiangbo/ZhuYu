@@ -110,13 +110,16 @@ fn convert(
     image: [:0]const u8,
 ) !text.Font {
     const size = source.atlas.size;
+    // ASCII 字宽集中保存，未收录的控制字符不占宽度。
+    const advance = try gpa.alloc(f32, 128);
+    @memset(advance, 0);
     const chars = try gpa.alloc(text.Char, source.glyphs.len);
     for (chars, source.glyphs) |*char, glyph| {
+        if (glyph.unicode < 128) advance[glyph.unicode] = glyph.advance;
         const bounds = glyph.atlasBounds;
         const plane = glyph.planeBounds;
         char.* = .{
             .id = glyph.unicode,
-            .advance = glyph.advance,
             .rect = .{
                 .min = .{ .x = bounds.left, .y = bounds.top },
                 .size = .{
@@ -135,6 +138,7 @@ fn convert(
     return .{
         .size = size,
         .lineHeight = source.metrics.lineHeight * size,
+        .advance = advance,
         .imageSize = .{
             .x = @floatFromInt(source.atlas.width),
             .y = @floatFromInt(source.atlas.height),

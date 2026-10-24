@@ -137,11 +137,16 @@ pub fn main(init: std.process.Init) !void {
     for (lists) |*list| list.* = .empty;
 
     const size = source.info.fontSize;
+    // 所有页面共用 ASCII 字宽表，未收录的控制字符不占宽度。
+    const advance = try gpa.alloc(f32, 128);
+    @memset(advance, 0);
     for (source.chars) |char| {
+        if (char.id < 128) {
+            advance[char.id] = @as(f32, @floatFromInt(char.xAdvance)) /
+                @as(f32, @floatFromInt(size));
+        }
         try lists[char.page].append(gpa, .{
             .id = char.id,
-            .advance = @as(f32, @floatFromInt(char.xAdvance)) /
-                @as(f32, @floatFromInt(size)),
             .rect = .{
                 .min = .{
                     .x = @floatFromInt(char.x),
@@ -192,6 +197,7 @@ pub fn main(init: std.process.Init) !void {
     const result = text.Font{
         .size = @floatFromInt(size),
         .lineHeight = @floatFromInt(source.common.lineHeight),
+        .advance = advance,
         .imageSize = .{
             .x = @floatFromInt(source.common.scaleW),
             .y = @floatFromInt(source.common.scaleH),
