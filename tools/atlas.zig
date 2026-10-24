@@ -22,6 +22,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
         .target = b.graph.host,
         .optimize = .safe,
     }) orelse return;
+
     const config = b.addOptions();
     const input = b.root.joinString(b.allocator, options.input) catch
         @panic("out of memory");
@@ -31,6 +32,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     config.addOption(u32, "max_size", options.maxSize);
     config.addOption(bool, "merge_font", options.mergeFont);
     config.addOption([]const u8, "font", options.font);
+
     const tool = b.addExecutable(.{
         .name = "zhuyu-atlas",
         .root_module = b.createModule(.{
@@ -41,8 +43,10 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     });
     tool.root_module.addOptions("options", config);
     tool.root_module.addImport("zigimg", zigimgDep.module("zigimg"));
+
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
+
     // 每次显式生成时重新扫描目录，包含新增和删除的 PNG。
     run.has_side_effects = true;
     b.step(options.name, "Generate image atlas").dependOn(&run.step);
@@ -78,7 +82,7 @@ const Source = struct {
 
 const Scan = struct {
     io: std.Io,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     inputPath: []const u8,
     sources: std.ArrayListUnmanaged(Source) = .empty,
     ids: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
@@ -98,32 +102,33 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // 扫描源目录、装箱并生成引擎图集描述。
-fn buildAtlas(io: std.Io, allocator: std.mem.Allocator, options: Options) !void {
+fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     const cwd = std.Io.Dir.cwd();
     var input = try cwd.openDir(io, options.input, .{ .iterate = true });
     defer input.close(io);
-    const outputPath = try std.fs.path.join(allocator, &.{ "assets", options.images });
+    const outputPath = try std.fs.path.join(gpa, &.{ "assets", options.images });
     if (std.fs.path.dirname(options.output)) |dir| {
         try cwd.createDirPath(io, dir);
     }
+
     var scan = Scan{
         .io = io,
-        .allocator = allocator,
+        .gpa = gpa,
         .inputPath = options.input,
     };
     try scanDir(&scan, input, "");
     if (scan.sources.items.len == 0) return error.NoPngFiles;
 
-    const items = try allocator.alloc(PackItem, scan.sources.items.len);
+    const items = try gpa.alloc(PackItem, scan.sources.items.len);
     for (items, scan.sources.items) |*item, source| item.* = .{
         .path = source.path,
         .width = source.width,
         .height = source.height,
     };
 
-    const layout = try pack(allocator, items, options.maxSize);
-    defer layout.deinit(allocator);
-    try writeAtlas(io, allocator, .{
+    const layout = try pack(gpa, items, options.maxSize);
+    defer layout.deinit(gpa);
+    try writeAtlas(io, gpa, .{
         .directory = outputPath,
         .options = options,
         .sources = scan.sources.items,
@@ -142,28 +147,19 @@ fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
     var iterator = dir.iterate();
     while (try iterator.next(scan.io)) |entry| {
         if (entry.kind == .directory) {
-            const childRelative = try joinRelative(
-                scan.allocator,
-                relative,
-                entry.name,
-            );
-            var child = try dir.openDir(scan.io, entry.name, .{
-                .iterate = true,
-            });
+            const childRelative = try joinRelative(scan.gpa, relative, entry.name);
+            var child = try dir.openDir(scan.io, entry.name, .{ .iterate = true });
             defer child.close(scan.io);
             try scanDir(scan, child, childRelative);
             continue;
         }
         if (entry.kind != .file or !isPng(entry.name)) continue;
 
-        const path = try joinRelative(scan.allocator, relative, entry.name);
-        const filePath = try std.fs.path.join(
-            scan.allocator,
-            &.{ scan.inputPath, path },
-        );
-        const decoded = try decodePng(scan.io, scan.allocator, filePath);
+        const path = try joinRelative(scan.gpa, relative, entry.name);
+        const filePath = try std.fs.path.join(scan.gpa, &.{ scan.inputPath, path });
+        const decoded = try decodePng(scan.io, scan.gpa, filePath);
         const id = std.hash.Fnv1a_32.hash(path);
-        const result = try scan.ids.getOrPut(scan.allocator, id);
+        const result = try scan.ids.getOrPut(scan.gpa, id);
         if (result.found_existing) {
             std.debug.panic(
                 "image id conflict: {s}, {s}, {}",
@@ -171,7 +167,7 @@ fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
             );
         }
         result.value_ptr.* = path;
-        try scan.sources.append(scan.allocator, .{
+        try scan.sources.append(scan.gpa, .{
             .path = path,
             .id = id,
             .width = decoded.width,
@@ -182,12 +178,12 @@ fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
 }
 
 fn joinRelative(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     parent: []const u8,
     name: []const u8,
 ) ![]const u8 {
-    if (parent.len == 0) return allocator.dupe(u8, name);
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ parent, name });
+    if (parent.len == 0) return gpa.dupe(u8, name);
+    return std.fmt.allocPrint(gpa, "{s}/{s}", .{ parent, name });
 }
 
 fn isPng(name: []const u8) bool {
@@ -204,7 +200,7 @@ const AtlasOutput = struct {
 };
 
 // 图集图片使用内容哈希命名，全部写入后再写 ZON 描述。
-fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !void {
+fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
     const sources = output.sources;
     const layout = output.layout;
     const cwd = std.Io.Dir.cwd();
@@ -214,15 +210,15 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         const source = try cwd.readFileAllocOptions(
             io,
             path,
-            allocator,
+            gpa,
             .unlimited,
             .of(u8),
             0,
         );
         var diagnostics: std.zon.parse.Diagnostics = undefined;
         const font = std.zon.parse.fromSlice(Font, .{
-            .gpa = allocator,
-            .arena = allocator,
+            .gpa = gpa,
+            .arena = gpa,
             .source = source,
             .diagnostics = &diagnostics,
             .ignore_unknown_fields = true,
@@ -242,6 +238,7 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         }
         fontImages = font.images;
     }
+
     // 图集输出目录由生成工具独占，整目录重建以移除旧页面。
     try cwd.deleteTree(io, output.directory);
     try cwd.createDirPath(io, output.directory);
@@ -253,9 +250,9 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
     const byteCount = std.math.mul(usize, pixelCount, 4) catch
         return error.ImageTooLarge;
 
-    const pages = try allocator.alloc([]u8, layout.pageCount);
+    const pages = try gpa.alloc([]u8, layout.pageCount);
     for (pages) |*page| {
-        page.* = try allocator.alloc(u8, byteCount);
+        page.* = try gpa.alloc(u8, byteCount);
         @memset(page.*, 0);
     }
 
@@ -268,9 +265,9 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
 
     // 纹理数组的总页数包含字体图片。
     const pageCount = layout.pageCount + fontImages.len;
-    const imagePaths = try allocator.alloc([]const u8, pageCount);
+    const imagePaths = try gpa.alloc([]const u8, pageCount);
     for (pages, 0..) |page, index| {
-        const bytes = try encodePng(allocator, .{
+        const bytes = try encodePng(gpa, .{
             .pixels = page,
             .width = layout.width,
             .height = layout.height,
@@ -279,26 +276,17 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);
-        const name = try std.fmt.allocPrint(
-            allocator,
-            "atlas{}.{s}.png",
-            .{ index, hash },
-        );
-        const path = try std.fs.path.join(
-            allocator,
-            &.{ output.directory, name },
-        );
+        const name = try std.fmt.allocPrint(gpa, "{s}.png", .{hash});
+        const path = try std.fs.path.join(gpa, &.{ output.directory, name });
         try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
-        const resource = try std.fs.path.join(
-            allocator,
-            &.{ output.options.images, name },
-        );
+        const resource = try std.fs.path.join(gpa, &.{ output.options.images, name });
         std.mem.replaceScalar(u8, resource, '\\', '/');
         imagePaths[index] = resource;
     }
+
     // 仅追加原字体图片路径，保持字体页顺序，不修改图片及字形坐标。
     @memcpy(imagePaths[layout.pageCount..], fontImages);
-    const images = try allocator.alloc(Image, sources.len);
+    const images = try gpa.alloc(Image, sources.len);
     for (images, sources, layout.placements) |*image, source, placement| {
         image.* = .{
             .view = .{ .id = source.id },
@@ -343,20 +331,14 @@ fn copyExtruded(page: Page, source: Source, placement: Placement) void {
     const width: usize = source.width;
     const height: usize = source.height;
     for (0..height + 2) |dy| {
-        const sourceY = if (dy == 0)
-            0
-        else
-            @min(dy - 1, height - 1);
+        const sourceY = if (dy == 0) 0 else @min(dy - 1, height - 1);
         const sourceStart = sourceY * width * 4;
         const destinationY = @as(usize, placement.y) + dy;
         const destinationX: usize = placement.x;
         const destinationStart = (destinationY * page.width + destinationX) * 4;
         const row = page.pixels[destinationStart..][0 .. (width + 2) * 4];
         @memcpy(row[0..4], source.pixels[sourceStart..][0..4]);
-        @memcpy(
-            row[4 .. 4 + width * 4],
-            source.pixels[sourceStart..][0 .. width * 4],
-        );
+        @memcpy(row[4 .. 4 + width * 4], source.pixels[sourceStart..][0 .. width * 4]);
         const sourceEnd = sourceStart + (width - 1) * 4;
         @memcpy(row[4 + width * 4 ..][0..4], source.pixels[sourceEnd..][0..4]);
     }
@@ -369,30 +351,21 @@ const PngImage = struct {
 };
 
 // 读取 PNG 并转换为统一的 RGBA 像素。
-fn decodePng(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-) !PngImage {
+fn decodePng(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !PngImage {
     var buffer: [64 * 1024]u8 = undefined;
-    var image = try zigimg.Image.Managed.fromFilePath(
-        allocator,
-        io,
-        path,
-        &buffer,
-    );
+    var image = try zigimg.Image.Managed.fromFilePath(gpa, io, path, &buffer);
     defer image.deinit();
     try image.convert(.rgba32);
 
     return .{
         .width = @intCast(image.width),
         .height = @intCast(image.height),
-        .pixels = try allocator.dupe(u8, image.rawBytes()),
+        .pixels = try gpa.dupe(u8, image.rawBytes()),
     };
 }
 
 // 将 RGBA 像素编码为 PNG，尺寸和像素共用一个图片描述。
-fn encodePng(allocator: std.mem.Allocator, source: PngImage) ![]u8 {
+fn encodePng(gpa: std.mem.Allocator, source: PngImage) ![]u8 {
     const pixels = source.pixels;
     const width = source.width;
     const height = source.height;
@@ -400,25 +373,18 @@ fn encodePng(allocator: std.mem.Allocator, source: PngImage) ![]u8 {
         return error.InvalidPixels;
     }
 
-    const storage = try zigimg.color.PixelStorage.initRawPixels(
-        pixels,
-        .rgba32,
-    );
+    const storage = try zigimg.color.PixelStorage.initRawPixels(pixels, .rgba32);
     const image = zigimg.Image{
         .width = width,
         .height = height,
         .pixels = storage,
     };
-    const buffer = try allocator.alloc(u8, pixels.len * 2 + 1024);
-    defer allocator.free(buffer);
-    const encoded = try image.writeToMemory(
-        allocator,
-        buffer,
-        .{ .png = .{
-            .filter_choice = .{ .specified = .none },
-        } },
-    );
-    return allocator.dupe(u8, encoded);
+    const buffer = try gpa.alloc(u8, pixels.len * 2 + 1024);
+    defer gpa.free(buffer);
+    const encoded = try image.writeToMemory(gpa, buffer, .{ .png = .{
+        .filter_choice = .{ .specified = .none },
+    } });
+    return gpa.dupe(u8, encoded);
 }
 
 // 装箱只需要图片路径与尺寸，路径用于固定排序结果。
@@ -441,8 +407,8 @@ const Layout = struct {
     width: u32,
     height: u32,
 
-    fn deinit(self: Layout, allocator: std.mem.Allocator) void {
-        allocator.free(self.placements);
+    fn deinit(self: Layout, gpa: std.mem.Allocator) void {
+        gpa.free(self.placements);
     }
 };
 
@@ -478,8 +444,8 @@ const PackPage = struct {
     width: u32 = 0,
     height: u32 = 0,
 
-    fn deinit(self: *PackPage, allocator: std.mem.Allocator) void {
-        self.free.deinit(allocator);
+    fn deinit(self: *PackPage, gpa: std.mem.Allocator) void {
+        self.free.deinit(gpa);
     }
 };
 
@@ -504,11 +470,7 @@ const Candidate = struct {
 };
 
 // 尝试四种排序和放置策略，优先选择页数少、总面积小的结果。
-fn pack(
-    allocator: std.mem.Allocator,
-    items: []const PackItem,
-    maxSize: u32,
-) !Layout {
+fn pack(gpa: std.mem.Allocator, items: []const PackItem, maxSize: u32) !Layout {
     if (items.len == 0) return error.EmptyInput;
     if (maxSize < 3) return error.InvalidMaxSize;
 
@@ -520,16 +482,16 @@ fn pack(
     };
 
     var best: ?Layout = null;
-    errdefer if (best) |result| result.deinit(allocator);
+    errdefer if (best) |result| result.deinit(gpa);
 
     for (strategies) |strategy| {
-        const result = try packWith(allocator, items, maxSize, strategy);
+        const result = try packWith(gpa, items, maxSize, strategy);
         if (best) |current| {
             if (isBetter(result, current)) {
-                current.deinit(allocator);
+                current.deinit(gpa);
                 best = result;
             } else {
-                result.deinit(allocator);
+                result.deinit(gpa);
             }
         } else {
             best = result;
@@ -548,26 +510,26 @@ fn isBetter(a: Layout, b: Layout) bool {
 
 // 按指定策略装箱，每张图片四周预留一像素。
 fn packWith(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     items: []const PackItem,
     maxSize: u32,
     strategy: Strategy,
 ) !Layout {
-    const order = try allocator.alloc(usize, items.len);
-    defer allocator.free(order);
+    const order = try gpa.alloc(usize, items.len);
+    defer gpa.free(order);
     for (order, 0..) |*index, i| index.* = i;
     std.mem.sortUnstable(usize, order, SortContext{
         .items = items,
         .sort = strategy.sort,
     }, sortItems);
 
-    const placements = try allocator.alloc(Placement, items.len);
-    errdefer allocator.free(placements);
+    const placements = try gpa.alloc(Placement, items.len);
+    errdefer gpa.free(placements);
 
     var pages: std.ArrayListUnmanaged(PackPage) = .empty;
     defer {
-        for (pages.items) |*page| page.deinit(allocator);
-        pages.deinit(allocator);
+        for (pages.items) |*page| page.deinit(gpa);
+        pages.deinit(gpa);
     }
 
     for (order) |itemIndex| {
@@ -581,7 +543,7 @@ fn packWith(
         var candidate = findCandidate(pages.items, width, height, strategy.fit);
         if (candidate == null) {
             for (pages.items, 0..) |*page, pageIndex| {
-                if (!try grow(allocator, page, width, height, maxSize)) {
+                if (!try grow(gpa, page, width, height, maxSize)) {
                     continue;
                 }
                 candidate = findCandidate(
@@ -595,11 +557,9 @@ fn packWith(
             }
         }
         if (candidate == null) {
-            try pages.append(allocator, .{});
+            try pages.append(gpa, .{});
             const page = &pages.items[pages.items.len - 1];
-            std.debug.assert(
-                try grow(allocator, page, width, height, maxSize),
-            );
+            std.debug.assert(try grow(gpa, page, width, height, maxSize));
             candidate = findCandidate(
                 pages.items[pages.items.len - 1 ..],
                 width,
@@ -616,7 +576,7 @@ fn packWith(
             .width = width,
             .height = height,
         };
-        try place(allocator, &pages.items[found.page], used);
+        try place(gpa, &pages.items[found.page], used);
         placements[itemIndex] = .{
             .page = @intCast(found.page),
             .x = found.x,
@@ -640,7 +600,7 @@ fn packWith(
 
 // 优先沿较短方向扩展页面，尺寸不超过配置的上限。
 fn grow(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     page: *PackPage,
     width: u32,
     height: u32,
@@ -648,20 +608,14 @@ fn grow(
 ) !bool {
     const growDown = page.width > page.height;
     for ([_]bool{ growDown, !growDown }) |down| {
-        const newWidth = if (down)
-            @max(page.width, width)
-        else
-            page.width + width;
-        const newHeight = if (down)
-            page.height + height
-        else
-            @max(page.height, height);
+        const newWidth = if (down) @max(page.width, width) else page.width + width;
+        const newHeight = if (down) page.height + height else @max(page.height, height);
         if (newWidth > maxSize or newHeight > maxSize) continue;
 
         const oldWidth = page.width;
         const oldHeight = page.height;
         if (newWidth > oldWidth) {
-            try page.free.append(allocator, .{
+            try page.free.append(gpa, .{
                 .x = oldWidth,
                 .y = 0,
                 .width = newWidth - oldWidth,
@@ -669,7 +623,7 @@ fn grow(
             });
         }
         if (newHeight > oldHeight) {
-            try page.free.append(allocator, .{
+            try page.free.append(gpa, .{
                 .x = 0,
                 .y = oldHeight,
                 .width = newWidth,
@@ -685,6 +639,7 @@ fn grow(
 }
 
 const SortContext = struct { items: []const PackItem, sort: Sort };
+
 // 大图优先放置，尺寸相同时按路径确定顺序。
 fn sortItems(context: SortContext, a: usize, b: usize) bool {
     const itemA = context.items[a];
@@ -722,8 +677,7 @@ fn findCandidate(
             const remainHeight = free.height - height;
             const short = @min(remainWidth, remainHeight);
             const long = @max(remainWidth, remainHeight);
-            const area = @as(u64, free.width) * free.height -
-                @as(u64, width) * height;
+            const area = @as(u64, free.width) * free.height - @as(u64, width) * height;
             const current = Candidate{
                 .page = pageIndex,
                 .x = free.x,
@@ -738,34 +692,34 @@ fn findCandidate(
 }
 
 // 将已占用的矩形从空闲区域中切出。
-fn place(allocator: std.mem.Allocator, page: *PackPage, used: Rect) !void {
+fn place(gpa: std.mem.Allocator, page: *PackPage, used: Rect) !void {
     var split: std.ArrayListUnmanaged(Rect) = .empty;
-    errdefer split.deinit(allocator);
+    errdefer split.deinit(gpa);
 
     for (page.free.items) |free| {
         if (!free.intersects(used)) {
-            try split.append(allocator, free);
+            try split.append(gpa, free);
             continue;
         }
-        if (used.y > free.y) try split.append(allocator, .{
+        if (used.y > free.y) try split.append(gpa, .{
             .x = free.x,
             .y = free.y,
             .width = free.width,
             .height = used.y - free.y,
         });
-        if (used.bottom() < free.bottom()) try split.append(allocator, .{
+        if (used.bottom() < free.bottom()) try split.append(gpa, .{
             .x = free.x,
             .y = used.bottom(),
             .width = free.width,
             .height = free.bottom() - used.bottom(),
         });
-        if (used.x > free.x) try split.append(allocator, .{
+        if (used.x > free.x) try split.append(gpa, .{
             .x = free.x,
             .y = free.y,
             .width = used.x - free.x,
             .height = free.height,
         });
-        if (used.right() < free.right()) try split.append(allocator, .{
+        if (used.right() < free.right()) try split.append(gpa, .{
             .x = used.right(),
             .y = free.y,
             .width = free.right() - used.right(),
@@ -773,7 +727,7 @@ fn place(allocator: std.mem.Allocator, page: *PackPage, used: Rect) !void {
         });
     }
 
-    page.free.deinit(allocator);
+    page.free.deinit(gpa);
     page.free = split;
     prune(&page.free);
     page.width = @max(page.width, used.right());
