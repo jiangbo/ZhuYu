@@ -357,7 +357,12 @@ pub fn flush() void {
                     viewport.size.x, viewport.size.y, true);
                 applyScissor(.init(.zero, view.size), viewport, view.size);
             },
-            .scissor => |clip| applyScissor(clip.rect, viewport, clip.size),
+            .scissor => |clip| {
+                // 裁剪区域与离屏绘制保持相同的 Y 轴方向。
+                var rect = clip.rect;
+                if (flipY) rect.min.y = clip.size.y - rect.min.y - rect.size.y;
+                applyScissor(rect, viewport, clip.size);
+            },
             .draw => |draw| doDraw(draw, flipY),
         }
     }
