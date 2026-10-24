@@ -175,9 +175,7 @@ pub fn main(init: std.process.Init) !void {
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);
-        const name = try std.fmt.allocPrint(gpa, "{s}.{s}.png", .{
-            std.fs.path.stem(image), hash,
-        });
+        const name = try std.fmt.allocPrint(gpa, "{s}.png", .{hash});
         const destination = try std.fs.path.join(gpa, &.{ imageDir, name });
         try cwd.writeFile(io, .{
             .sub_path = destination,

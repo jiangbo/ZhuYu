@@ -174,7 +174,7 @@ fn writeImage(
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);
-    const name = try std.fmt.allocPrint(gpa, "font.{s}.png", .{hash});
+    const name = try std.fmt.allocPrint(gpa, "{s}.png", .{hash});
     const resource = try std.fs.path.join(gpa, &.{ options.images, name });
     const outputPath = try std.fs.path.join(gpa, &.{ "assets", resource });
     try std.Io.Dir.cwd().writeFile(io, .{
