@@ -141,10 +141,9 @@ pub const Option = struct {
 pub const Line = struct { text: String, option: Option = .{} };
 pub const Lines = []const Line;
 
+// 数值绘制复用格式化文字的缓冲区。
 pub fn drawNumber(number: anytype, pos: Vector2, option: Option) void {
-    var textBuffer: [15]u8 = undefined;
-    const string = memory.format(&textBuffer, "{d}", .{number});
-    draw(string, pos, option);
+    drawFmt("{d}", .{number}, pos, option);
 }
 
 // zig fmt: off
