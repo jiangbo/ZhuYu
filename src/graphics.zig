@@ -230,6 +230,14 @@ pub var stats: Stats = .{};
 pub const RenderTarget = struct {
     pass: sk.gfx.Pass = .{},
     image: Image = .{ .view = .{}, .size = .zero },
+
+    // 释放两个视图及底层纹理，共享采样器仍由 assets 管理。
+    pub fn deinit(self: RenderTarget) void {
+        const texture = sk.gfx.queryViewImage(self.image.view);
+        sk.gfx.destroyView(self.pass.attachments.colors[0]);
+        sk.gfx.destroyView(self.image.view);
+        sk.gfx.destroyImage(texture);
+    }
 };
 
 pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
