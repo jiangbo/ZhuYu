@@ -163,12 +163,6 @@ pub fn dpi() f32 {
     return bufferScale * platform.density();
 }
 
-// 查询触摸或鼠标左键是否释放，包含黑边。
-pub fn touchReleased() bool {
-    const rect = math.Rect.init(.square(-1000000), .square(10000000));
-    return input.touch.query(rect).released;
-}
-
 pub fn timestamp() std.Io.Timestamp {
     return std.Io.Timestamp.now(io, .real);
 }

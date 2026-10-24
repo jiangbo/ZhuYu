@@ -276,6 +276,15 @@ pub const touch = struct {
         return null;
     }
 
+    // 查询任意触摸或鼠标左键是否释放，包含黑边。
+    pub fn anyReleased() bool {
+        for (points) |slot| {
+            const point = slot orelse continue;
+            if (point.state == .ended) return true;
+        }
+        return false;
+    }
+
     // 按游戏逻辑坐标查询矩形、圆形等区域内的触摸和鼠标左键。
     pub fn query(area: anytype) State {
         var result: State = .{};
