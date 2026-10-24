@@ -80,7 +80,7 @@ pub fn readAll(gpa: std.mem.Allocator, path: [:0]const u8) ![:0]u8 {
 }
 
 /// 保存用户数据，首次写入时创建存储目录和文件所在的子目录。
-pub fn saveAll(path: [:0]const u8, content: []const u8) !void {
+pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
     if (builtin.os.tag == .emscripten) return em.save(path, content);
     const dir = try std.Io.Dir.cwd().createDirPathOpen(io, dataPath, .{});
     defer dir.close(io);
@@ -101,11 +101,11 @@ pub fn readJson(comptime T: type, path: [:0]const u8) !std.json.Parsed(T) {
 }
 
 /// 将数据序列化为 JSON 后保存，临时缓冲区在写入结束后释放。
-pub fn saveJson(path: [:0]const u8, value: anytype) !void {
+pub fn writeJson(path: [:0]const u8, value: anytype) !void {
     const gpa = memory.allocator.raw;
     const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
     defer gpa.free(content);
-    try saveAll(path, content);
+    try writeAll(path, content);
 }
 
 // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
