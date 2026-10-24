@@ -82,6 +82,12 @@ pub const msdf = struct {
     pub const addStep = @import("tools/msdf.zig").addStep;
 };
 
+// 音频转换工具在宿主上调用 FFmpeg，游戏不引入转码依赖。
+pub const audio = struct {
+    pub const Options = @import("tools/audio.zig").Options;
+    pub const addStep = @import("tools/audio.zig").addStep;
+};
+
 // 资源转换工具在宿主上运行，按需注册游戏项目的构建命令。
 pub const atlas = struct {
     pub const Options = @import("tools/atlas.zig").Options;
