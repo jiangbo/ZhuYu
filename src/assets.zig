@@ -288,14 +288,15 @@ const sound = struct {
 
     fn load(path: Path, option: audio.Sound.Option) audio.Sound {
         const entry = cache.getOrPut(allocator, id(path)) catch oom();
+        // 加载期间再次收到的同音效播放请求不排队、不补播。
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = .{ .option = option };
         // 同步回调只解码，由当前调用负责播放并返回槽位。
         const request = file.load(path, 1, handler);
-        // 返回后若尚未加载，异步回调负责补播。
+        // 返回后若尚未加载，异步回调只补播首次请求。
         request.index = 0;
-        return cache.get(id(path)).?;
+        return entry.value_ptr.*;
     }
 
     fn handler(resp: Response) void {
