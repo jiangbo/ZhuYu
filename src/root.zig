@@ -19,7 +19,7 @@ pub const mouse = input.mouse;
 pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
     pub const widget = @import("extend/widget.zig");
-    pub const store = @import("extend/store.zig");
+    pub const bag = @import("extend/bag.zig");
     pub const storage = @import("extend/storage.zig");
     pub const touch = @import("extend/touch.zig");
     pub const tiled = @import("extend/tiled.zig");
@@ -82,7 +82,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(text);
     std.testing.refAllDecls(extend.debug);
     std.testing.refAllDecls(extend.widget);
-    std.testing.refAllDecls(extend.store);
+    std.testing.refAllDecls(extend.bag);
     std.testing.refAllDecls(extend.storage);
     std.testing.refAllDecls(extend.touch);
     std.testing.refAllDecls(extend.touch.stick);

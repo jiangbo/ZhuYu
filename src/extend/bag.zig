@@ -13,7 +13,8 @@ pub fn StackT(T: type) type {
     };
 }
 
-pub fn StackStore(T: type, len: usize, limitOf: fn (T) u32) type {
+/// 固定槽位的物品容器，按物品各自的数量上限堆叠。
+pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
     return struct {
         pub const Stack = StackT(T);
         pub const Put = struct {
