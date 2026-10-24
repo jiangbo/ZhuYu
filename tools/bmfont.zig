@@ -2,12 +2,13 @@ const std = @import("std");
 const Build = std.Build;
 const Dependency = Build.Dependency;
 const text = @import("text");
+const fontChars = @import("chars.zig");
 
-// BMFont 使用字体文件及其 Windows 字体名称，额外字符直接传入 UTF-8 文本。
+// BMFont 使用字体文件及其 Windows 字体名称，原文可来自文件或目录。
 pub const Options = struct {
     font: []const u8, // 相对于客户端项目的字体文件路径。
     face: []const u8,
-    chars: []const u8 = "", // 额外字符，默认已包含 ASCII。
+    input: ?[]const u8 = null, // 文件或目录，按内容收集 UTF-8 文本，默认 ASCII。
     exe: []const u8 = "bmfont64",
     size: u16,
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
@@ -17,19 +18,15 @@ pub const Options = struct {
 };
 
 // 配置由 build 写入缓存，命令直接生成 PNG 和引擎字体描述。
-pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     const generate = b.addSystemCommand(&.{ options.exe, "-c" });
     generate.setCwd(b.path("."));
     generate.addFileArg(createConfig(b, options));
     generate.addFileInput(b.path(options.font));
-    if (options.chars.len != 0) {
-        // BMFont 依靠 BOM 识别 UTF-8，避免中文被当作本地编码读取。
-        const chars = b.addWriteFiles().add("chars.txt", b.fmt(
-            "\xef\xbb\xbf{s}",
-            .{options.chars},
-        ));
+    if (options.input) |input| {
+        const files = try fontChars.read(b, input);
         generate.addArg("-t");
-        generate.addFileArg(chars);
+        generate.addFileArg(files.bmfont);
     }
     generate.addArg("-o");
     const source = generate.addOutputFileArg("font.fnt");

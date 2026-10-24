@@ -2,11 +2,12 @@ const std = @import("std");
 const Build = std.Build;
 const Dependency = Build.Dependency;
 const text = @import("text");
+const fontChars = @import("chars.zig");
 
 // 游戏配置字体生成，路径以游戏项目为起点。
 pub const Options = struct {
     font: []const u8,
-    charset: ?Build.LazyPath = null, // 默认生成 ASCII，沿用官方字符集语法。
+    input: ?[]const u8 = null, // 文件或目录，按内容收集 UTF-8 文本，默认 ASCII。
     exe: []const u8 = "msdf-atlas-gen",
     size: u16,
     spacing: u8 = 1, // 距离场边界之外增加的字形间距。
@@ -15,13 +16,14 @@ pub const Options = struct {
 };
 
 // 注册生成和转换步骤，根 build 无需了解工具参数和中间文件。
-pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     const generate = b.addSystemCommand(&.{ options.exe, "-font" });
     generate.setCwd(b.path("."));
     generate.addFileArg(b.path(options.font));
-    if (options.charset) |charset| {
+    if (options.input) |input| {
+        const files = try fontChars.read(b, input);
         generate.addArg("-charset");
-        generate.addFileArg(charset);
+        generate.addFileArg(files.msdf);
     }
     generate.addArgs(&.{
         // 引擎着色器取 RGB 三通道的中值恢复距离，因此固定生成 MSDF。
@@ -44,7 +46,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const source = generate.addOutputFileArg("font.json");
     generate.addArg("-imageout");
     const image = generate.addOutputFileArg("font.png");
-    // 字符集可通过 @include 引入文件，每次执行都重新读取这些内容。
+    // 每次显式生成都更新字体图片及描述。
     generate.has_side_effects = true;
 
     // 输入路径保留生成依赖，输出设置直接注入转换程序，不经过命令行。
