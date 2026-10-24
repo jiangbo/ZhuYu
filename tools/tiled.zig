@@ -6,8 +6,7 @@ const zhu = @import("zhu");
 const tiled = zhu.extend.tiled;
 
 pub const Options = struct {
-    input: []const u8, // 递归读取此目录内全部 TSJ 和 TMJ。
-    imageRoot: []const u8, // 与 atlas 的 input 相同。
+    input: []const u8, // 资源根目录，与 atlas 的 input 相同，递归读取 TSJ/TMJ。
     output: []const u8 = "src/zon", // 地图保留相对于 input 的目录结构。
     name: []const u8 = "tiled",
 };
@@ -28,7 +27,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
-    for ([_][]const u8{ options.input, options.imageRoot, options.output }) |path| {
+    for ([_][]const u8{ options.input, options.output }) |path| {
         const absolute = b.root.joinString(b.allocator, path) catch
             @panic("out of memory");
         run.addArg(absolute);
@@ -41,15 +40,15 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
 // 将地图文件内的 GID 区间映射到本次生成的瓦片集顺序。
 const TileSetRange = struct { index: u8, firstGid: u32, endGid: u32 };
 
-// 参数依次为 TSJ/TMJ 源目录、图片源目录、ZON 输出目录。
+// 参数依次为资源根目录、ZON 输出目录，所有资源 ID 均相对于根目录计算。
 // 瓦片集数据保留到所有地图生成结束，地图临时数据逐张释放。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
-    const imageRoot = try std.fs.path.resolveAlloc(allocator, &.{args[2]});
+    const root = try std.fs.path.resolveAlloc(allocator, &.{args[1]});
     const cwd = std.Io.Dir.cwd();
-    var dir = try cwd.openDir(io, args[1], .{ .iterate = true });
+    var dir = try cwd.openDir(io, root, .{ .iterate = true });
     defer dir.close(io);
     var walker = try dir.walk(allocator);
     defer walker.deinit();
@@ -62,10 +61,10 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, extension, ".tmj")) {
             try maps.append(allocator, try allocator.dupe(u8, entry.path));
         } else if (std.mem.eql(u8, extension, ".tsj")) {
-            const path = try std.fs.path.join(allocator, &.{ args[1], entry.path });
+            const path = try std.fs.path.join(allocator, &.{ root, entry.path });
             const convert = Convert{
                 .allocator = allocator,
-                .imageRoot = imageRoot,
+                .root = root,
                 .directory = std.fs.path.dirname(path).?,
             };
             const content = try dir.readFileAlloc(
@@ -80,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
                 content,
                 .{},
             );
-            const id = std.hash.Fnv1a_32.hash(entry.basename);
+            const id = try convert.fileId(path);
             try tileSets.append(allocator, try convert.parseTileSet(id, value));
         }
     }
@@ -89,17 +88,17 @@ pub fn main(init: std.process.Init) !void {
             return a.id < b.id;
         }
     }.lessThan);
-    const tileSetPath = try std.fs.path.join(allocator, &.{ args[3], "tileSet.zon" });
+    const tileSetPath = try std.fs.path.join(allocator, &.{ args[2], "tileSet.zon" });
     try writeZon(io, tileSetPath, tileSets.items);
 
     for (maps.items) |relative| {
         var arena = std.heap.ArenaAllocator.init(init.gpa);
         defer arena.deinit();
         const mapAllocator = arena.allocator();
-        const path = try std.fs.path.join(mapAllocator, &.{ args[1], relative });
+        const path = try std.fs.path.join(mapAllocator, &.{ root, relative });
         const convert = Convert{
             .allocator = mapAllocator,
-            .imageRoot = imageRoot,
+            .root = root,
             .directory = std.fs.path.dirname(path).?,
         };
         const content = try dir.readFileAlloc(io, relative, mapAllocator, .unlimited);
@@ -113,7 +112,7 @@ pub fn main(init: std.process.Init) !void {
         const name = try std.fmt.allocPrint(mapAllocator, "{s}.zon", .{
             relative[0 .. relative.len - 4],
         });
-        const output = try std.fs.path.join(mapAllocator, &.{ args[3], name });
+        const output = try std.fs.path.join(mapAllocator, &.{ args[2], name });
         try writeZon(io, output, map);
         std.log.info("converted map: {s}", .{relative});
     }
@@ -135,28 +134,28 @@ fn writeZon(io: std.Io, path: []const u8, value: anytype) !void {
     try writer.interface.flush();
 }
 
-// 每个源文件明确携带自己的目录，图片路径始终以该文件为起点。
+// 每个源文件携带所在目录，图片和瓦片集引用均以该文件为起点解析。
 const Convert = struct {
     allocator: std.mem.Allocator,
-    imageRoot: []const u8,
+    root: []const u8,
     directory: []const u8,
 
-    // 图片 ID 与 atlas 扫描到的源目录相对路径使用相同的哈希。
-    fn imageId(self: Convert, image: []const u8) !u32 {
+    // 图片和瓦片集统一使用根目录相对路径，图片 ID 与 atlas 保持一致。
+    fn fileId(self: Convert, file: []const u8) !u32 {
         const path = try std.fs.path.resolveAlloc(self.allocator, &.{
-            self.directory, image,
+            self.directory, file,
         });
         const relative = try std.fs.path.relativeAlloc(
             self.allocator,
-            self.imageRoot,
+            self.root,
             null,
-            self.imageRoot,
+            self.root,
             path,
         );
         std.mem.replaceScalar(u8, relative, '\\', '/');
         if (std.mem.eql(u8, relative, "..") or
             std.mem.startsWith(u8, relative, "../") or
-            std.fs.path.isAbsolute(relative)) return error.ImageOutsideRoot;
+            std.fs.path.isAbsolute(relative)) return error.FileOutsideRoot;
         return std.hash.Fnv1a_32.hash(relative);
     }
 
@@ -181,7 +180,7 @@ const Convert = struct {
                 const slot = if (value.columns == 0) tile.id else index;
                 tiles[slot] = .{
                     .id = if (value.columns != 0) tile.id else if (tile.image) |image|
-                        try self.imageId(image)
+                        try self.fileId(image)
                     else
                         0,
                     .objectGroup = group,
@@ -194,7 +193,7 @@ const Convert = struct {
             .id = id,
             .columns = value.columns,
             .tileCount = @intCast(value.tilecount),
-            .image = if (value.image) |image| try self.imageId(image) else 0,
+            .image = if (value.image) |image| try self.fileId(image) else 0,
             .tileSize = .{
                 .x = @floatFromInt(value.tilewidth),
                 .y = @floatFromInt(value.tileheight),
@@ -228,13 +227,13 @@ const Convert = struct {
     ) !tiled.Map {
         const ranges = try self.allocator.alloc(TileSetRange, value.tilesets.len);
         for (ranges, value.tilesets, 0..) |*range, old, index| {
-            const name = std.fs.path.basename(old.source.?);
-            const id = std.hash.Fnv1a_32.hash(name);
+            const source = old.source.?;
+            const id = try self.fileId(source);
             const globalIndex: u8 = for (tileSets, 0..) |set, slot| {
                 if (set.id != id) continue;
                 std.debug.assert(slot < 255);
                 break @intCast(slot);
-            } else std.debug.panic("tileSet is missing: {s}", .{name});
+            } else std.debug.panic("tileSet is missing: {s}", .{source});
             range.* = .{
                 .index = globalIndex,
                 .firstGid = old.firstgid,
@@ -288,7 +287,7 @@ const Convert = struct {
                 layer.type = .image;
                 layer.width = @floatFromInt(old.imagewidth orelse 0);
                 layer.height = @floatFromInt(old.imageheight orelse 0);
-                layer.image = try self.imageId(old.image.?);
+                layer.image = try self.fileId(old.image.?);
             } else if (std.mem.eql(u8, old.type, "tilelayer")) {
                 layer.width = @floatFromInt(old.width orelse 0);
                 layer.height = @floatFromInt(old.height orelse 0);
