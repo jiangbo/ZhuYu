@@ -10,7 +10,9 @@ pub const Options = struct {
     input: []const u8,
     images: []const u8 = "atlas", // 相对于游戏 assets 目录。
     output: []const u8 = "src/zon/atlas.zon",
-    maxSize: u32 = 2048,
+    maxSize: u32 = 1024,
+    mergeFont: bool = false, // 是否将字体图片路径加入图集。
+    font: []const u8 = "src/zon/font.zon", // 开启合入前先生成字体描述。
     name: []const u8 = "atlas", // 同一项目可注册多组资源转换。
 };
 
@@ -27,6 +29,8 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     config.addOption([]const u8, "images", options.images);
     config.addOption([]const u8, "output", options.output);
     config.addOption(u32, "max_size", options.maxSize);
+    config.addOption(bool, "merge_font", options.mergeFont);
+    config.addOption([]const u8, "font", options.font);
     const tool = b.addExecutable(.{
         .name = "zhuyu-atlas",
         .root_module = b.createModule(.{
@@ -58,6 +62,12 @@ const Atlas = struct {
     images: []const Image,
 };
 
+// 只读取字体图片及尺寸，字形数据仍由字体描述管理。
+const Font = struct {
+    imageSize: struct { x: f32, y: f32 },
+    images: []const []const u8,
+};
+
 const Source = struct {
     path: []const u8,
     id: u32,
@@ -82,6 +92,8 @@ pub fn main(init: std.process.Init) !void {
         .images = config.images,
         .output = config.output,
         .maxSize = config.max_size,
+        .mergeFont = config.merge_font,
+        .font = config.font,
     });
 }
 
@@ -196,6 +208,41 @@ const AtlasOutput = struct {
 fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !void {
     const sources = output.sources;
     const layout = output.layout;
+    const cwd = std.Io.Dir.cwd();
+    var fontImages: []const []const u8 = &.{};
+    if (output.options.mergeFont) {
+        const path = output.options.font;
+        const source = try cwd.readFileAllocOptions(
+            io,
+            path,
+            allocator,
+            .unlimited,
+            .of(u8),
+            0,
+        );
+        var diagnostics: std.zon.parse.Diagnostics = undefined;
+        const font = std.zon.parse.fromSlice(Font, .{
+            .gpa = allocator,
+            .arena = allocator,
+            .source = source,
+            .diagnostics = &diagnostics,
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            if (err == error.ParseZon) diagnostics.log(path);
+            return err;
+        };
+        // 字体图片直接作为数组层，必须与装箱后的实际页尺寸相同。
+        const size = font.imageSize;
+        if (size.x != @as(f32, @floatFromInt(layout.width)) or
+            size.y != @as(f32, @floatFromInt(layout.height)))
+        {
+            std.log.err("font {s}: size {d}x{d}, atlas size {}x{}", .{
+                path, size.x, size.y, layout.width, layout.height,
+            });
+            return error.FontSizeMismatch;
+        }
+        fontImages = font.images;
+    }
     const pixelCount = std.math.mul(
         usize,
         layout.width,
@@ -217,8 +264,9 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         }, source, placement);
     }
 
-    const cwd = std.Io.Dir.cwd();
-    const imagePaths = try allocator.alloc([]const u8, layout.pageCount);
+    // 纹理数组的总页数包含字体图片。
+    const pageCount = layout.pageCount + fontImages.len;
+    const imagePaths = try allocator.alloc([]const u8, pageCount);
     for (pages, 0..) |page, index| {
         const bytes = try encodePng(allocator, .{
             .pixels = page,
@@ -246,6 +294,8 @@ fn writeAtlas(io: std.Io, allocator: std.mem.Allocator, output: AtlasOutput) !vo
         std.mem.replaceScalar(u8, resource, '\\', '/');
         imagePaths[index] = resource;
     }
+    // 仅追加原字体图片路径，保持字体页顺序，不修改图片及字形坐标。
+    @memcpy(imagePaths[layout.pageCount..], fontImages);
     const images = try allocator.alloc(Image, sources.len);
     for (images, sources, layout.placements) |*image, source, placement| {
         image.* = .{
