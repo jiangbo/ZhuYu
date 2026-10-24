@@ -3,6 +3,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const memory = @import("../internal/memory.zig");
 
+const Parsed = std.json.Parsed;
+const XChaCha = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
+
 var io: std.Io = undefined;
 // 初始化时复制路径，避免保存启动环境变量中的借用切片。
 var pathBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -92,7 +95,7 @@ pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
 }
 
 /// 读取 JSON 存档；调用者通过 deinit 释放结果及其字符串和数组。
-pub fn readJson(comptime T: type, path: [:0]const u8) !std.json.Parsed(T) {
+pub fn readJson(comptime T: type, path: [:0]const u8) !Parsed(T) {
     const gpa = memory.allocator.raw;
     const content = try readAll(gpa, path);
     defer gpa.free(content);
@@ -106,6 +109,34 @@ pub fn writeJson(path: [:0]const u8, value: anytype) !void {
     const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
     defer gpa.free(content);
     try writeAll(path, content);
+}
+
+/// 使用 XChaCha20-Poly1305 校验并解密 JSON。
+/// 返回结果拥有自己的数据，调用者通过 deinit 释放。
+pub fn readXChaCha(comptime T: type, path: [:0]const u8, key: [32]u8) !Parsed(T) {
+    const gpa = memory.allocator.raw;
+    const source = try readAll(gpa, path);
+    defer gpa.free(source);
+    if (source.len < 40) return error.InvalidData;
+
+    // 文件依次存放 24 字节 nonce、16 字节校验标签和密文。
+    const content = source[40..];
+    try XChaCha.decrypt(content, content, source[24..40].*, "", source[0..24].*, key);
+    return std.json.parseFromSlice(T, gpa, content, .{ .allocate = .alloc_always });
+}
+
+/// 将对象序列化为 JSON，使用 XChaCha20-Poly1305 加密后保存。
+/// 每次写入生成新的安全随机 nonce，密钥由应用提供。
+pub fn writeXChaCha(path: [:0]const u8, value: anytype, key: [32]u8) !void {
+    const gpa = memory.allocator.raw;
+    const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
+    defer gpa.free(content);
+
+    const buffer = try gpa.alloc(u8, content.len + 40);
+    defer gpa.free(buffer);
+    try io.randomSecure(buffer[0..24]);
+    XChaCha.encrypt(buffer[40..], buffer[24..40], content, "", buffer[0..24].*, key);
+    try writeAll(path, buffer);
 }
 
 // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
@@ -167,3 +198,50 @@ const em = struct {
         return memory.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
     }
 };
+
+test "XChaCha JSON files round trip and reject changed data" {
+    // 使用临时目录和检测泄漏的分配器，验证完整文件读写。
+    io = std.testing.io;
+    memory.allocator = .{ .raw = std.testing.allocator };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const pathLen = try tmp.dir.realPath(io, &pathBuffer);
+    dataPath = pathBuffer[0..pathLen];
+
+    const Save = struct { name: []const u8, items: []const u16, level: u16 };
+    const value: Save = .{ .name = "玩家", .items = &.{ 2, 7, 9 }, .level = 12 };
+    try writeXChaCha("save/1.sav", value, @splat(7));
+    var loaded = try readXChaCha(Save, "save/1.sav", @splat(7));
+    defer loaded.deinit();
+    try std.testing.expectEqualDeep(value, loaded.value);
+
+    // 同一个对象重复保存，nonce 和密文应随写入变化。
+    const first = try readAll(std.testing.allocator, "save/1.sav");
+    defer std.testing.allocator.free(first);
+    try writeXChaCha("save/1.sav", value, @splat(7));
+    const second = try readAll(std.testing.allocator, "save/1.sav");
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqual(first.len, second.len);
+    try std.testing.expect(!std.mem.eql(u8, first[0..24], second[0..24]));
+    try std.testing.expect(!std.mem.eql(u8, first[40..], second[40..]));
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        readXChaCha(Save, "save/1.sav", @splat(8)),
+    );
+
+    // nonce、标签或密文被修改时，必须在解析 JSON 前拒绝读取。
+    for ([_]usize{ 0, 24, 40 }) |index| {
+        second[index] ^= 1;
+        try writeAll("save/1.sav", second);
+        try std.testing.expectError(
+            error.AuthenticationFailed,
+            readXChaCha(Save, "save/1.sav", @splat(7)),
+        );
+        second[index] ^= 1;
+    }
+    try writeAll("save/1.sav", second[0..39]);
+    try std.testing.expectError(
+        error.InvalidData,
+        readXChaCha(Save, "save/1.sav", @splat(7)),
+    );
+}
