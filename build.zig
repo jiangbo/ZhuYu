@@ -76,6 +76,12 @@ pub const bmfont = struct {
     pub const addStep = @import("tools/bmfont.zig").addStep;
 };
 
+// fontbm 原生跨平台运行，输出普通位图字体。
+pub const fontbm = struct {
+    pub const Options = @import("tools/fontbm.zig").Options;
+    pub const addStep = @import("tools/fontbm.zig").addStep;
+};
+
 // MSDF 的参数和生成流程由工具自身管理。
 pub const msdf = struct {
     pub const Options = @import("tools/msdf.zig").Options;

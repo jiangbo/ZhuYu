@@ -32,13 +32,31 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     // 描述文件和多页图集由同一次命令生成，每次显式执行都更新。
     generate.has_side_effects = true;
 
+    addConvertStep(b, dep, source, .{
+        .images = options.images,
+        .output = options.output,
+        .name = "bmfont",
+    });
+}
+
+// BMFont 和 fontbm 共用二进制描述转换，生成相同的引擎资源格式。
+pub fn addConvertStep(
+    b: *Build,
+    dep: *Dependency,
+    source: Build.LazyPath,
+    options: struct {
+        images: []const u8,
+        output: []const u8,
+        name: []const u8,
+    },
+) void {
     // 描述文件路径保留生成依赖，输出设置通过模块注入转换程序。
     const config = b.addOptions();
     config.addOptionPath("source", source);
     config.addOption([]const u8, "output", options.output);
     config.addOption([]const u8, "images", options.images);
     const tool = b.addExecutable(.{
-        .name = "zhuyu-bmfont",
+        .name = b.fmt("zhuyu-{s}", .{options.name}),
         .root_module = b.createModule(.{
             .root_source_file = dep.path("tools/bmfont.zig"),
             .target = b.graph.host,
@@ -51,9 +69,9 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
-    // 转换会更新游戏源码和资源，每次显式执行 bmfont 时都写入。
+    // 转换会更新游戏源码和资源，每次显式生成时都写入。
     run.has_side_effects = true;
-    b.step("bmfont", "Generate bitmap font").dependOn(&run.step);
+    b.step(options.name, "Generate bitmap font").dependOn(&run.step);
 }
 
 // BMFont 用 BOM 识别 UTF-8，字表编码与缓存文件由工具自身负责。
