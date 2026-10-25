@@ -24,9 +24,8 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     generate.addFileArg(createConfig(b, options));
     generate.addFileInput(b.path(options.font));
     if (options.input) |input| {
-        const files = try fontChars.read(b, input);
         generate.addArg("-t");
-        generate.addFileArg(files.bmfont);
+        generate.addFileArg(try createCharset(b, input));
     }
     generate.addArg("-o");
     const source = generate.addOutputFileArg("font.fnt");
@@ -55,6 +54,19 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     // 转换会更新游戏源码和资源，每次显式执行 bmfont 时都写入。
     run.has_side_effects = true;
     b.step("bmfont", "Generate bitmap font").dependOn(&run.step);
+}
+
+// BMFont 用 BOM 识别 UTF-8，字表编码与缓存文件由工具自身负责。
+fn createCharset(b: *Build, input: []const u8) !Build.LazyPath {
+    const codes = try fontChars.read(b, input);
+    var content: std.ArrayList(u8) = .empty;
+    try content.appendSlice(b.allocator, "\xef\xbb\xbf");
+    for (codes) |code| {
+        var buffer: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(code, &buffer);
+        try content.appendSlice(b.allocator, buffer[0..len]);
+    }
+    return b.addWriteFiles().add("bmfont.txt", content.items);
 }
 
 // 固定生成 BMFont v3 二进制描述和 PNG，匹配字体解析和引擎采样方式。
