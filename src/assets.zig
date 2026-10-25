@@ -445,7 +445,7 @@ pub const file = struct {
             std.debug.panic(msg, .{ resp.path, err });
         };
         const path = resp.path;
-        std.log.info("loaded from: {s}", .{path});
+        std.log.info("loaded: {s}", .{path});
 
         const value = cache.getPtr(id(path)).?;
         value.data = .{ .bytes = resp.buffer, .owned = true };
