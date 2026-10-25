@@ -339,10 +339,11 @@ fn parseRows(decode: *const Decode, palette: []const u8) !void {
                 dest[x * 4 + 3] = 255;
             },
             .gray => for (row, 0..) |value, x| {
-                dest[x * 4 + 0] = 255;
-                dest[x * 4 + 1] = 255;
-                dest[x * 4 + 2] = 255;
-                dest[x * 4 + 3] = value;
+                // 灰度表示颜色亮度，不作为字体覆盖率解释。
+                dest[x * 4 + 0] = value;
+                dest[x * 4 + 1] = value;
+                dest[x * 4 + 2] = value;
+                dest[x * 4 + 3] = 255;
             },
             .indexed, .magic => for (row, 0..) |index, x| {
                 const color = @as(usize, index) * 4;
@@ -695,8 +696,8 @@ test "load gray png" {
     defer allocator.free(image.data);
 
     try std.testing.expectEqualSlices(u8, &.{
-        255, 255, 255, 10,
-        255, 255, 255, 20,
+        10, 10, 10, 255,
+        20, 20, 20, 255,
     }, image.data);
 }
 
