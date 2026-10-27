@@ -263,6 +263,11 @@ pub const view = struct {
         return cache.get(source).?;
     }
 
+    // 返回可修改的配置指针，缓存扩容或移除记录后不能继续持有。
+    pub fn getPtr(source: graphics.View) *Info {
+        return cache.getPtr(source).?;
+    }
+
     // 提前释放采样视图，同时移除记录，退出时不再重复销毁。
     pub fn destroy(source: graphics.View) void {
         _ = cache.remove(source);
