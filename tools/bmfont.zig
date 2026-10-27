@@ -1,7 +1,7 @@
 const std = @import("std");
 const Build = std.Build;
 const Dependency = Build.Dependency;
-const text = @import("text");
+const text = @import("text").static;
 const fontChars = @import("chars.zig");
 
 // BMFont 使用字体文件及其 Windows 字体名称，原文可来自文件或目录。
@@ -167,16 +167,11 @@ pub fn main(init: std.process.Init) !void {
     for (lists) |*list| list.* = .empty;
 
     const size = source.info.fontSize;
-    // 所有页面共用 ASCII 字宽表，未收录的控制字符不占宽度。
-    const advance = try gpa.alloc(f32, 128);
-    @memset(advance, 0);
+    // 前进距离直接保存在字符中，与偏移和字形尺寸使用相同单位。
     for (source.chars) |char| {
-        if (char.id < 128) {
-            advance[char.id] = @as(f32, @floatFromInt(char.xAdvance)) /
-                @as(f32, @floatFromInt(size));
-        }
         try lists[char.page].append(gpa, .{
             .id = char.id,
+            .advance = @floatFromInt(char.xAdvance),
             .rect = .{
                 .min = .{
                     .x = @floatFromInt(char.x),
@@ -225,7 +220,6 @@ pub fn main(init: std.process.Init) !void {
     const result = text.Font{
         .size = @floatFromInt(size),
         .lineHeight = @floatFromInt(source.common.lineHeight),
-        .advance = advance,
         .imageSize = .{
             .x = @floatFromInt(source.common.scaleW),
             .y = @floatFromInt(source.common.scaleH),

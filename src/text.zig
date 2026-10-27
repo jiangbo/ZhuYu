@@ -14,7 +14,6 @@ pub const String = []const u8;
 var fontScale: f32 = undefined;
 var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
 var fontLineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
-var advances: []const f32 = undefined; // 借用当前字体的 128 项 ASCII 字宽比例。
 
 pub fn changeFontSize(size: f32) void {
     fontScale = size / fontSize;
@@ -129,8 +128,9 @@ fn layout(
             continue;
         }
 
-        const step = if (code < 128) advances[code] else 1;
-        const advance = step * fontSize * scale.x;
+        // 测量和绘制共用字形度量。
+        const glyph = static.findGlyph(code);
+        const advance = glyph.advance * scale.x;
         if (width > 0 and width + option.spacing + advance > option.max) {
             // 换行后新行的行底超出高度，当前字符留给下一段
             if ((line + 1) * height > maxHeight) {
@@ -146,7 +146,6 @@ fn layout(
 
         if (!render) continue;
 
-        const glyph = static.findGlyph(code, scale.scale(fontSize));
         if (glyph.rect.size.x > 0 and glyph.rect.size.y > 0) {
             const charPos = drawPos.add(glyph.rect.min.mul(scale));
             batch.drawImage(glyph.image, charPos, .{
@@ -221,14 +220,13 @@ pub const static = struct {
     pub const Font = struct {
         size: f32,
         lineHeight: f32,
-        advance: []const f32, // 按码位保存 ASCII 字宽，非 ASCII 固定为 1。
         imageSize: Vector2,
         images: []const [:0]const u8,
         pages: []const Page,
     };
 
     pub const Page = struct { min: u32, max: u32, chars: []const Char };
-    pub const Char = struct { id: u32, rect: math.Rect, offset: Vector2 };
+    pub const Char = struct { id: u32, rect: math.Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
     var data: static.Font = undefined;
@@ -239,11 +237,9 @@ pub const static = struct {
     pub fn init(zon: static.Font, filter: graphics.Filter) void {
         std.debug.assert(zon.images.len == zon.pages.len);
         std.debug.assert(zon.images.len <= images.len);
-        std.debug.assert(zon.advance.len == 128);
         data = zon;
         fontSize = zon.size;
         fontLineHeight = zon.lineHeight;
-        advances = zon.advance;
 
         if (assets.getImage(assets.id(data.images[0])) == null) {
             assets.loadAtlas(.{
@@ -264,12 +260,13 @@ pub const static = struct {
     }
 
     // 页范围筛选后在字符数组中二分查找，缺字使用预生成的问号。
-    pub fn findGlyph(code: u32, _: Vector2) graphics.Glyph {
+    pub fn findGlyph(code: u32) graphics.Glyph {
         const entry = searchGlyph(code) orelse invalidGlyph;
         const char = entry.char;
         return .{
             .image = images[entry.page].sub(char.rect),
             .rect = .init(char.offset, char.rect.size),
+            .advance = char.advance,
         };
     }
 

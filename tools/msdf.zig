@@ -1,7 +1,7 @@
 const std = @import("std");
 const Build = std.Build;
 const Dependency = Build.Dependency;
-const text = @import("text");
+const text = @import("text").static;
 const fontChars = @import("chars.zig");
 
 // 游戏配置字体生成，路径以游戏项目为起点。
@@ -311,12 +311,10 @@ fn generate(
     return json.value;
 }
 
-// 各页共用字体参数与 ASCII 字宽，图片和字形页按相同顺序保存。
+// 各页共用字体参数，字符保存实际前进距离，图片和字形页按相同顺序保存。
 fn convert(ctx: *const Context, pages: []const Page) !text.Font {
     const images = try ctx.gpa.alloc([:0]const u8, pages.len);
     const fontPages = try ctx.gpa.alloc(text.Page, pages.len);
-    const advance = try ctx.gpa.alloc(f32, 128);
-    @memset(advance, 0);
     for (pages, images, fontPages) |output, *image, *page| {
         const source = output.font;
         const size = source.atlas.size;
@@ -325,11 +323,11 @@ fn convert(ctx: *const Context, pages: []const Page) !text.Font {
             pages[0].font.metrics.lineHeight);
         const chars = try ctx.gpa.alloc(text.Char, source.glyphs.len);
         for (chars, source.glyphs) |*char, glyph| {
-            if (glyph.unicode < 128) advance[glyph.unicode] = glyph.advance;
             const bounds = glyph.atlasBounds;
             const plane = glyph.planeBounds;
             char.* = .{
                 .id = glyph.unicode,
+                .advance = glyph.advance * size,
                 .rect = .{
                     .min = .{ .x = bounds.left, .y = bounds.top },
                     .size = .{
@@ -354,7 +352,6 @@ fn convert(ctx: *const Context, pages: []const Page) !text.Font {
     return .{
         .size = pages[0].font.atlas.size,
         .lineHeight = pages[0].font.metrics.lineHeight * pages[0].font.atlas.size,
-        .advance = advance,
         .imageSize = .{
             .x = @floatFromInt(pages[0].font.atlas.width),
             .y = @floatFromInt(pages[0].font.atlas.height),
