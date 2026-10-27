@@ -1,4 +1,5 @@
 const std = @import("std");
+const options = @import("options");
 
 const assets = @import("assets.zig");
 const math = @import("math.zig");
@@ -11,9 +12,11 @@ const Vector2 = math.Vector2;
 const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
+// 编译时选定查找实现，排版与绘制共用同一个检索入口。
+const font = if (options.font) @import("internal/font.zig") else static;
+
 var fontScale: f32 = undefined;
 var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
-var fontLineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
 
 pub fn changeFontSize(size: f32) void {
     fontScale = size / fontSize;
@@ -103,7 +106,7 @@ fn layout(
     comptime render: bool,
 ) Layout {
     const scale = option.scale.scale(fontScale);
-    const height = fontLineHeight * scale.y;
+    const height = font.lineHeight * scale.y;
     const maxHeight = heightLimit orelse std.math.floatMax(f32);
     std.debug.assert(height <= maxHeight);
 
@@ -128,8 +131,8 @@ fn layout(
             continue;
         }
 
-        // 测量和绘制共用字形度量。
-        const glyph = static.findGlyph(code);
+        // 测量和绘制共用字形度量，动态字体首次查找时生成并缓存。
+        const glyph = font.findGlyph(code);
         const advance = glyph.advance * scale.x;
         if (width > 0 and width + option.spacing + advance > option.max) {
             // 换行后新行的行底超出高度，当前字符留给下一段
@@ -184,7 +187,7 @@ pub fn measureLines(lines: Lines, spacing: f32) Vector2 {
 }
 
 pub fn lineHeight(option: Option) f32 {
-    return fontLineHeight * fontScale * option.scale.y;
+    return font.lineHeight * fontScale * option.scale.y;
 }
 
 pub fn sizeToScale(size: f32) Vector2 {
@@ -215,6 +218,19 @@ pub fn nextIndex(str: []const u8, index: usize) usize {
     return index + (next catch unreachable);
 }
 
+// 动态字体统一管理初始化、字号更新和资源释放。
+pub const dynamic = struct {
+    // 初始化动态字体，并保存基准字号和绘制缩放。
+    pub fn init(option: font.Option) void {
+        font.init(option);
+        fontSize = option.size;
+        fontScale = 1;
+    }
+
+    pub const resize = font.resize;
+    pub const deinit = font.deinit;
+};
+
 // 预生成字体直接借用有序数组，不建立运行时哈希索引。
 pub const static = struct {
     pub const Font = struct {
@@ -229,6 +245,7 @@ pub const static = struct {
     pub const Char = struct { id: u32, rect: math.Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
+    pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var data: static.Font = undefined;
     var images: [8]Image = undefined;
     var invalidGlyph: Entry = undefined;
@@ -239,7 +256,7 @@ pub const static = struct {
         std.debug.assert(zon.images.len <= images.len);
         data = zon;
         fontSize = zon.size;
-        fontLineHeight = zon.lineHeight;
+        static.lineHeight = zon.lineHeight;
 
         if (assets.getImage(assets.id(data.images[0])) == null) {
             assets.loadAtlas(.{

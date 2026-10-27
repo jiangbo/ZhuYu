@@ -6,6 +6,71 @@ EM_JS_DEPS(zhu_storage, "$UTF8ToString");
 // 让静态库链接器带入本文件中的 JavaScript 函数描述。
 void zhu_web_keep(void) {}
 
+// 仅 Web 的必要宿主胶水：复用离屏画布，输出 RGBA 像素到 WASM 内存。
+// 初始化成功返回 0，无法获取绘图上下文时返回 1。
+EM_JS(int, zhu_font_open, (const char *family, unsigned int weight), {
+    const canvas = typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return 1;
+    // 字体系统只允许打开一个字体，直接保存供后续调用复用。
+    Module.zhu_font = { canvas, context, family: UTF8ToString(family), weight };
+    return 0;
+});
+
+EM_JS(void, zhu_font_close, (void), {
+    Module.zhu_font = null;
+});
+
+// 设置当前像素字号并返回字体度量，后续字形生成复用此设置。
+EM_JS(void, zhu_font_metrics, (float size, float *out), {
+    const zhuFont = Module.zhu_font;
+    zhuFont.style = zhuFont.weight + " " + size + "px " + zhuFont.family;
+    zhuFont.context.font = zhuFont.style;
+    const metrics = zhuFont.context.measureText("国Mg");
+    const ascent = metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent;
+    const descent = metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent;
+    HEAPF32[out >> 2] = ascent;
+    HEAPF32[(out >> 2) + 1] = descent;
+    HEAPF32[(out >> 2) + 2] = Math.max(size, ascent + descent);
+});
+
+// 一次返回字形信息和 RGBA 像素：0 成功，1 容量不足。
+EM_JS(int, zhu_font_pixels,
+    (unsigned int code, float *info, unsigned char *out, unsigned int len), {
+    const zhuFont = Module.zhu_font;
+    const context = zhuFont.context;
+    const text = String.fromCodePoint(code);
+    const metrics = context.measureText(text);
+    const left = Math.floor(-metrics.actualBoundingBoxLeft);
+    const top = Math.ceil(metrics.actualBoundingBoxAscent);
+    const width = Math.ceil(metrics.actualBoundingBoxRight) - left;
+    const height = top + Math.ceil(metrics.actualBoundingBoxDescent);
+    // Char 的内存顺序为 x、y、width、height、advance，基线上方的 y 为负。
+    HEAPF32[info >> 2] = left;
+    HEAPF32[(info >> 2) + 1] = -top;
+    HEAPF32[(info >> 2) + 2] = width;
+    HEAPF32[(info >> 2) + 3] = height;
+    HEAPF32[(info >> 2) + 4] = metrics.width;
+    if (width === 0 || height === 0) return 0;
+    // 包含一像素透明边框，Zig 可以将整块数据直接写入上传缓冲。
+    const copyWidth = width + 2;
+    const copyHeight = height + 2;
+    // 容量不足时不写入像素，等待调用方扩容后再次调用。
+    if (copyWidth * copyHeight * 4 > len) return 1;
+
+    // 修改画布尺寸会重置绘图状态，恢复 metrics 已设置的字体和字号。
+    zhuFont.canvas.width = copyWidth;
+    zhuFont.canvas.height = copyHeight;
+    context.font = zhuFont.style;
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "white";
+    context.fillText(text, 1 - left, 1 + top);
+    const data = context.getImageData(0, 0, copyWidth, copyHeight).data;
+    HEAPU8.set(data, out);
+    return 0;
+});
+
 // 查询主要指针是否为粗略指针，初始化时用于推测是否缺少实体键盘。
 EM_JS(int, zhu_coarse_pointer, (void), {
     return window.matchMedia('(pointer: coarse)').matches ? 1 : 0;

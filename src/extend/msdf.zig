@@ -1,4 +1,5 @@
 const std = @import("std");
+const options = @import("options");
 const sk = @import("sokol");
 const shader = @import("shader");
 const batch = @import("../batch.zig");
@@ -10,6 +11,7 @@ pub var stack: std.ArrayList(sk.gfx.Pipeline) = .initBuffer(&buffer);
 
 // 初始化 MSDF 字体和渲染资源。
 pub fn init(zon: text.static.Font) void {
+    if (comptime options.font) return;
     text.static.init(zon, .linear);
     const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
     pipeline = batch.createPipeline(desc);
@@ -18,11 +20,13 @@ pub fn init(zon: text.static.Font) void {
 
 // 切换后续文字使用 MSDF 渲染状态。
 pub fn begin() void {
+    if (comptime options.font) return;
     stack.appendAssumeCapacity(batch.queryPipeline());
     batch.usePipeline(pipeline);
 }
 
 // 恢复进入 MSDF 前使用的流水线。
 pub fn end() void {
+    if (comptime options.font) return;
     batch.usePipeline(stack.pop().?);
 }

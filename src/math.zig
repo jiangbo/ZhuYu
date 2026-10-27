@@ -316,7 +316,7 @@ pub const Vector3 = extern struct {
     }
 };
 
-pub const Rect = struct {
+pub const Rect = extern struct {
     min: Vector2 = .zero,
     size: Vector2 = .one,
 

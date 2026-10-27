@@ -55,6 +55,10 @@ pub const OomAllocator = struct {
         return self.raw.alloc(T, count) catch oom();
     }
 
+    pub fn realloc(self: OomAllocator, data: anytype, count: usize) @TypeOf(data) {
+        return self.raw.realloc(data, count) catch oom();
+    }
+
     pub fn dupe(self: OomAllocator, T: type, data: []const T) []T {
         return self.raw.dupe(T, data) catch oom();
     }
