@@ -9,8 +9,8 @@ var buffer: [8]sk.gfx.Pipeline = undefined;
 pub var stack: std.ArrayList(sk.gfx.Pipeline) = .initBuffer(&buffer);
 
 // 初始化 MSDF 字体和渲染资源。
-pub fn init(zon: text.Font) void {
-    text.init(zon, .linear);
+pub fn init(zon: text.static.Font) void {
+    text.static.init(zon, .linear);
     const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
     pipeline = batch.createPipeline(desc);
     stack.clearRetainingCapacity();
