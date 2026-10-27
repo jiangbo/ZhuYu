@@ -63,6 +63,9 @@ pub var circleImage: graphics.Image = undefined;
 pub var vertices: std.ArrayList(Vertex) = .empty;
 pub var commands: std.ArrayList(Command) = .empty;
 
+// 待更新的 image 列表，调用方负责管理内容和内存，batch 只读取。
+pub var imageUpdates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
+
 var vertexHandle: sk.gfx.Buffer = undefined;
 var pipeline: sk.gfx.Pipeline = undefined;
 var drawState: DrawCommand = undefined;
@@ -348,6 +351,8 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
 pub fn flush() void {
     if (currentDraw()) |draw| draw.end = vertices.items.len;
 
+    // 上传由调用方准备好的纹理数据，必须在开始渲染通道之前执行。
+    for (imageUpdates.items) |update| sk.gfx.copyBufferToImage(update);
     uploadVertices();
     var activePass, var flipY = .{ false, false };
     var viewport: math.Rect = undefined;

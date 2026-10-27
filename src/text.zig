@@ -11,10 +11,6 @@ const Vector2 = math.Vector2;
 const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
-// 图集取样使用纹理像素，绘制尺寸和偏移使用基准字号的逻辑单位。
-// 例如取样 32×32 像素、绘制 16×16 逻辑尺寸，目标像素比例为 2 时覆盖 32×32 像素。
-pub const Glyph = struct { image: Image, rect: Rect };
-
 var fontScale: f32 = undefined;
 var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
 var fontLineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
@@ -268,7 +264,7 @@ pub const static = struct {
     }
 
     // 页范围筛选后在字符数组中二分查找，缺字使用预生成的问号。
-    pub fn findGlyph(code: u32, _: Vector2) Glyph {
+    pub fn findGlyph(code: u32, _: Vector2) graphics.Glyph {
         const entry = searchGlyph(code) orelse invalidGlyph;
         const char = entry.char;
         return .{

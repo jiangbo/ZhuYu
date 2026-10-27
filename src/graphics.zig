@@ -163,6 +163,9 @@ pub fn loopFramesX(comptime count: u8, size: Vector2, d: f32) //
 
 pub const Filter = enum { nearest, linear };
 
+// 图集取样使用纹理像素，绘制区域使用相对排版起点的逻辑单位。
+pub const Glyph = struct { image: Image, rect: math.Rect };
+
 pub const Image = struct {
     view: sk.gfx.View = .{},
     sampler: sk.gfx.Sampler = .{},
