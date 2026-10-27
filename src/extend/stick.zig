@@ -101,16 +101,25 @@ pub fn reset() void {
     offset = null;
 }
 
-// 在窗口 DPI 坐标下绘制浮动摇杆和功能键盘。
-pub fn draw() void {
+// 切换到全窗口视口和摇杆使用的 DPI 相机。
+pub fn begin() void {
     const size = window.rawSize;
     batch.useViewport(.init(.zero, size), size);
-    defer batch.useViewport(window.viewRect, camera.size);
     camera.push(stickCamera);
-    defer camera.pop();
+}
 
+// 恢复进入绘制前的相机和窗口视口。
+pub fn end() void {
+    camera.pop();
+    batch.useViewport(window.viewRect, camera.size);
+}
+
+// 在窗口坐标下绘制图形和文字。
+pub fn draw() void {
+    begin();
     drawImage();
     drawText();
+    end();
 }
 
 // 复用 pad 绘制功能按钮，操作时额外绘制浮动摇杆。

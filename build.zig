@@ -7,14 +7,11 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
-    // 编译期决定菜单文字是否自动使用 MSDF 管线。
-    const useMsdf = b.option(bool, "msdf", "Use MSDF for menu text") orelse false;
     // 应用创建依赖时传入，开启后只从程序尾部的资源包加载。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     const options = b.addOptions();
-    options.addOption(bool, "msdf", useMsdf);
     options.addOption(bool, "append", append);
     options.addOption(bool, "midi", midi);
 

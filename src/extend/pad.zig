@@ -136,16 +136,25 @@ pub fn reset() void {
     pressedKeys = .initFill(null);
 }
 
-// 切换到全窗口视口，绘制形状的边框、填充和文字。
-pub fn draw() void {
+// 切换到全窗口视口和按钮使用的 DPI 相机。
+pub fn begin() void {
     const size = window.rawSize;
     batch.useViewport(.init(.zero, size), size);
-    defer batch.useViewport(window.viewRect, camera.size);
     camera.push(buttonCamera);
-    defer camera.pop();
+}
 
+// 恢复进入绘制前的相机和窗口视口。
+pub fn end() void {
+    camera.pop();
+    batch.useViewport(window.viewRect, camera.size);
+}
+
+// 在窗口坐标下绘制图形和文字。
+pub fn draw() void {
+    begin();
     drawImage();
     drawText();
+    end();
 }
 
 // 遍历可见按钮，绘制边框和填充。
@@ -185,11 +194,8 @@ pub fn drawShape(shape: math.Shape, down: bool) void {
     }
 }
 
-// 根据编译期选项切换 MSDF 管线，绘制按钮文字。
+// 绘制按钮文字，文字流水线由调用方设置。
 pub fn drawText() void {
-    if (comptime text.useMsdf) text.msdf.begin();
-    defer if (comptime text.useMsdf) text.msdf.end();
-
     for (current.values) |option| {
         if (option.hidden) continue;
         const label = option.label orelse continue;

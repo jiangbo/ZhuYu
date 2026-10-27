@@ -55,12 +55,47 @@ pub fn update() void {
     }
 }
 
-// 绘制当前模式的方向控件和共用功能按钮。
-pub fn draw() void {
+// 开始手柄绘制，切换到当前模式的窗口视口和相机。
+pub fn begin() void {
     if (!enabled) return;
     switch (mode) {
-        .pad => pad.draw(),
-        .stick => stick.draw(),
+        .pad => pad.begin(),
+        .stick => stick.begin(),
+    }
+}
+
+// 结束手柄绘制，恢复进入前的视口和相机。
+pub fn end() void {
+    if (!enabled) return;
+    switch (mode) {
+        .pad => pad.end(),
+        .stick => stick.end(),
+    }
+}
+
+// 绘制当前模式的方向控件和共用功能按钮。
+pub fn draw() void {
+    begin();
+    drawImage();
+    drawText();
+    end();
+}
+
+// 在手柄绘制范围内绘制当前模式的图形。
+pub fn drawImage() void {
+    if (!enabled) return;
+    switch (mode) {
+        .pad => pad.drawImage(),
+        .stick => stick.drawImage(),
+    }
+}
+
+// 在手柄绘制范围内绘制文字，流水线由调用方设置。
+pub fn drawText() void {
+    if (!enabled) return;
+    switch (mode) {
+        .pad => pad.drawText(),
+        .stick => stick.drawText(),
     }
 }
 

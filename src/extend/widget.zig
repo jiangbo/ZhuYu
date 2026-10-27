@@ -296,11 +296,8 @@ pub fn MenuT(comptime T: type) type {
             }
         }
 
-        // 根据编译期选项切换 MSDF 管线，绘制标题和按钮文字。
+        // 绘制标题和按钮文字，文字流水线由调用方设置。
         pub fn drawText(self: Self) void {
-            if (comptime text.useMsdf) text.msdf.begin();
-            defer if (comptime text.useMsdf) text.msdf.end();
-
             const title = self.title;
             if (title.text.len != 0) {
                 const position = self.position.add(title.position);
