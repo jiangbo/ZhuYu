@@ -66,6 +66,7 @@ pub var commands: std.ArrayList(Command) = .empty;
 var vertexHandle: sk.gfx.Buffer = undefined;
 var pipeline: sk.gfx.Pipeline = undefined;
 var drawState: DrawCommand = undefined;
+var viewportSize: Vector2 = undefined; // beginDraw 初始化的当前视口像素尺寸。
 var flushed = false;
 
 pub fn init(vertex: []Vertex, cmds: []Command) void {
@@ -92,6 +93,7 @@ pub fn beginDraw() void {
     vertices.clearRetainingCapacity();
     commands.clearRetainingCapacity();
     flushed = false;
+    viewportSize = (RenderPass{}).queryViewport().size;
     drawState = .{
         .camera = camera.main,
         .size = camera.size,
@@ -104,6 +106,7 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     commands.appendAssumeCapacity(.{
         .target = .{ .color = color, .pass = pass },
     });
+    viewportSize = pass.queryViewport().size;
 }
 
 // 在当前渲染通道内切换视口和绘制坐标范围，同时重置裁剪区域。
@@ -113,6 +116,13 @@ pub fn useViewport(rect: math.Rect, size: Vector2) void {
         .viewport = .{ .rect = rect, .size = size },
     });
     drawState.size = size;
+    viewportSize = rect.size;
+}
+
+// 绘制期间查询逻辑坐标到目标像素的比例，包含相机缩放和 DPI。
+pub fn queryPixelScale() Vector2 {
+    const source = camera.stack.getLastOrNull() orelse drawState.camera;
+    return viewportSize.div(drawState.size).mul(source.scale);
 }
 
 // 设置逻辑坐标裁剪区域，null 恢复当前视口。

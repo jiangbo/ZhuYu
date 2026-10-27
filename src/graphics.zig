@@ -267,6 +267,13 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
 pub const RenderPass = struct {
     target: ?*const RenderTarget = null,
     viewport: ?math.Rect = null,
+
+    // 返回实际像素视口，未指定时使用离屏目标或窗口的绘制区域。
+    pub fn queryViewport(self: RenderPass) math.Rect {
+        if (self.viewport) |view| return view;
+        if (self.target) |target| return target.image.rect();
+        return window.viewRect;
+    }
 };
 
 // 最近一次窗口目标 beginPass 的经过时间，离屏目标不计入。
@@ -284,19 +291,16 @@ pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
         .clear_value = memory.reinterpret(sk.gfx.Color, color),
     };
 
-    var viewport: ?math.Rect = renderPass.viewport;
     if (renderPass.target) |target| {
         var pass = target.pass;
         pass.action = action;
         sk.gfx.beginPass(pass);
-        if (viewport == null) viewport = target.image.rect();
     } else {
         const chain = sk.glue.swapchain();
         sk.gfx.beginPass(.{ .action = action, .swapchain = chain });
-        if (viewport == null) viewport = window.viewRect;
     }
 
-    const view = viewport.?;
+    const view = renderPass.queryViewport();
     sk.gfx.applyViewportf(view.min.x, view.min.y, //
         view.size.x, view.size.y, true);
     return view;
