@@ -269,11 +269,27 @@ pub const static = struct {
         const sampler = assets.sampler.get(filter);
         for (data.images, 0..) |path, i| {
             const image = assets.getImage(assets.id(path)).?;
-            std.debug.assert(image.sampler.id == sampler.id);
+            const current = assets.view.get(image.view).sampler;
+            std.debug.assert(current.id == sampler.id);
             images[i] = image;
         }
         invalidGlyph = searchGlyph('?').?;
         fontScale = 1;
+    }
+
+    // 加载 MSDF 字体，使用线性采样并关联字体流水线。
+    pub fn initMsdf(zon: static.Font) void {
+        const sk = @import("sokol");
+        const shader = @import("shader");
+
+        init(zon, .linear);
+        const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
+        const pipeline = batch.createPipeline(desc);
+        for (images[0..data.images.len]) |image| {
+            var info = assets.view.get(image.view);
+            info.pipeline = pipeline;
+            assets.view.put(image.view, info);
+        }
     }
 
     // 页范围筛选后在字符数组中二分查找，缺字使用预生成的问号。

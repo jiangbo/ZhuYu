@@ -17,7 +17,6 @@ pub const key = input.key;
 pub const mouse = input.mouse;
 
 pub const extend = struct {
-    pub const msdf = @import("extend/msdf.zig");
     pub const debug = @import("extend/debug.zig");
     pub const widget = @import("extend/widget.zig");
     pub const bag = @import("extend/bag.zig");

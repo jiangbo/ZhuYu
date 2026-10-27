@@ -168,7 +168,6 @@ pub const Glyph = struct { image: Image, rect: math.Rect, advance: f32 };
 
 pub const Image = struct {
     view: sk.gfx.View = .{},
-    sampler: sk.gfx.Sampler = .{},
     layer: f32 = 0,
     offset: math.Vector2 = .zero,
     size: math.Vector2 = .zero,
@@ -238,7 +237,7 @@ pub const RenderTarget = struct {
     pub fn deinit(self: RenderTarget) void {
         const texture = sk.gfx.queryViewImage(self.image.view);
         sk.gfx.destroyView(self.pass.attachments.colors[0]);
-        sk.gfx.destroyView(self.image.view);
+        assets.view.destroy(self.image.view);
         sk.gfx.destroyImage(texture);
     }
 };
@@ -261,9 +260,10 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
         .texture = .{ .image = colorImage },
     });
     const sampler = assets.sampler.get(filter);
+    assets.view.put(view, .{ .sampler = sampler });
     return .{
         .pass = pass,
-        .image = .{ .view = view, .sampler = sampler, .size = size },
+        .image = .{ .view = view, .size = size },
     };
 }
 

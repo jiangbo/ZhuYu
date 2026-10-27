@@ -41,7 +41,7 @@ pub fn update() void {
 pub fn deinit() void {
     imageCache.deinit(allocator);
     atlas.cache.deinit(allocator);
-    view.cache.deinit(allocator);
+    view.deinit();
     sound.deinit();
     music.deinit();
     if (!options.append) fetch.shutdown();
@@ -60,17 +60,17 @@ pub fn loadImage(path: Path, option: ImageOption) Image {
     const smp = sampler.get(option.filter);
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
     if (entry.found_existing) {
-        std.debug.assert(entry.value_ptr.sampler.id == smp.id);
+        const current = view.get(entry.value_ptr.view).sampler;
+        std.debug.assert(current.id == smp.id);
         return entry.value_ptr.*;
     }
 
     const imageView = sk.gfx.allocView();
     entry.value_ptr.* = .{
         .view = imageView,
-        .sampler = smp,
         .size = option.size,
     };
-    view.cache.put(allocator, id(path), imageView) catch oom();
+    view.put(imageView, .{ .sampler = smp });
     _ = file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
@@ -161,7 +161,9 @@ const atlas = struct {
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
-            std.debug.assert(imageCache.get(atlasId).?.sampler.id == smp.id);
+            const image = imageCache.get(atlasId).?;
+            const current = view.get(image.view).sampler;
+            std.debug.assert(current.id == smp.id);
             return;
         }
 
@@ -174,6 +176,7 @@ const atlas = struct {
                 .num_slices = @intCast(source.imagePaths.len),
             }) },
         });
+        view.put(atlasView, .{ .sampler = smp });
         entry.value_ptr.* = 0;
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
@@ -181,7 +184,6 @@ const atlas = struct {
         for (source.imagePaths, 0..) |path, i| {
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
-                .sampler = smp,
                 .layer = @floatFromInt(i),
                 .offset = .zero,
                 .size = source.size,
@@ -197,7 +199,6 @@ const atlas = struct {
         for (source.images) |image| {
             var img = image;
             img.view = atlasView;
-            img.sampler = smp;
             imageCache.putAssumeCapacity(image.view.id, img);
         }
     }
@@ -243,8 +244,39 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     }.callback);
 }
 
-const view = struct {
-    var cache: std.AutoHashMapUnmanaged(Id, sk.gfx.View) = .empty;
+pub const view = struct {
+    // 每个采样视图共用的绘制配置，流水线为空时使用默认流水线。
+    pub const Info = struct {
+        sampler: sk.gfx.Sampler,
+        pipeline: ?sk.gfx.Pipeline = null,
+    };
+
+    var cache: std.AutoHashMapUnmanaged(graphics.View, Info) = .empty;
+
+    // 创建视图后登记，初始化字体时也可更新已有配置。
+    pub fn put(source: graphics.View, value: Info) void {
+        cache.put(allocator, source, value) catch oom();
+    }
+
+    // 返回配置副本，绘制时仅按视图句柄查找。
+    pub fn get(source: graphics.View) Info {
+        return cache.get(source).?;
+    }
+
+    // 提前释放采样视图，同时移除记录，退出时不再重复销毁。
+    pub fn destroy(source: graphics.View) void {
+        _ = cache.remove(source);
+        sk.gfx.destroyView(source);
+    }
+
+    // 销毁仍在缓存中的采样视图，再释放配置表。
+    pub fn deinit() void {
+        var iterator = cache.keyIterator();
+        while (iterator.next()) |key| sk.gfx.destroyView(key.*);
+
+        cache.deinit(allocator);
+        cache = .empty;
+    }
 
     fn handler(resp: Response) void {
         const img = png.load(allocator, resp.data) catch |err| {

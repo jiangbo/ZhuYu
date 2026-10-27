@@ -53,8 +53,6 @@ pub const DrawCommand = struct {
     view: graphics.View = .{}, // 纹理视图
     camera: camera.Camera, // 绘制命令相机
     size: Vector2, // 绘制坐标范围
-    pipeline: sk.gfx.Pipeline, // 渲染流水线
-    sampler: sk.gfx.Sampler = .{}, // 采样器
 };
 
 pub var whiteImage: graphics.Image = undefined;
@@ -67,7 +65,7 @@ pub var commands: std.ArrayList(Command) = .empty;
 pub var imageUpdates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
 
 var vertexHandle: sk.gfx.Buffer = undefined;
-var pipeline: sk.gfx.Pipeline = undefined;
+var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
 var drawState: DrawCommand = undefined;
 var viewportSize: Vector2 = undefined; // beginDraw 初始化的当前视口像素尺寸。
 var flushed = false;
@@ -78,7 +76,7 @@ pub fn init(vertex: []Vertex, cmds: []Command) void {
     if (@import("builtin").is_test) return;
 
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
-    pipeline = createPipeline(shaderDesc);
+    defaultPipeline = createPipeline(shaderDesc);
     vertexHandle = sk.gfx.makeBuffer(.{
         .size = @sizeOf(Vertex) * vertex.len,
         .usage = .{ .write_transient = true },
@@ -100,7 +98,6 @@ pub fn beginDraw() void {
     drawState = .{
         .camera = camera.main,
         .size = camera.size,
-        .pipeline = pipeline,
     };
 }
 
@@ -137,19 +134,6 @@ pub fn useScissor(rect: ?math.Rect) void {
     } });
 }
 
-pub fn usePipeline(value: ?sk.gfx.Pipeline) void {
-    const next = value orelse pipeline;
-    if (drawState.pipeline.id == next.id) return;
-
-    endCommand();
-    drawState.pipeline = next;
-}
-
-// 返回后续绘制命令使用的流水线。
-pub fn queryPipeline() sk.gfx.Pipeline {
-    return drawState.pipeline;
-}
-
 // 结束当前绘制命令，下一次绘制会创建新命令。
 pub fn endCommand() void {
     if (currentDraw()) |draw| draw.end = vertices.items.len;
@@ -177,7 +161,6 @@ fn addCommand(image: Image) *DrawCommand {
     var draw = drawState;
     draw.start = @intCast(vertices.items.len);
     draw.view = image.view;
-    draw.sampler = image.sampler;
     commands.appendAssumeCapacity(.{ .draw = draw });
     return currentDraw().?;
 }
@@ -354,6 +337,7 @@ pub fn flush() void {
     // 上传由调用方准备好的纹理数据，必须在开始渲染通道之前执行。
     for (imageUpdates.items) |update| sk.gfx.copyBufferToImage(update);
     uploadVertices();
+    var pipeline: sk.gfx.Pipeline = .{}; // 当前渲染通道已绑定的流水线。
     var activePass, var flipY = .{ false, false };
     var viewport: math.Rect = undefined;
     for (commands.items) |cmd| {
@@ -363,7 +347,7 @@ pub fn flush() void {
                 flipY = target.pass.target != null and
                     !sk.gfx.queryFeatures().origin_top_left;
                 viewport = graphics.beginPass(target.color, target.pass);
-                drawState.pipeline = .{};
+                pipeline = .{};
                 activePass = true;
             },
             .viewport => |view| {
@@ -378,7 +362,7 @@ pub fn flush() void {
                 if (flipY) rect.min.y = clip.size.y - rect.min.y - rect.size.y;
                 applyScissor(rect, viewport, clip.size);
             },
-            .draw => |draw| doDraw(draw, flipY),
+            .draw => |draw| doDraw(draw, flipY, &pipeline),
         }
     }
     flushed = true;
@@ -400,13 +384,16 @@ fn applyScissor(rect: math.Rect, view: math.Rect, size: Vector2) void {
     sk.gfx.applyScissorRectf(pos.x, pos.y, clip.x, clip.y, true);
 }
 
-fn doDraw(cmd: DrawCommand, flipY: bool) void {
+fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: *sk.gfx.Pipeline) void {
+    // 提交时获取视图配置，未指定流水线时使用默认图片流水线。
+    const info = assets.view.get(cmd.view);
+    const selected = info.pipeline orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
-    if (drawState.pipeline.id != cmd.pipeline.id) {
-        sk.gfx.applyPipeline(cmd.pipeline);
-        drawState.pipeline = cmd.pipeline;
+    if (pipeline.id != selected.id) {
+        sk.gfx.applyPipeline(selected);
+        pipeline.* = selected;
     }
 
     // 处理 uniform 变量
@@ -427,7 +414,7 @@ fn doDraw(cmd: DrawCommand, flipY: bool) void {
     bindings.views[0] = cmd.view;
     bindings.vertex_buffers[0] = vertexHandle;
     bindings.vertex_buffer_offsets[0] = @intCast(cmd.start * @sizeOf(Vertex));
-    bindings.samplers[0] = cmd.sampler;
+    bindings.samplers[0] = info.sampler;
     sk.gfx.applyBindings(bindings);
 
     // 绘制

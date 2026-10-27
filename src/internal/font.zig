@@ -81,7 +81,7 @@ pub fn resize() void {
 // 销毁字体图集及其上传缓冲，并清空字形索引。
 fn clear() void {
     if (atlas) |state| {
-        sk.gfx.destroyView(state.view);
+        assets.view.destroy(state.view);
         sk.gfx.destroyImage(state.texture);
         sk.gfx.destroyBuffer(state.upload);
     }
@@ -165,7 +165,6 @@ fn addImage(size: math.Vector2) graphics.Image {
     }
     const image = graphics.Image{
         .view = state.view,
-        .sampler = assets.sampler.nearest,
         .layer = @floatFromInt(state.layer),
         .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
         .size = size,
@@ -211,6 +210,7 @@ fn addAtlas() *Atlas {
         .label = "system font atlas",
     });
     const view = sk.gfx.makeView(.{ .texture = .{ .image = texture } });
+    assets.view.put(view, .{ .sampler = assets.sampler.nearest });
     const width = sk.gfx.queryImageWidth(texture);
     const height = sk.gfx.queryImageHeight(texture);
     const uploadBuffer = sk.gfx.makeBuffer(.{
