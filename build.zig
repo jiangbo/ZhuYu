@@ -10,6 +10,10 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
+    // 仅切换 Linux 桌面后端，Android 和 Web 使用各自的默认后端。
+    const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
+    const linuxGles = target.result.os.tag == .linux and
+        !target.result.abi.isAndroid() and gles;
     // 初始化和绘制共用同一个编译期字体选择。
     const font = b.option(FontMode, "font", "Font mode") orelse .bitmap;
     // 应用创建依赖时传入，开启后只从程序尾部的资源包加载。
@@ -24,6 +28,8 @@ pub fn build(b: *std.Build) !void {
     const sokolDep = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .gles3 = linuxGles,
+        .egl = linuxGles,
     });
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result);
@@ -256,11 +262,16 @@ pub fn buildAndroid(
 
     // 配置引擎和 Sokol 使用的 NDK、系统库及 APK 资源读取。
     const target = zhu.resolved_target.?;
-    // 取回创建引擎依赖时使用的同一份 Sokol，配置在实际编译前生效。
-    const sokolDep = dep.builder.dependency("sokol", .{
-        .target = target,
-        .optimize = zhu.optimize.?,
-    });
+    // 从实际导入模块取产物，避免选项不同而创建另一份未被应用使用的依赖。
+    const sokolModule = zhu.import_table.get("sokol").?;
+    const sokolLib: *std.Build.Step.Compile = for (sokolModule.link_objects.items) |object| {
+        switch (object) {
+            .other_step => |library| {
+                if (std.mem.eql(u8, library.name, "sokol_clib")) break library;
+            },
+            else => {},
+        }
+    } else return error.SokolLibraryNotFound;
 
     const host = switch (b.graph.host.result.os.tag) {
         .windows => "windows-x86_64",
@@ -293,7 +304,6 @@ pub fn buildAndroid(
         b.fmt("{d}", .{target.result.os.version_range.linux.android}),
     });
     // 引擎和 Sokol 使用同一套 NDK，最终动态库复用这份链接配置。
-    const sokolLib = sokolDep.artifact("sokol_clib");
     for ([_]*std.Build.Module{ zhu, sokolLib.root_module }) |module| {
         module.addSystemIncludePath(.{ .cwd_relative = include });
         module.addSystemIncludePath(.{ .cwd_relative = archInclude });
@@ -386,7 +396,7 @@ fn createShader(
             .linux => if (target.abi.isAndroid())
                 .{ .glsl300es = true }
             else
-                .{ .glsl410 = true },
+                .{ .glsl410 = true, .glsl300es = true },
             .emscripten => .{ .glsl300es = true, .wgsl = true },
             else => return error.UnsupportedShaderTarget,
         },
