@@ -337,6 +337,7 @@ pub fn flush() void {
     // 上传由调用方准备好的纹理数据，必须在开始渲染通道之前执行。
     for (imageUpdates.items) |update| sk.gfx.copyBufferToImage(update);
     uploadVertices();
+
     var pipeline: sk.gfx.Pipeline = .{}; // 当前渲染通道已绑定的流水线。
     var activePass, var flipY = .{ false, false };
     var viewport: math.Rect = undefined;

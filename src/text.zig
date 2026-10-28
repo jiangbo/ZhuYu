@@ -12,15 +12,15 @@ const Vector2 = math.Vector2;
 const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
+const system = @import("internal/font.zig");
 // 编译时选定查找实现，排版与绘制共用同一个检索入口。
-const font = if (options.font) @import("internal/font.zig") else static;
+const font = switch (options.font) {
+    .bitmap, .msdf => static,
+    .system => system,
+};
 
 var fontScale: f32 = undefined;
 var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
-
-pub fn changeFontSize(size: f32) void {
-    fontScale = size / fontSize;
-}
 
 pub const Option = struct {
     offset: Vector2 = .zero, // 文字位置偏移
@@ -49,12 +49,9 @@ pub fn drawNumber(number: anytype, pos: Vector2, option: Option) void {
     drawFmt("{d}", .{number}, pos, option);
 }
 
-// zig fmt: off
-pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2,
-    option: Option) void {
-// zig fmt: on
+pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2, o: Option) void {
     var buffer: [1024]u8 = undefined;
-    draw(memory.format(&buffer, fmt, args), pos, option);
+    draw(memory.format(&buffer, fmt, args), pos, o);
 }
 
 const Utf8View = std.unicode.Utf8View;
@@ -218,11 +215,18 @@ pub fn nextIndex(str: []const u8, index: usize) usize {
     return index + (next catch unreachable);
 }
 
-// 动态字体统一管理初始化、字号更新和资源释放。
+// 构建时选定初始化方法，沿用对应实现的参数签名。
+pub const init = switch (options.font) {
+    .bitmap => static.init,
+    .msdf => static.initMsdf,
+    .system => dynamic.init,
+};
+
+// 动态字体管理自己的初始化、字号更新和资源释放。
 pub const dynamic = struct {
-    // 初始化动态字体，并保存基准字号和绘制缩放。
-    pub fn init(option: font.Option) void {
-        font.init(option);
+    // 初始化系统字体，并缓存基准字号和默认绘制缩放。
+    fn init(option: system.Option) void {
+        system.init(option);
         fontSize = option.size;
         fontScale = 1;
     }
@@ -233,6 +237,15 @@ pub const dynamic = struct {
 
 // 预生成字体直接借用有序数组，不建立运行时哈希索引。
 pub const static = struct {
+    // 普通位图字体的初始化配置。
+    pub const InitOption = struct {
+        filter: graphics.Filter = .nearest, // 位图字体的采样方式。
+        size: ?f32 = null, // 默认显示字号，为 null 时使用生成字号。
+    };
+
+    // MSDF 字体的初始化配置，采样固定为线性。
+    pub const MsdfOption = struct { size: ?f32 = null };
+
     pub const Font = struct {
         size: f32,
         lineHeight: f32,
@@ -245,13 +258,13 @@ pub const static = struct {
     pub const Char = struct { id: u32, rect: math.Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
-    pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
+    var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var data: static.Font = undefined;
     var images: [8]Image = undefined;
     var invalidGlyph: Entry = undefined;
 
-    // 加载图集并保存原始字体描述，维持现有预生成字体初始化方式。
-    pub fn init(zon: static.Font, filter: graphics.Filter) void {
+    // 加载图集，并在初始化时缓存默认显示字号的缩放比例。
+    fn init(zon: static.Font, option: InitOption) void {
         std.debug.assert(zon.images.len == zon.pages.len);
         std.debug.assert(zon.images.len <= images.len);
         data = zon;
@@ -263,10 +276,10 @@ pub const static = struct {
                 .imagePaths = data.images,
                 .size = data.imageSize,
                 .images = &.{},
-            }, filter);
+            }, option.filter);
         }
 
-        const sampler = assets.sampler.get(filter);
+        const sampler = assets.sampler.get(option.filter);
         for (data.images, 0..) |path, i| {
             const image = assets.getImage(assets.id(path)).?;
             const current = assets.view.get(image.view).sampler;
@@ -274,15 +287,15 @@ pub const static = struct {
             images[i] = image;
         }
         invalidGlyph = searchGlyph('?').?;
-        fontScale = 1;
+        fontScale = (option.size orelse zon.size) / zon.size;
     }
 
-    // 加载 MSDF 字体，使用线性采样并关联字体流水线。
-    pub fn initMsdf(zon: static.Font) void {
+    // 加载 MSDF 字体，指定默认显示字号并使用线性采样。
+    fn initMsdf(zon: static.Font, option: MsdfOption) void {
         const sk = @import("sokol");
         const shader = @import("shader");
 
-        init(zon, .linear);
+        static.init(zon, .{ .filter = .linear, .size = option.size });
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
         const pipeline = batch.createPipeline(desc);
         for (images[0..data.images.len]) |image| {
@@ -291,7 +304,7 @@ pub const static = struct {
     }
 
     // 页范围筛选后在字符数组中二分查找，缺字使用预生成的问号。
-    pub fn findGlyph(code: u32) graphics.Glyph {
+    fn findGlyph(code: u32) graphics.Glyph {
         const entry = searchGlyph(code) orelse invalidGlyph;
         const char = entry.char;
         return .{

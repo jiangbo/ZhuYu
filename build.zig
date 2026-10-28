@@ -3,18 +3,21 @@ const std = @import("std");
 // 应用直接使用同一版本的 Sokol 构建工具。
 pub const sokol = @import("sokol");
 
+// 每次构建只选择一种字体模式。
+pub const FontMode = enum { bitmap, msdf, system };
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const web = target.result.os.tag == .emscripten;
-    // 按编译选项选择数组或哈希字形检索。
-    const font = b.option(bool, "font", "Use map font lookup") orelse false;
+    // 初始化和绘制共用同一个编译期字体选择。
+    const font = b.option(FontMode, "font", "Font mode") orelse .bitmap;
     // 应用创建依赖时传入，开启后只从程序尾部的资源包加载。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     const options = b.addOptions();
-    options.addOption(bool, "font", font);
+    options.addOption(FontMode, "font", font);
     options.addOption(bool, "append", append);
     options.addOption(bool, "midi", midi);
 
