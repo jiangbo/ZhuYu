@@ -38,6 +38,12 @@ pub fn build(b: *std.Build) !void {
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
     zhu.addOptions("options", options);
+    // 仅 Linux 系统字体后端依赖 FreeType 和 Fontconfig，排除 Android。
+    if (font == .system and target.result.os.tag == .linux and
+        !target.result.abi.isAndroid())
+    {
+        linkLinuxFont(b, zhu);
+    }
     if (web) {
         const em = sokolDep.builder.dependency("emsdk", .{});
         const include = em.path("upstream/emscripten/cache/sysroot/include");
@@ -71,6 +77,28 @@ pub fn build(b: *std.Build) !void {
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&runTests.step);
+}
+
+// 同一份字体源码按不同前缀导出符号，生成两个仅供链接的占位库。
+fn linkLinuxFont(b: *std.Build, zhu: *std.Build.Module) void {
+    inline for (.{ .{ "freetype", "FT_", 6 }, .{ "fontconfig", "Fc", 1 } }) |entry| {
+        const options = b.addOptions();
+        options.addOption([]const u8, "prefix", entry[1]);
+        const module = b.createModule(.{
+            .root_source_file = b.path("src/internal/font/linux.zig"),
+            .target = zhu.resolved_target.?,
+            .optimize = .ReleaseSmall,
+        });
+        module.addOptions("options", options);
+        const stub = b.addLibrary(.{
+            .name = entry[0],
+            .linkage = .dynamic,
+            .version = .{ .major = entry[2], .minor = 0, .patch = 0 },
+            .root_module = module,
+        });
+        // 直接传入文件，避免 linkLibrary 把缓存目录写入运行时搜索路径。
+        zhu.addObjectFile(stub.getEmittedBin());
+    }
 }
 
 // BMFont 的参数和生成流程由工具自身管理。

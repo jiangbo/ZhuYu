@@ -11,7 +11,7 @@ const window = @import("../window.zig");
 
 pub const Option = struct {
     family: [:0]const u8 = "sans-serif",
-    weight: u16 = 400, // 字重，400 对应常规，500 对应中等。
+    weight: enum { normal, bold } = .normal, // 普通或加粗字重。
     size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
 };
 
@@ -23,6 +23,7 @@ const Char = extern struct { rect: math.Rect, advance: f32 };
 // 平台实现只负责系统字体和 RGBA 生成，不管理缓存或图集。
 const platform = switch (builtin.os.tag) {
     .emscripten => web,
+    .linux => if (builtin.abi.isAndroid()) unsupported else linux,
     else => unsupported,
 };
 
@@ -239,7 +240,11 @@ const web = struct {
 
     // 打开浏览器字体，宿主创建失败时直接终止。
     fn open(option: Option) void {
-        if (zhu_font_open(option.family, option.weight) != 0)
+        const weight: u32 = switch (option.weight) {
+            .normal => 400,
+            .bold => 700,
+        };
+        if (zhu_font_open(option.family, weight) != 0)
             @panic("font unavailable");
     }
 
@@ -259,6 +264,125 @@ const web = struct {
     fn pixels(code: u32, buffer: []u8) Char {
         var char: Char = undefined;
         _ = zhu_font_pixels(code, &char, buffer.ptr, @intCast(buffer.len));
+        return char;
+    }
+};
+
+// Linux 平台直接使用系统库查找字体，并生成字形像素。
+const linux = struct {
+    const c = @import("font/linux.zig");
+
+    var library: c.FT_Library = null; // 当前后端独占的 FreeType 实例。
+    var face: c.FT_Face = null; // 只打开匹配到的一个字体，不做缺字回退。
+
+    // 按字体名称、字重和中文偏好匹配一个字体，找不到或打不开就终止。
+    fn open(option: Option) void {
+        const config = c.FcInitLoadConfigAndFonts() orelse
+            @panic("font config unavailable");
+        defer c.FcConfigDestroy(config);
+        if (c.FT_Init_FreeType(&library) != 0) @panic("font library unavailable");
+
+        const pattern = c.FcPatternCreate() orelse memory.oom();
+        defer c.FcPatternDestroy(pattern);
+        if (c.FcPatternAddString(pattern, "family", option.family.ptr) == 0)
+            memory.oom();
+        // 默认按简体中文匹配，避免优先选到日文字形。
+        if (c.FcPatternAddString(pattern, "lang", "zh-cn") == 0) memory.oom();
+        // Fontconfig 的普通和加粗字重分别是 80、200。
+        const weight: c_int = switch (option.weight) {
+            .normal => 80,
+            .bold => 200,
+        };
+        if (c.FcPatternAddInteger(pattern, "weight", weight) == 0) memory.oom();
+        // 0 对应 FcMatchPattern，应用查询条件的配置规则。
+        if (c.FcConfigSubstitute(config, pattern, 0) == 0) memory.oom();
+        c.FcDefaultSubstitute(pattern);
+
+        var result: c.FcResult = undefined;
+        const matched = c.FcFontMatch(config, pattern, &result) orelse
+            @panic("font unavailable");
+        defer c.FcPatternDestroy(matched);
+        if (result != 0) @panic("font unavailable");
+
+        var path: [*c]u8 = null;
+        var index: c_int = 0;
+        if (c.FcPatternGetString(matched, "file", 0, &path) != 0 or
+            c.FcPatternGetInteger(matched, "index", 0, &index) != 0)
+            @panic("font file unavailable");
+        if (c.FT_New_Face(library, @ptrCast(path), index, &face) != 0)
+            @panic("font open failed");
+        // FT_ENCODING_UNICODE 使用四字节标签 'unic'。
+        if (c.FT_Select_Charmap(face, 0x756e6963) != 0)
+            @panic("font unicode unavailable");
+    }
+
+    // 关闭唯一的字体及其 FreeType 实例。
+    fn close() void {
+        _ = c.FT_Done_Face(face);
+        face = null;
+        _ = c.FT_Done_FreeType(library);
+        library = null;
+    }
+
+    // 为选定字体设置像素字号，并读取基线和行高度量。
+    fn resize(size: f32) Metrics {
+        if (c.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(size)) != 0)
+            @panic("font size unavailable");
+        const faceMetrics = face.*.size.*.metrics;
+        return .{
+            .ascent = @as(f32, @floatFromInt(faceMetrics.ascender)) / 64,
+            .descent = -@as(f32, @floatFromInt(faceMetrics.descender)) / 64,
+            .height = @max(size, @as(f32, @floatFromInt(faceMetrics.height)) / 64),
+        };
+    }
+
+    // 使用选定字体生成白色 RGBA，缺字暂用该字体的缺字字形。
+    fn pixels(code: u32, buffer: []u8) Char {
+        const glyph = c.FT_Get_Char_Index(face, code);
+        // FT_LOAD_RENDER 在加载时直接生成位图。
+        if (c.FT_Load_Glyph(face, glyph, 1 << 2) != 0)
+            @panic("font glyph unavailable");
+
+        const slot = face.*.glyph.*;
+        const bitmap = slot.bitmap;
+        const char = Char{
+            .rect = .{
+                .min = .{
+                    .x = @floatFromInt(slot.bitmap_left),
+                    .y = -@as(f32, @floatFromInt(slot.bitmap_top)),
+                },
+                .size = .xy(@floatFromInt(bitmap.width), @floatFromInt(bitmap.rows)),
+            },
+            .advance = @as(f32, @floatFromInt(slot.advance.x)) / 64,
+        };
+        if (bitmap.width == 0 or bitmap.rows == 0) return char;
+
+        const width: usize = bitmap.width;
+        const height: usize = bitmap.rows;
+        const stride = (width + 2) * 4;
+        const len = stride * (height + 2);
+        if (buffer.len < len) return char;
+        // 2 是灰度位图，1 是单色位图。
+        if (bitmap.pixel_mode != 2 and bitmap.pixel_mode != 1)
+            @panic("unsupported font pixel mode");
+
+        @memset(buffer[0..len], 0);
+        const pitch: usize = @abs(bitmap.pitch);
+        for (0..height) |y| {
+            const row = if (bitmap.pitch < 0) height - 1 - y else y;
+            const source = bitmap.buffer + row * pitch;
+            for (0..width) |x| {
+                const alpha: u8 = if (bitmap.pixel_mode == 2)
+                    source[x]
+                else if (source[x / 8] & (@as(u8, 128) >> @intCast(x % 8)) != 0)
+                    255
+                else
+                    0;
+                const offset = (y + 1) * stride + (x + 1) * 4;
+                @memset(buffer[offset..][0..3], 255);
+                buffer[offset + 3] = alpha;
+            }
+        }
         return char;
     }
 };
