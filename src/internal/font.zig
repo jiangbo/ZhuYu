@@ -5,7 +5,6 @@ const builtin = @import("builtin");
 const sk = @import("sokol");
 const memory = @import("memory.zig");
 const assets = @import("../assets.zig");
-const batch = @import("../batch.zig");
 const graphics = @import("../graphics.zig");
 const math = @import("../math.zig");
 const window = @import("../window.zig");
@@ -178,7 +177,7 @@ fn addImage(size: math.Vector2) graphics.Image {
         .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
         .dst = .{ .buffer = state.upload, .offset = state.offset },
     });
-    batch.imageUpdates.append(memory.allocator.raw, .{
+    assets.gpu.addImageUpdate(.{
         .src = .{
             .buffer = state.upload,
             .offset = state.offset,
@@ -192,7 +191,7 @@ fn addImage(size: math.Vector2) graphics.Image {
             .slice = state.layer,
         },
         .size = .{ .width = copyWidth, .height = copyHeight, .num_slices = 1 },
-    }) catch memory.oom();
+    });
     state.offset += len;
     state.x += copyWidth;
     state.rowHeight = @max(state.rowHeight, height);

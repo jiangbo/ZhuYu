@@ -131,6 +131,8 @@ pub const sampler = struct {
 pub const gpu = struct {
     var pipelines: std.ArrayListUnmanaged(sk.gfx.Pipeline) = .empty;
     var shaders: std.ArrayListUnmanaged(sk.gfx.Shader) = .empty;
+    // 待提交的图像复制记录，源缓冲和目标图像仍由创建者管理。
+    var imageUpdates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
 
     // 登记由引擎统一销毁的流水线。
     pub fn addPipeline(value: sk.gfx.Pipeline) void {
@@ -142,7 +144,20 @@ pub const gpu = struct {
         shaders.append(allocator, value) catch oom();
     }
 
+    // 登记图像复制操作，使用 assets 自己的分配器管理队列。
+    pub fn addImageUpdate(value: sk.gfx.CopyBufferToImageDesc) void {
+        imageUpdates.append(allocator, value) catch oom();
+    }
+
+    // 在渲染通道开始前提交复制，清空记录并保留容量供后续帧复用。
+    pub fn flushImageUpdates() void {
+        for (imageUpdates.items) |value| sk.gfx.copyBufferToImage(value);
+        imageUpdates.clearRetainingCapacity();
+    }
+
     fn deinit() void {
+        imageUpdates.deinit(allocator);
+
         for (pipelines.items) |value| sk.gfx.destroyPipeline(value);
         pipelines.deinit(allocator);
 
