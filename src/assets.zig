@@ -3,7 +3,7 @@ const std = @import("std");
 const sk = @import("sokol");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
-const png = @import("internal/png.zig");
+const decoder = @import("internal/image.zig");
 const memory = @import("internal/memory.zig");
 const fetch = @import("internal/fetch.zig");
 const options = @import("options");
@@ -222,7 +222,7 @@ const atlas = struct {
         const pageIndex: PageIndex = @bitCast(response.index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
-        const img = png.load(allocator, response.data) catch |err| {
+        const img = decoder.load(allocator, response.data) catch |err| {
             std.debug.panic("{s}: {}", .{ response.path, err });
         };
         defer allocator.free(img.data);
@@ -245,12 +245,12 @@ const atlas = struct {
     }
 };
 
-pub const Icon = png.Image;
+pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     _ = file.load(path, handle, struct {
         fn callback(resp: Response) void {
-            const icon = png.loadIcon(allocator, resp.data) catch |err| {
+            const icon = decoder.loadIcon(allocator, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
             defer allocator.free(icon.data);
@@ -299,7 +299,7 @@ pub const view = struct {
     }
 
     fn handler(resp: Response) void {
-        const img = png.load(allocator, resp.data) catch |err| {
+        const img = decoder.load(allocator, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
         defer allocator.free(img.data);
