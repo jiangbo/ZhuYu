@@ -16,39 +16,38 @@ ZhuYu 是一个用 Zig 编写的 2D 游戏开发库，基于 Sokol。
 
 使用 Zig 0.17.0。
 
-### 最低系统版本
+### 最低运行要求
 
-| 平台 | 最低版本 | 依据 |
+| 平台 | 最低要求 | 依据 |
 | --- | --- | --- |
-| Windows | 10 | 当前 Zig 标准库最低支持 Windows 10。 |
-| Linux x86_64 | 内核 5.10、glibc 2.31 | 内核按 Zig 支持下限。 |
+| Windows | Direct3D 11，Feature Level 11_0 或以上 | 当前 Sokol 的 D3D11 后端要求。 |
+| Linux | OpenGL 4.3 Core 或 OpenGL ES 3.1 + EGL | 当前 Sokol 的图形后端要求。 |
 | macOS | 14.0 | 当前 Sokol 的 Metal 窗口使用 `CADisplayLink`，从 macOS 14 提供。 |
 | iOS | 15.0 | 当前 Sokol 使用的 `preferredFrameRateRange` 从 iOS 15 提供。 |
 | Android | 8.0（API 26） | Sokol 音频使用 AAudio，从 API 26 提供。 |
 
-Windows 和 Linux 内核的依据见 [Zig 系统版本要求]，macOS 的依据见 [Sokol 窗口实现]，
-Android 的依据见 [AAudio 系统要求]。
+Windows 和 macOS 的依据见 [Sokol 窗口实现]，Android 的依据见 [AAudio 系统要求]。
 
-Linux 默认使用 X11、OpenGL 4.3 和 ALSA；Wayland 桌面需要 XWayland。
+Windows 7 支持可参考 [VxKex 项目](https://github.com/i486/VxKex)。
 
-[Zig 系统版本要求]: https://ziglang.org/learn/platform-support/#version-requirements
+Linux 使用 X11 和 ALSA；支持 OpenGL 4.3 Core，以及 OpenGL ES 3.1 + EGL。
+Wayland 桌面需要 XWayland。
+
 [Sokol 窗口实现]: https://github.com/floooh/sokol/blob/master/sokol_app.h
 [AAudio 系统要求]: https://developer.android.com/ndk/guides/stable_apis#audio
 
-构建时必须显式指定最低版本，不能依赖 Zig 的默认值：
+构建目标示例（有最低系统版本要求的平台需显式指定版本）：
 
 | 构建目标 | `-Dtarget` |
 | --- | --- |
-| Windows x86_64 | `x86_64-windows.win10-gnu` |
-| Linux x86_64 | `x86_64-linux.5.10-gnu.2.31` |
+| Windows x86_64 | `x86_64-windows.win8-gnu` |
+| Linux x86_64 | `x86_64-linux.2.6.4-gnu.2.16` |
+| Linux ARM64 | `aarch64-linux.3.7-gnu.2.17` |
 | macOS Apple Silicon | `aarch64-macos.14.0` |
 | macOS Intel | `x86_64-macos.14.0` |
 | iOS 真机 | `aarch64-ios.15.0` |
 | iOS Apple Silicon 模拟器 | `aarch64-ios.15.0-simulator` |
 | Android ARM64 | `aarch64-linux-android.26` |
-
-构建 Linux 发行包时，头文件和链接库也应来自匹配基线的环境，例如 Debian 11。
-仅指定 `-Dtarget` 不能降低链接库自身的 glibc 要求。
 
 其他 Android 架构同样使用 API 26。APK 的 `minSdkVersion` 从编译目标的 API
 版本取得；`targetSdkVersion` 从已安装的 SDK Platform 取得，两者不要混淆。
