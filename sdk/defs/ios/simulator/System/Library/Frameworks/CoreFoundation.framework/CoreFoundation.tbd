@@ -1,0 +1,14 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-ios-simulator", "x86_64-ios-simulator"]
+install-name: "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+current-version: 2048.1.101
+compatibility-version: 150
+exports:
+  - targets: ["arm64-ios-simulator"]
+    symbols: ["_NSRunLoopCommonModes", "___CFConstantStringClassReference"]
+    objc-classes: ["NSMutableArray", "NSNull", "NSRunLoop"]
+  - targets: ["x86_64-ios-simulator"]
+    symbols: ["_NSRunLoopCommonModes", "___CFConstantStringClassReference"]
+    objc-classes: ["NSMutableArray", "NSNull", "NSRunLoop"]
+...

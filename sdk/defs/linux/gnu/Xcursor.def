@@ -1,0 +1,6 @@
+XcursorGetDefaultSize
+XcursorGetTheme
+XcursorImageCreate
+XcursorImageDestroy
+XcursorImageLoadCursor
+XcursorLibraryLoadImage

@@ -1,0 +1,14 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-ios-simulator", "x86_64-ios-simulator"]
+install-name: "/System/Library/Frameworks/Foundation.framework/Foundation"
+current-version: 2048.1.101
+compatibility-version: 300
+exports:
+  - targets: ["arm64-ios-simulator"]
+    symbols: ["_NSStringFromClass"]
+    objc-classes: ["NSNotificationCenter", "NSString"]
+  - targets: ["x86_64-ios-simulator"]
+    symbols: ["_NSStringFromClass"]
+    objc-classes: ["NSNotificationCenter", "NSString"]
+...

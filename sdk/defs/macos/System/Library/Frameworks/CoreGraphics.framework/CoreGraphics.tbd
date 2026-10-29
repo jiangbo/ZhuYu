@@ -1,0 +1,20 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-macos", "x86_64-macos"]
+install-name: "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics"
+current-version: 1774.0.4
+compatibility-version: 64
+exports:
+  - targets: ["arm64-macos"]
+    symbols: ["_CGAssociateMouseAndMouseCursorPosition",
+                     "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
+                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
+                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
+  - targets: ["x86_64-macos"]
+    symbols: ["_CGAssociateMouseAndMouseCursorPosition",
+                     "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
+                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
+                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
+...

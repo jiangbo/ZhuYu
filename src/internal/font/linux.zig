@@ -1,24 +1,6 @@
 //! Linux 字体库的最小 C ABI 声明，构建和运行都不依赖 C 头文件。
 //! FreeType 对象由库分配；这里只声明读取字段所需的结构体前缀。
 
-// 只有作为占位库根文件编译时导出符号，普通导入仅提供 ABI 声明。
-comptime {
-    if (@import("root") == @This()) {
-        const std = @import("std");
-        const prefix = @import("options").prefix;
-        for (std.meta.declarations(@This())) |name| {
-            if (!std.mem.startsWith(u8, name, prefix)) continue;
-            if (@typeInfo(@TypeOf(@field(@This(), name))) != .@"fn") continue;
-            @export(&stub, .{ .name = name });
-        }
-    }
-}
-
-// 占位函数只参与链接，误执行时立即终止。
-fn stub() callconv(.c) void {
-    @trap();
-}
-
 pub const FcConfig = opaque {};
 pub const FcPattern = opaque {};
 pub const FcResult = c_uint;

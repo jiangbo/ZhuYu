@@ -1,0 +1,11 @@
+FcConfigDestroy
+FcConfigSubstitute
+FcDefaultSubstitute
+FcFontMatch
+FcInitLoadConfigAndFonts
+FcPatternAddInteger
+FcPatternAddString
+FcPatternCreate
+FcPatternDestroy
+FcPatternGetInteger
+FcPatternGetString

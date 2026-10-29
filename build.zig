@@ -1,21 +1,23 @@
 const std = @import("std");
+const linuxSdk = @import("sdk/linux.zig");
+const macosSdk = @import("sdk/macos.zig");
+const iosSdk = @import("sdk/ios.zig");
+const androidSdk = @import("sdk/android.zig");
+const webSdk = @import("sdk/web.zig");
 
 // 应用直接使用同一版本的 Sokol 构建工具。
 pub const sokol = @import("sokol");
 
 // 每次构建只选择一种字体模式。
-pub const FontMode = enum { bitmap, msdf, system };
+pub const FontMode = linuxSdk.FontMode;
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const web = target.result.os.tag == .emscripten;
-    // 仅切换 Linux 桌面后端，Android 和 Web 使用各自的默认后端。
-    const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
-    const linuxGles = target.result.os.tag == .linux and
-        !target.result.abi.isAndroid() and gles;
     // 初始化和绘制共用同一个编译期字体选择。
     const font = b.option(FontMode, "font", "Font mode") orelse .bitmap;
+    // 仅切换 Linux 桌面后端，Android 和 Web 继续使用各自的默认后端。
+    const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
     // 应用创建依赖时传入，开启后只从程序尾部的资源包加载。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
@@ -24,6 +26,10 @@ pub fn build(b: *std.Build) !void {
     options.addOption(FontMode, "font", font);
     options.addOption(bool, "append", append);
     options.addOption(bool, "midi", midi);
+
+    // 参数读取完成后，统一计算平台和构建方式。
+    const linuxOnly = target.result.os.tag == .linux and !target.result.abi.isAndroid();
+    const linuxGles = linuxOnly and gles;
 
     const sokolDep = b.dependency("sokol", .{
         .target = target,
@@ -34,6 +40,7 @@ pub fn build(b: *std.Build) !void {
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result);
 
+    const web = target.result.os.tag == .emscripten;
     const zhu = b.addModule("zhu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -44,68 +51,113 @@ pub fn build(b: *std.Build) !void {
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
     zhu.addOptions("options", options);
-    // 仅 Linux 系统字体后端依赖 FreeType 和 Fontconfig，排除 Android。
-    if (font == .system and target.result.os.tag == .linux and
-        !target.result.abi.isAndroid())
-    {
-        linkLinuxFont(b, zhu);
-    }
-    if (web) {
-        const em = sokolDep.builder.dependency("emsdk", .{});
-        const include = em.path("upstream/emscripten/cache/sysroot/include");
-        zhu.addSystemIncludePath(include);
-        // 静态接入浏览器存档函数，无需应用额外配置链接参数。
-        zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
-    }
-    const isIos = target.result.os.tag == .ios;
-    if (target.result.os.tag == .macos or isIos) {
-        // Sokol 的 Metal 后端使用 CoreGraphics 的色彩空间接口。
-        if (isIos) zhu.linkFramework("CoreGraphics", .{});
 
-        const sdkOption = if (isIos) "ios_sdk" else "macos_sdk";
-        // 本机默认由 Zig 查找 SDK，交叉编译时可由应用显式提供路径。
-        if (b.option([]const u8, sdkOption, "Apple SDK directory")) |sdk| {
-            const include = b.pathJoin(&.{ sdk, "usr", "include" });
-            const libraries = b.pathJoin(&.{ sdk, "usr", "lib" });
-            const frameworks = b.pathJoin(&.{
-                sdk, "System", "Library", "Frameworks",
-            });
-            const sokolRoot = sokolDep.artifact("sokol_clib").root_module;
-            // 引擎模块与 Sokol 使用同一套 SDK，路径随模块参与最终链接。
-            for ([_]*std.Build.Module{ zhu, sokolRoot }) |module| {
-                module.addSystemIncludePath(.{ .cwd_relative = include });
-                module.addSystemFrameworkPath(.{ .cwd_relative = frameworks });
-                module.addLibraryPath(.{ .cwd_relative = libraries });
-            }
+    // 本机与交叉构建共用平台库声明和 GLES 库名修正。
+    if (linuxOnly) {
+        if (linuxGles) {
+            fixLinuxGles(sokolDep.artifact("sokol_clib").root_module);
+        }
+        if (font == .system) {
+            // 系统字体统一声明依赖，交叉构建另行提供占位库。
+            zhu.linkSystemLibrary("freetype", .{});
+            zhu.linkSystemLibrary("fontconfig", .{});
         }
     }
+    if (target.result.os.tag == .ios) {
+        // iOS 单独链接色彩空间接口；macOS 通过 AppKit 重导出提供。
+        zhu.linkFramework("CoreGraphics", .{});
+    }
+    if (target.result.abi.isAndroid()) {
+        if (target.result.os.version_range.linux.android < 26)
+            return error.AndroidRequiresApi26;
+        // GLES、EGL、android、log 继续由 Sokol 声明。
+        zhu.linkSystemLibrary("aaudio", .{});
+        zhu.linkSystemLibrary("m", .{});
+        zhu.pic = true;
+        sokolDep.artifact("sokol_clib").root_module.pic = true;
+    }
+
+    // 非 native 交给独立流程，本机构建直接继续向下执行。
+    const native = target.query.isNative();
+    if (!native) return buildCross(b, zhu, sokolDep);
 
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
-// 同一份字体源码按不同前缀导出符号，生成两个仅供链接的占位库。
-fn linkLinuxFont(b: *std.Build, zhu: *std.Build.Module) void {
-    inline for (.{ .{ "freetype", "FT_", 6 }, .{ "fontconfig", "Fc", 1 } }) |entry| {
-        const options = b.addOptions();
-        options.addOption([]const u8, "prefix", entry[1]);
-        const module = b.createModule(.{
-            .root_source_file = b.path("src/internal/font/linux.zig"),
-            .target = zhu.resolved_target.?,
-            .optimize = .ReleaseSmall,
-        });
-        module.addOptions("options", options);
-        const stub = b.addLibrary(.{
-            .name = entry[0],
-            .linkage = .dynamic,
-            .version = .{ .major = entry[2], .minor = 0, .patch = 0 },
-            .root_module = module,
-        });
-        // 直接传入文件，避免 linkLibrary 把缓存目录写入运行时搜索路径。
-        zhu.addObjectFile(stub.getEmittedBin());
+// 非 native 的 SDK、Web 接入和测试产物配置集中在此处。
+fn buildCross(
+    b: *std.Build,
+    zhu: *std.Build.Module,
+    sokolDep: *std.Build.Dependency,
+) !void {
+    const target = zhu.resolved_target.?.result;
+    const library = sokolDep.artifact("sokol_clib");
+    var libc: ?std.Build.LazyPath = null;
+    switch (target.os.tag) {
+        .linux => {
+            if (target.abi.isAndroid()) {
+                libc = try androidSdk.add(b, zhu, library);
+            } else {
+                try linuxSdk.add(b, zhu, library);
+            }
+        },
+        .macos => libc = try macosSdk.add(b, zhu, library),
+        .ios => libc = try iosSdk.add(b, zhu, library),
+        .emscripten => webSdk.add(b, zhu, library),
+        else => {},
+    }
+    const tests = b.addTest(.{ .root_module = zhu });
+    if (libc) |file| tests.setLibCFile(file);
+    const runTests = b.addRunArtifact(tests);
+    b.step("test", "Run tests").dependOn(&runTests.step);
+}
+
+// native 与非 native 的 GLES 构建共用此库名修正。
+fn fixLinuxGles(module: *std.Build.Module) void {
+    // TODO: 升级到包含上游修复的 sokol-zig 后，移除此库名替换。
+    for (module.link_objects.items) |*object| {
+        switch (object.*) {
+            .system_lib => |*library| {
+                if (std.mem.eql(u8, library.name, "GL"))
+                    library.name = "GLESv2";
+            },
+            else => {},
+        }
     }
 }
+
+fn createShader(
+    b: *std.Build,
+    sokolDep: *std.Build.Dependency,
+    target: std.Target,
+) !*std.Build.Module {
+    const sokolModule = sokolDep.module("sokol");
+    return try sokol.shdc.createModule(b, "shader", sokolModule, .{
+        .shdc_dep = sokolDep.builder.dependency("shdc", .{}),
+        .input = "src/internal/quad.glsl",
+        .output = "quad.glsl.zig",
+        // 保留对应平台可能使用的 shader 格式。
+        .slang = switch (target.os.tag) {
+            .windows => .{ .hlsl5 = true, .glsl410 = true },
+            .macos => .{ .metal_macos = true, .glsl410 = true },
+            .ios => if (target.abi == .simulator)
+                .{ .metal_sim = true }
+            else
+                .{ .metal_ios = true },
+            .linux => if (target.abi.isAndroid())
+                .{ .glsl300es = true }
+            else
+                .{ .glsl410 = true, .glsl300es = true },
+            .emscripten => .{ .glsl300es = true, .wgsl = true },
+            else => return error.UnsupportedShaderTarget,
+        },
+    });
+}
+
+// 最终产物复用引擎构建时的 libc 配置。
+pub const setLibC = androidSdk.setLibC;
 
 // BMFont 的参数和生成流程由工具自身管理。
 pub const bmfont = struct {
@@ -149,7 +201,7 @@ pub const apk = struct {
     pub const addStep = @import("tools/apk.zig").addStep;
 };
 
-// iOS 应用包同时用于真机和模拟器，SDK 配置由引擎依赖接收。
+// 为 iOS 真机和模拟器生成 .app，提供应用属性和打包步骤。
 pub const ios = struct {
     pub const AppConfig = @import("tools/ios.zig").AppConfig;
     pub const Options = @import("tools/ios.zig").Options;
@@ -212,193 +264,11 @@ pub fn addPackStep(
     b.getInstallStep().dependOn(&installProgram.step);
 }
 
-// 游戏提供动态库名称和模块，安卓平台配置由引擎统一处理。
-pub const AndroidOptions = struct {
-    name: []const u8,
-    root_module: *std.Build.Module,
-    sdk: ?[]const u8 = null, // 未指定时读取 ANDROID_HOME，NDK 从 SDK 中查找。
-};
+// 安卓构建的类型和实现统一放在平台模块中。
+pub const AndroidOptions = androidSdk.AndroidOptions;
+pub const buildAndroid = androidSdk.buildAndroid;
 
-// 在游戏构建缓存中补充安卓入口配置，生成 NativeActivity 加载的动态库。
-pub fn buildAndroid(
-    b: *std.Build,
-    dep: *std.Build.Dependency,
-    options: AndroidOptions,
-) !*std.Build.Step.Compile {
-    // 自动查找时重新读取环境变量，避免配置缓存保留旧的 SDK 路径。
-    if (options.sdk == null) b.graph.poisonCache();
-    const sdk = options.sdk orelse b.graph.environ_map.get("ANDROID_HOME") orelse
-        return error.AndroidSdkNotFound;
-    const ndk = try findLatestNdk(b, sdk);
-    const mod = options.root_module;
-    const zhu = dep.module("zhu");
-    // 按模块对象查找游戏设置的导入名，不要求用户使用固定别名。
-    var imports = mod.import_table.iterator();
-    const importName = while (imports.next()) |entry| {
-        if (entry.value_ptr.* == zhu) break entry.key_ptr.*;
-    } else "zhu";
-    // 追踪游戏入口内容，从模块本身取得源码路径和所属项目。
-    const rootFile = mod.root_source_file.?;
-    const src = rootFile.src_path;
-    b.dependOnFileContents(rootFile);
-    const path = try src.owner.root.joinString(b.allocator, src.sub_path);
-    const source = try std.Io.Dir.cwd().readFileAlloc(b.graph.io, //
-        path, b.allocator, .unlimited);
-    // 完整复制源码目录，保留所有文件和原有的相对导入关系。
-    const files = b.addWriteFiles();
-    _ = files.addCopyDirectory(rootFile.dirname(), "", .{});
-    mod.root_source_file = files.add("zhuyu_android_main.zig", //
-        b.fmt("{0s}\n\n// 动态库显式分析窗口模块，保留引擎导出的入口和回调。\n" ++
-            "comptime {{\n    _ = @import(\"{1f}\").window;\n}}\n\n" ++
-            "// 安卓日志和 panic 由引擎直接输出到 Logcat。\n" ++
-            "pub const std_options: @import(\"std\").Options = .{{\n" ++
-            "    // 沿用安卓系统的备用信号栈，缩减动态库体积。\n" ++
-            "    .signal_stack_size = null,\n" ++
-            "    .logFn = @import(\"{1f}\").android.log,\n}};\n" ++
-            "pub const panic = @import(\"{1f}\").android.panic;\n", .{
-            source,
-            std.zig.fmtString(importName),
-        }));
-
-    // 配置引擎和 Sokol 使用的 NDK、系统库及 APK 资源读取。
-    const target = zhu.resolved_target.?;
-    // 从实际导入模块取产物，避免选项不同而创建另一份未被应用使用的依赖。
-    const sokolModule = zhu.import_table.get("sokol").?;
-    const sokolLib: *std.Build.Step.Compile = for (sokolModule.link_objects.items) |object| {
-        switch (object) {
-            .other_step => |library| {
-                if (std.mem.eql(u8, library.name, "sokol_clib")) break library;
-            },
-            else => {},
-        }
-    } else return error.SokolLibraryNotFound;
-
-    const host = switch (b.graph.host.result.os.tag) {
-        .windows => "windows-x86_64",
-        .linux => "linux-x86_64",
-        .macos => "darwin-x86_64",
-        else => @panic("Unsupported NDK host"),
-    };
-    const sysroot = b.pathJoin(&.{
-        ndk,
-        "toolchains",
-        "llvm",
-        "prebuilt",
-        host,
-        "sysroot",
-    });
-    const include = b.pathJoin(&.{ sysroot, "usr", "include" });
-    const arch = switch (target.result.cpu.arch) {
-        .aarch64 => "aarch64-linux-android",
-        .arm, .thumb => "arm-linux-androideabi",
-        .x86 => "i686-linux-android",
-        .x86_64 => "x86_64-linux-android",
-        else => return error.UnsupportedAndroidTarget,
-    };
-    const archInclude = b.pathJoin(&.{ include, arch });
-    const libraries = b.pathJoin(&.{
-        sysroot,
-        "usr",
-        "lib",
-        arch,
-        b.fmt("{d}", .{target.result.os.version_range.linux.android}),
-    });
-    // 引擎和 Sokol 使用同一套 NDK，最终动态库复用这份链接配置。
-    for ([_]*std.Build.Module{ zhu, sokolLib.root_module }) |module| {
-        module.addSystemIncludePath(.{ .cwd_relative = include });
-        module.addSystemIncludePath(.{ .cwd_relative = archInclude });
-        module.addLibraryPath(.{ .cwd_relative = libraries });
-        module.pic = true;
-    }
-    const config = b.fmt(
-        "include_dir={s}\nsys_include_dir={s}\ncrt_dir={s}\ncc_dir={s}\n" ++
-            "msvc_lib_dir=\nkernel32_lib_dir=\ndarwin_sdk_dir=\n",
-        .{ include, archInclude, libraries, libraries },
-    );
-    const libc = b.addWriteFiles().add("android-libc.conf", config);
-    sokolLib.setLibCFile(libc);
-    // GLES、EGL、android、log 继续由 Sokol 声明。
-    zhu.linkSystemLibrary("aaudio", .{});
-    zhu.linkSystemLibrary("m", .{});
-    // 系统库改为最终动态库的文件输入，绕过 Zig 的 LLD 库路径参数问题。
-    // TODO: Zig 修复后，验证系统库声明可直接链接，再移除下面的转换。
-    // https://codeberg.org/ziglang/zig/issues/37257
-    // 文件输入不会像系统库声明一样从 Sokol 静态库传递到最终链接。
-    for ([_]*std.Build.Module{ zhu, sokolLib.root_module }) |module| {
-        var index: usize = 0;
-        while (index < module.link_objects.items.len) {
-            switch (module.link_objects.items[index]) {
-                .system_lib => |system| {
-                    mod.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{
-                        libraries, b.fmt("lib{s}.so", .{system.name}),
-                    }) });
-                    _ = module.link_objects.orderedRemove(index);
-                },
-                else => index += 1,
-            }
-        }
-    }
-
-    // 游戏动态库直接复用同一份库路径和 libc 配置。
-    mod.pic = true;
-    mod.link_libc = true;
-    mod.addLibraryPath(.{ .cwd_relative = libraries });
-    const lib = b.addLibrary(.{
-        .name = options.name,
-        .linkage = .dynamic,
-        .root_module = mod,
-    });
-    lib.setLibCFile(libc);
-    lib.link_z_defs = true;
-    lib.link_z_max_page_size = 16384;
-    lib.link_z_common_page_size = 16384;
-    return lib;
-}
-
-// 从 SDK 的 ndk 目录按语义版本选择最高的已安装版本。
-fn findLatestNdk(b: *std.Build, sdk: []const u8) ![]const u8 {
-    const path = b.pathJoin(&.{ sdk, "ndk" });
-    b.dependOnDirectoryContents(.{ .cwd_relative = path });
-    var dir = try std.Io.Dir.cwd().openDir(b.graph.io, path, .{ .iterate = true });
-    defer dir.close(b.graph.io);
-    var iterator = dir.iterate();
-    var selected: ?[]const u8 = null;
-    var latest: std.SemanticVersion = undefined;
-    while (try iterator.next(b.graph.io)) |entry| {
-        if (entry.kind != .directory) continue;
-        const version = try std.SemanticVersion.parse(entry.name);
-        if (selected == null or version.order(latest) == .gt) {
-            selected = b.dupe(entry.name);
-            latest = version;
-        }
-    }
-    return b.pathJoin(&.{ path, selected orelse return error.AndroidNdkNotFound });
-}
-
-fn createShader(
-    b: *std.Build,
-    sokolDep: *std.Build.Dependency,
-    target: std.Target,
-) !*std.Build.Module {
-    const sokolModule = sokolDep.module("sokol");
-    return try sokol.shdc.createModule(b, "shader", sokolModule, .{
-        .shdc_dep = sokolDep.builder.dependency("shdc", .{}),
-        .input = "src/internal/quad.glsl",
-        .output = "quad.glsl.zig",
-        // 保留对应平台可能使用的 shader 格式。
-        .slang = switch (target.os.tag) {
-            .windows => .{ .hlsl5 = true, .glsl410 = true },
-            .macos => .{ .metal_macos = true, .glsl410 = true },
-            .ios => if (target.abi == .simulator)
-                .{ .metal_sim = true }
-            else
-                .{ .metal_ios = true },
-            .linux => if (target.abi.isAndroid())
-                .{ .glsl300es = true }
-            else
-                .{ .glsl410 = true, .glsl300es = true },
-            .emscripten => .{ .glsl300es = true, .wgsl = true },
-            else => return error.UnsupportedShaderTarget,
-        },
-    });
-}
+// Web 构建的类型和实现统一放在平台模块中。
+pub const WebOptions = webSdk.WebOptions;
+pub const buildWeb = webSdk.buildWeb;
+pub const installEmsdk = webSdk.installEmsdk;

@@ -1,0 +1,13 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-ios"]
+install-name: "/System/Library/Frameworks/Metal.framework/Metal"
+current-version: 341.16
+exports:
+  - targets: ["arm64-ios"]
+    symbols: ["_MTLCreateSystemDefaultDevice"]
+    objc-classes: ["MTLComputePipelineDescriptor", "MTLDepthStencilDescriptor",
+                     "MTLRenderPassDescriptor", "MTLRenderPipelineDescriptor",
+                     "MTLSamplerDescriptor", "MTLStencilDescriptor",
+                     "MTLTextureDescriptor", "MTLVertexDescriptor"]
+...

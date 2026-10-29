@@ -1,0 +1,49 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-macos", "x86_64-macos"]
+install-name: "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"
+current-version: 2483
+compatibility-version: 45
+exports:
+  - targets: ["arm64-macos"]
+    objc-classes: ["NSApplication", "NSArray", "NSBitmapImageRep", "NSColor",
+                     "NSCursor", "NSEvent", "NSImage", "NSImageView",
+                     "NSMutableArray", "NSNull", "NSObject", "NSPasteboard",
+                     "NSRunLoop", "NSScreen", "NSString", "NSTimer",
+                     "NSTrackingArea", "NSURL", "NSView", "NSWindow"]
+    symbols: ["_CFDataCreate", "_CFRelease",
+                     "_CGAssociateMouseAndMouseCursorPosition",
+                     "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
+                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
+                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_NSApp", "_NSCalibratedRGBColorSpace",
+                     "_NSPasteboardTypeFileURL", "_NSPasteboardTypeString",
+                     "_NSRunLoopCommonModes", "_NSZeroPoint",
+                     "___CFConstantStringClassReference", "__objc_empty_cache",
+                     "_kCFAllocatorDefault",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB",
+                     "_objc_alloc", "_objc_alloc_init", "_objc_autoreleasePoolPop",
+                     "_objc_autoreleasePoolPush", "_objc_msgSend",
+                     "_objc_msgSendSuper2", "_objc_release", "_objc_retain"]
+  - targets: ["x86_64-macos"]
+    objc-classes: ["NSApplication", "NSArray", "NSBitmapImageRep", "NSColor",
+                     "NSCursor", "NSEvent", "NSImage", "NSImageView",
+                     "NSMutableArray", "NSNull", "NSObject", "NSPasteboard",
+                     "NSRunLoop", "NSScreen", "NSString", "NSTimer",
+                     "NSTrackingArea", "NSURL", "NSView", "NSWindow"]
+    symbols: ["_CFDataCreate", "_CFRelease",
+                     "_CGAssociateMouseAndMouseCursorPosition",
+                     "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
+                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
+                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_NSApp", "_NSCalibratedRGBColorSpace",
+                     "_NSPasteboardTypeFileURL", "_NSPasteboardTypeString",
+                     "_NSRunLoopCommonModes", "_NSZeroPoint",
+                     "___CFConstantStringClassReference", "__objc_empty_cache",
+                     "_kCFAllocatorDefault",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB",
+                     "_objc_alloc", "_objc_alloc_init", "_objc_autoreleasePoolPop",
+                     "_objc_autoreleasePoolPush", "_objc_msgSend",
+                     "_objc_msgSendSuper2", "_objc_msgSend_stret", "_objc_release",
+                     "_objc_retain"]
+...

@@ -1,0 +1,13 @@
+eglBindAPI
+eglChooseConfig
+eglCreateContext
+eglCreateWindowSurface
+eglDestroyContext
+eglDestroySurface
+eglGetConfigAttrib
+eglGetDisplay
+eglInitialize
+eglMakeCurrent
+eglSwapBuffers
+eglSwapInterval
+eglTerminate

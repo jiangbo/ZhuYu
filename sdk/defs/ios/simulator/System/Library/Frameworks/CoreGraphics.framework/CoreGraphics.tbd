@@ -1,0 +1,14 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: ["arm64-ios-simulator", "x86_64-ios-simulator"]
+install-name: "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+current-version: 1774.0.1
+compatibility-version: 64
+exports:
+  - targets: ["arm64-ios-simulator"]
+    symbols: ["_CGColorSpaceCreateWithName", "_CGColorSpaceRelease",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
+  - targets: ["x86_64-ios-simulator"]
+    symbols: ["_CGColorSpaceCreateWithName", "_CGColorSpaceRelease",
+                     "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
+...
