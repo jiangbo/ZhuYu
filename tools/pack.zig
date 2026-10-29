@@ -1,5 +1,64 @@
 const std = @import("std");
 
+// 资源打包和桌面程序追加共用的构建参数。
+pub const Options = struct {
+    exe: *std.Build.Step.Compile,
+    assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
+    output: []const u8 = "assets.pack", // 独立资源包的输出名称。
+};
+
+// 注册 pack 命令，通过 append 选项控制是否自动追加资源包。
+pub fn addStep(
+    b: *std.Build,
+    dep: *std.Build.Dependency,
+    options: Options,
+) void {
+    const tool = b.addExecutable(.{
+        .name = "zhuyu-pack",
+        .root_module = b.createModule(.{
+            .root_source_file = dep.path("tools/pack.zig"),
+            .target = b.graph.host,
+            .optimize = .safe,
+        }),
+    });
+    const pack = b.addRunArtifact(tool);
+    // 打包命令每次读取当前资源，不登记资源变化依赖。
+    pack.has_side_effects = true;
+    pack.addDirectoryArg(b.path(options.assets));
+    const output = pack.addOutputFileArg(options.output);
+    const install = b.addInstallFile(output, options.output);
+    b.step("pack", "Pack assets")
+        .dependOn(&install.step);
+
+    // 依赖的布尔参数保存为字符串，未传入时保持关闭。
+    const opt = dep.builder.user_input_options.get("append") orelse return;
+    if (!std.mem.eql(u8, opt.scalar, "true")) return;
+
+    // pack 不限制目标平台，append 面向三个桌面系统。
+    const target = options.exe.rootModuleTarget();
+    if (target.os.tag != .windows and target.os.tag != .macos and
+        (target.os.tag != .linux or target.abi.isAndroid())) return;
+
+    const appendTool = b.addExecutable(.{
+        .name = "zhuyu-append",
+        .root_module = b.createModule(.{
+            .root_source_file = dep.path("tools/append.zig"),
+            .target = b.graph.host,
+            .optimize = .safe,
+        }),
+    });
+    const append = b.addRunArtifact(appendTool);
+    // 文件参数自动建立依赖：先编译程序、生成 pack，再执行追加。
+    append.addArtifactArg(options.exe);
+    append.addFileArg(output);
+    const name = b.fmt("{s}-packed{s}", .{
+        options.exe.name, target.exeFileExt(),
+    });
+    const program = append.addOutputFileArg(name);
+    const installProgram = b.addInstallBinFile(program, name);
+    b.getInstallStep().dependOn(&installProgram.step);
+}
+
 // 路径仅供打包时读取和计算哈希，偏移指向资源包内的文件内容。
 const Entry = struct {
     path: [:0]const u8,
