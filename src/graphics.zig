@@ -13,6 +13,17 @@ pub const queryBackend = sk.gfx.queryBackend;
 pub const Vector2 = math.Vector2;
 pub const ImageId = assets.Id;
 
+// 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
+pub const Vertex = extern struct {
+    position: math.Vector2 = .zero, // 顶点坐标
+    layer: f32 = 0, // 绘制层级
+    radian: f32 = 0, // 旋转弧度
+    size: math.Vector2, // 大小
+    pivot: math.Vector2 = .zero, // 旋转中心
+    uvRect: math.Vector4, // 纹理 UV 区域
+    color: Color = .white, // 顶点颜色
+};
+
 pub fn queryViewSize(view: View) math.Vector {
     const image = sk.gfx.queryViewImage(view);
     return .{
@@ -222,12 +233,6 @@ pub const Atlas = struct {
     size: math.Vector2,
     images: []const Image,
 };
-
-pub const Stats = struct {
-    text: usize = 0,
-};
-
-pub var stats: Stats = .{};
 
 pub const RenderTarget = struct {
     pass: sk.gfx.Pass = .{},

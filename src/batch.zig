@@ -12,16 +12,7 @@ const ImageId = graphics.ImageId;
 const Color = graphics.Color;
 const RenderPass = graphics.RenderPass;
 const Vector2 = math.Vector2;
-
-pub const Vertex = extern struct {
-    position: math.Vector2 = .zero, // 顶点坐标
-    layer: f32 = 0, // 绘制层级
-    radian: f32 = 0, // 旋转弧度
-    size: math.Vector2, // 大小
-    pivot: math.Vector2 = .zero, // 旋转中心
-    uvRect: math.Vector4, // 纹理 UV 区域
-    color: graphics.Color = .white, // 顶点颜色
-};
+const Vertex = graphics.Vertex;
 
 pub const Option = struct {
     size: ?Vector2 = null, // 大小
@@ -58,37 +49,31 @@ pub const DrawCommand = struct {
 pub var whiteImage: graphics.Image = undefined;
 pub var circleImage: graphics.Image = undefined;
 
-pub var vertices: std.ArrayList(Vertex) = .empty;
+// 命令借用调用方提供的固定缓冲区。
 pub var commands: std.ArrayList(Command) = .empty;
 
-var vertexHandle: sk.gfx.Buffer = undefined;
+var vertexBuffer: sk.gfx.Buffer = .{}; // 上传后用于绘制的顶点缓冲。
 var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
 var drawState: DrawCommand = undefined;
 var viewportSize: Vector2 = undefined; // beginDraw 初始化的当前视口像素尺寸。
 var flushed = false;
 
-pub fn init(vertex: []Vertex, cmds: []Command) void {
-    vertices = .initBuffer(vertex);
+// 命令缓冲区由调用方持有，必须保持有效且容量足够。
+pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
-    if (@import("builtin").is_test) return;
-
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
     defaultPipeline = createPipeline(shaderDesc);
-    vertexHandle = sk.gfx.makeBuffer(.{
-        .size = @sizeOf(Vertex) * vertex.len,
-        .usage = .{ .write_transient = true },
-    });
 
-    // 仅绘制图片时不需要 circle.png；矩形、线和圆等图形需要先登记此资源。
+    // 仅绘制图片时可传 null，绘制基础图形时需传入中心为白色的圆形图片。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
-    circleImage = assets.getImageByPath("circle.png") orelse return;
+    circleImage = image orelse return;
     const rect = math.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
 
+// 开始记录本帧绘制，保留已分配的顶点和命令容量。
 pub fn beginDraw() void {
-    graphics.stats = .{};
-    vertices.clearRetainingCapacity();
+    assets.beginDraw();
     commands.clearRetainingCapacity();
     flushed = false;
     viewportSize = (RenderPass{}).queryViewport().size;
@@ -99,7 +84,7 @@ pub fn beginDraw() void {
 }
 
 pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    endDrawCommand();
     commands.appendAssumeCapacity(.{
         .target = .{ .color = color, .pass = pass },
     });
@@ -108,7 +93,7 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
 
 // 在当前渲染通道内切换视口和绘制坐标范围，同时重置裁剪区域。
 pub fn useViewport(rect: math.Rect, size: Vector2) void {
-    endCommand();
+    endDrawCommand();
     commands.appendAssumeCapacity(.{
         .viewport = .{ .rect = rect, .size = size },
     });
@@ -124,25 +109,16 @@ pub fn queryPixelScale() Vector2 {
 
 // 设置逻辑坐标裁剪区域，null 恢复当前视口。
 pub fn useScissor(rect: ?math.Rect) void {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    endDrawCommand();
     commands.appendAssumeCapacity(.{ .scissor = .{
         .rect = rect orelse math.Rect.init(.zero, drawState.size),
         .size = drawState.size,
     } });
 }
 
-// 结束当前绘制命令，下一次绘制会创建新命令。
-pub fn endCommand() void {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
-}
-
-fn uploadVertices() void {
-    if (vertices.items.len == 0) return;
-    const buffer = sk.gfx.asRange(vertices.items);
-    sk.gfx.writeBufferTransient(.{
-        .src = .{ .data = buffer },
-        .dst = .{ .buffer = vertexHandle },
-    });
+// 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
+pub fn endDrawCommand() void {
+    if (currentDraw()) |draw| draw.end = assets.frameStats.vertex;
 }
 
 fn currentDraw() ?*DrawCommand {
@@ -154,9 +130,9 @@ fn currentDraw() ?*DrawCommand {
 }
 
 fn addCommand(image: Image) *DrawCommand {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    endDrawCommand();
     var draw = drawState;
-    draw.start = @intCast(vertices.items.len);
+    draw.start = @intCast(assets.frameStats.vertex);
     draw.view = image.view;
     commands.appendAssumeCapacity(.{ .draw = draw });
     return currentDraw().?;
@@ -168,7 +144,7 @@ pub fn drawVertices(items: []const Vertex, image: ?Image) void {
         // 自动分批只比较纹理视图，不比较采样器或其它状态。
         if (cmd.view.id != img.view.id) _ = addCommand(img);
     }
-    vertices.appendSliceAssumeCapacity(items);
+    assets.gpu.addVertices(items);
 }
 
 pub fn drawDebug(rect: math.Rect) void {
@@ -317,7 +293,7 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
         drawPos = cmd.camera.toWorld(source.toWindow(pos));
     }
 
-    vertices.appendAssumeCapacity(Vertex{
+    assets.gpu.addVertex(Vertex{
         .position = drawPos.sub(drawSize.mul(option.anchor)),
         .layer = image.layer,
         .radian = option.radian,
@@ -329,11 +305,10 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
 }
 
 pub fn flush() void {
-    if (currentDraw()) |draw| draw.end = vertices.items.len;
+    endDrawCommand();
 
-    // 提交待更新的图像数据，必须在开始渲染通道之前执行。
-    assets.gpu.flushImageUpdates();
-    uploadVertices();
+    // 在渲染通道开始前提交图片和顶点，保存可能扩容后的缓冲句柄。
+    vertexBuffer = assets.gpu.upload(vertexBuffer);
 
     var pipeline: sk.gfx.Pipeline = .{}; // 当前渲染通道已绑定的流水线。
     var activePass, var flipY = .{ false, false };
@@ -410,7 +385,7 @@ fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: *sk.gfx.Pipeline) void {
     // 绑定组
     var bindings = sk.gfx.Bindings{};
     bindings.views[0] = cmd.view;
-    bindings.vertex_buffers[0] = vertexHandle;
+    bindings.vertex_buffers[0] = vertexBuffer;
     bindings.vertex_buffer_offsets[0] = @intCast(cmd.start * @sizeOf(Vertex));
     bindings.samplers[0] = info.sampler;
     sk.gfx.applyBindings(bindings);
@@ -434,7 +409,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     const shaderHandle = sk.gfx.makeShader(shaderDesc);
     assets.gpu.addShader(shaderHandle);
 
-    const result = sk.gfx.makePipeline(.{
+    const pipeline = sk.gfx.makePipeline(.{
         .shader = shaderHandle,
         .layout = vertexLayout,
         .primitive_type = .TRIANGLE_STRIP,
@@ -450,6 +425,6 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
             break :init c;
         },
     });
-    assets.gpu.addPipeline(result);
-    return result;
+    assets.gpu.addPipeline(pipeline);
+    return pipeline;
 }

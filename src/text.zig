@@ -153,7 +153,7 @@ fn layout(
                 .color = option.color,
             });
         }
-        graphics.stats.text += 1;
+        assets.frameStats.text += 1;
     }
 
     return .{ .size = .xy(maxWidth, line * height), .next = next };

@@ -27,13 +27,13 @@ const platform = switch (builtin.os.tag) {
     else => unsupported,
 };
 
-// 四层图集共用资源，只记录当前层的装箱位置。
+// 四层图集共用资源，记录上传位置及当前层的装箱位置。
 const Atlas = struct {
     texture: sk.gfx.Image,
     view: sk.gfx.View,
-    upload: sk.gfx.Buffer,
-    offset: usize = 0, // 每个字形独占一段上传区域，避免同帧写入覆盖。
-    frame: u64, // 当前上传批次所属的帧。
+    upload: sk.gfx.Buffer, // 通过 GPU 模块创建和释放的上传缓冲。
+    offset: usize = 0, // 本帧下一个字形的上传偏移。
+    frame: u64, // 上传缓冲当前所属的帧。
     layer: i32 = 0,
     x: i32 = 1,
     y: i32 = 1,
@@ -78,12 +78,12 @@ pub fn resize() void {
     lineHeight = metrics.height * baseSize / pixelSize;
 }
 
-// 销毁字体图集及其上传缓冲，并清空字形索引。
+// 销毁字体图集，通过 GPU 模块释放上传缓冲，并清空字形索引。
 fn clear() void {
     if (atlas) |state| {
         assets.view.destroy(state.view);
         sk.gfx.destroyImage(state.texture);
-        sk.gfx.destroyBuffer(state.upload);
+        assets.gpu.destroyBuffer(state.upload);
     }
     atlas = null;
     glyphs.clearRetainingCapacity();
@@ -170,7 +170,7 @@ fn addImage(size: math.Vector2) graphics.Image {
         .size = size,
     };
 
-    // 各层共用上传缓冲，每个字形使用独立的上传区域。
+    // 每个字形使用独立的上传区域，复制记录由 GPU 模块统一提交。
     const left, const top = .{ state.x - 1, state.y - 1 };
     const copyWidth, const copyHeight = .{ width + 2, height + 2 };
     const len: usize = @intCast(copyWidth * copyHeight * 4);
@@ -178,7 +178,7 @@ fn addImage(size: math.Vector2) graphics.Image {
         .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
         .dst = .{ .buffer = state.upload, .offset = state.offset },
     });
-    assets.gpu.addImageUpdate(.{
+    assets.gpu.addUpdate(.{
         .src = .{
             .buffer = state.upload,
             .offset = state.offset,
@@ -199,7 +199,7 @@ fn addImage(size: math.Vector2) graphics.Image {
     return image;
 }
 
-// 创建四层纹理数组及共用的上传缓冲，返回唯一的图集状态。
+// 创建四层纹理数组，通过 GPU 模块创建共用的上传缓冲。
 fn addAtlas() *Atlas {
     const texture = sk.gfx.makeImage(.{
         .width = 1024,
@@ -211,10 +211,8 @@ fn addAtlas() *Atlas {
     });
     const view = sk.gfx.makeView(.{ .texture = .{ .image = texture } });
     assets.view.put(view, .{ .sampler = assets.sampler.nearest });
-    const width = sk.gfx.queryImageWidth(texture);
-    const height = sk.gfx.queryImageHeight(texture);
-    const uploadBuffer = sk.gfx.makeBuffer(.{
-        .size = @intCast(width * height * 4),
+    const upload = assets.gpu.makeBuffer(.{
+        .size = 1024 * 1024 * 4,
         .usage = .{
             .staging_buffer = true,
             .write_transient = true,
@@ -225,7 +223,7 @@ fn addAtlas() *Atlas {
     atlas = .{
         .texture = texture,
         .view = view,
-        .upload = uploadBuffer,
+        .upload = upload,
         .frame = window.frameCount(),
     };
     return &atlas.?;

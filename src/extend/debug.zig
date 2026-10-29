@@ -167,6 +167,8 @@ pub fn draw(rows: []const Row) void {
     const gfxStats = sk.gfx.queryStats();
     const frameStats = gfxStats.prev_frame;
     const totalStats = gfxStats.total;
+    // 获取当前持有的资源总量和顶点暂存区容量。
+    const assetStats = assets.queryTotalStats();
     // 左右列的格式串与参数成对排列，便于对应面板内容。
     // zig fmt: off
     writeFormatLine(&columns, "后端",
@@ -182,17 +184,19 @@ pub fn draw(rows: []const Row) void {
     writeFormatLine(&columns, "显示",
         "界面 {d:.0}%", .{window.dpi() * 100},
         "画面 {d:.0}%", .{window.viewRect.size.x / window.size.x * 100});
+    // 按有效顶点数统计本帧上传的数据量。
+    const vertexBytes = assets.frameStats.vertex * @sizeOf(graphics.Vertex);
     writeFormatLine(&columns, "图形",
         "纹理 {}", .{totalStats.images.alive},
-        "顶点 {} KB", .{batch.vertices.items.len * @sizeOf(batch.Vertex) / 1024});
-    const batchUsed: f32 = @floatFromInt(batch.vertices.items.len);
-    const batchCap: f32 = @floatFromInt(batch.vertices.capacity);
+        "顶点 {} KB", .{vertexBytes / 1024});
+    const batchUsed: f32 = @floatFromInt(assets.frameStats.vertex);
+    const batchCap: f32 = @floatFromInt(@max(assetStats.vertexCapacity, 1));
     writeFormatLine(&columns, "绘制",
         "批次 {}", .{frameStats.num_draw},
         "容量 {d:.0}%", .{batchUsed / batchCap * 100});
     writeFormatLine(&columns, "对象",
-        "精灵 {}", .{batch.vertices.items.len},
-        "文字 {}", .{graphics.stats.text});
+        "精灵 {}", .{assets.frameStats.vertex},
+        "文字 {}", .{assets.frameStats.text});
     writeFormatLine(&columns, "内存",
         "使用 {} KB", .{memory.counter.used / 1024},
         "最高 {} KB", .{memory.counter.max / 1024});
@@ -202,8 +206,6 @@ pub fn draw(rows: []const Row) void {
     writeFormatLine(&columns, "相机",
         "{d:.1}, {d:.1}", .{ camera.main.position.x, camera.main.position.y },
         "缩放 {d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });
-    // 获取当前已加载的资源统计数据
-    const assetStats = assets.queryStats();
     writeFormatLine(&columns, "资源",
         "文件 {}", .{assetStats.file},
         "图片 {}", .{assetStats.image});

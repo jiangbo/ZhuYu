@@ -16,6 +16,7 @@ const Path = [:0]const u8;
 
 var allocator: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
+pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
 pub fn init(io_: std.Io, maxSize: usize) void {
@@ -26,11 +27,15 @@ pub fn init(io_: std.Io, maxSize: usize) void {
         file.init() catch |err| {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
-    } else {
-        fetch.setup(io, allocator, maxSize);
-    }
+    } else fetch.setup(io, allocator, maxSize);
 
     sampler.init();
+}
+
+// 开始本帧绘制，重置统计并清空顶点，保留暂存区容量。
+pub fn beginDraw() void {
+    frameStats = .{};
+    gpu.vertices.clearRetainingCapacity();
 }
 
 // 推进异步加载，并在主线程执行资源回调。
@@ -129,10 +134,64 @@ pub const sampler = struct {
 };
 
 pub const gpu = struct {
+    // 统一持有缓冲句柄，提前销毁时移除，退出时释放剩余缓冲。
+    var buffers: std.AutoHashMapUnmanaged(sk.gfx.Buffer, void) = .empty;
+    var vertices: std.ArrayList(graphics.Vertex) = .empty; // 本帧顶点数据。
     var pipelines: std.ArrayListUnmanaged(sk.gfx.Pipeline) = .empty;
     var shaders: std.ArrayListUnmanaged(sk.gfx.Shader) = .empty;
-    // 待提交的图像复制记录，源缓冲和目标图像仍由创建者管理。
-    var imageUpdates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
+    // 待提交的图像复制记录，源缓冲和目标图像必须保持有效直到提交。
+    var updates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
+
+    // 创建由资产模块管理的缓冲。
+    pub fn makeBuffer(desc: sk.gfx.BufferDesc) sk.gfx.Buffer {
+        const buffer = sk.gfx.makeBuffer(desc);
+        buffers.put(allocator, buffer, {}) catch oom();
+        return buffer;
+    }
+
+    // 提前释放已登记的缓冲，避免退出时重复销毁。
+    pub fn destroyBuffer(buffer: sk.gfx.Buffer) void {
+        if (buffer.id == 0) return;
+        const removed = buffers.remove(buffer);
+        std.debug.assert(removed);
+        sk.gfx.destroyBuffer(buffer);
+    }
+
+    // 追加单个顶点，容量不足时自动增长。
+    pub fn addVertex(value: graphics.Vertex) void {
+        vertices.append(allocator, value) catch oom();
+        frameStats.vertex = vertices.items.len;
+    }
+
+    // 追加一组顶点，容量不足时自动增长。
+    pub fn addVertices(values: []const graphics.Vertex) void {
+        vertices.appendSlice(allocator, values) catch oom();
+        frameStats.vertex = vertices.items.len;
+    }
+
+    // 在渲染通道开始前提交图片更新并上传顶点。
+    // 返回当前有效的缓冲句柄，未扩容时返回原句柄。
+    pub fn upload(buffer: sk.gfx.Buffer) sk.gfx.Buffer {
+        for (updates.items) |value| sk.gfx.copyBufferToImage(value);
+        updates.clearRetainingCapacity();
+
+        if (vertices.items.len == 0) return buffer;
+        const data = sk.gfx.asRange(vertices.items);
+        var result = buffer;
+        if (sk.gfx.queryBufferSize(buffer) < data.size) {
+            destroyBuffer(buffer);
+            result = makeBuffer(.{
+                .size = vertices.capacity * @sizeOf(graphics.Vertex),
+                .usage = .{ .write_transient = true },
+                .label = "batch vertices",
+            });
+        }
+        sk.gfx.writeBufferTransient(.{
+            .src = .{ .data = data },
+            .dst = .{ .buffer = result },
+        });
+        return result;
+    }
 
     // 登记由引擎统一销毁的流水线。
     pub fn addPipeline(value: sk.gfx.Pipeline) void {
@@ -144,25 +203,29 @@ pub const gpu = struct {
         shaders.append(allocator, value) catch oom();
     }
 
-    // 登记图像复制操作，使用 assets 自己的分配器管理队列。
-    pub fn addImageUpdate(value: sk.gfx.CopyBufferToImageDesc) void {
-        imageUpdates.append(allocator, value) catch oom();
-    }
-
-    // 在渲染通道开始前提交复制，清空记录并保留容量供后续帧复用。
-    pub fn flushImageUpdates() void {
-        for (imageUpdates.items) |value| sk.gfx.copyBufferToImage(value);
-        imageUpdates.clearRetainingCapacity();
+    // 登记图像复制操作，上传缓冲的写入策略由调用方决定。
+    pub fn addUpdate(value: sk.gfx.CopyBufferToImageDesc) void {
+        updates.append(allocator, value) catch oom();
     }
 
     fn deinit() void {
-        imageUpdates.deinit(allocator);
+        updates.deinit(allocator);
+        updates = .empty;
+        vertices.deinit(allocator);
+        vertices = .empty;
+        frameStats = .{};
+        var iterator = buffers.keyIterator();
+        while (iterator.next()) |buffer| sk.gfx.destroyBuffer(buffer.*);
+        buffers.deinit(allocator);
+        buffers = .empty;
 
         for (pipelines.items) |value| sk.gfx.destroyPipeline(value);
         pipelines.deinit(allocator);
+        pipelines = .empty;
 
         for (shaders.items) |value| sk.gfx.destroyShader(value);
         shaders.deinit(allocator);
+        shaders = .empty;
     }
 };
 
@@ -538,19 +601,28 @@ pub const file = struct {
     }
 };
 
-pub const Stats = struct {
+// 本帧处理的字符数和顶点数。
+pub const FrameStats = struct {
+    text: usize = 0, // 进入绘制流程的字符数量，不含换行。
+    vertex: usize = 0, // 本帧已记录的顶点数量。
+};
+
+// 当前持有的资源总量，不表示启动以来的累计数量。
+pub const TotalStats = struct {
     image: usize,
     file: usize,
     sound: usize,
     music: usize,
+    vertexCapacity: usize, // 当前 CPU 顶点暂存区可容纳的顶点数量。
 };
 
-// 查询当前已加载并缓存的资源统计数据
-pub fn queryStats() Stats {
+// 查询当前持有的资源总量与顶点暂存区容量。
+pub fn queryTotalStats() TotalStats {
     return .{
         .image = imageCache.count(),
         .file = file.cache.count(),
         .sound = sound.cache.count(),
         .music = music.cache.count(),
+        .vertexCapacity = gpu.vertices.capacity,
     };
 }
