@@ -14,7 +14,7 @@ pub const AppConfig = struct {
 // 打包输入、工具与发布版本独立于 Android 应用配置。
 pub const Options = struct {
     lib: *Build.Step.Compile,
-    sdk: ?[]const u8 = null, // 未指定时读取 ANDROID_HOME 环境变量。
+    targetSdk: u32 = 36, // 适配版本独立于动态库目标指定的最低 API。
     assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
     compressLib: bool = true, // 压缩动态库，由系统在安装时解压。
     compressAssets: bool = true, // 压缩游戏资源，由系统在读取时解压。
@@ -23,28 +23,19 @@ pub const Options = struct {
     app: AppConfig,
 };
 
-// 注册 apk 步骤，保留独立动态库构建，不依赖 Gradle 和 Android Studio。
-pub fn addStep(b: *Build, options: Options) !void {
-    // 环境变量变化无法由配置缓存追踪，自动查找时每次重新执行配置。
-    if (options.sdk == null) b.graph.poisonCache();
-    const sdk = options.sdk orelse b.graph.environ_map.get("ANDROID_HOME") orelse
-        return error.AndroidSdkNotFound;
-    const toolsVersion = try findBuildTools(b, sdk);
-    const tools = b.pathJoin(&.{ sdk, "build-tools", toolsVersion });
-    const targetSdk = try findPlatform(b, sdk);
-    const resources = compileResources(b, .{
-        .xml = createResources(b, options, targetSdk),
-        .tools = tools,
-        .androidJar = .{ .cwd_relative = b.pathJoin(&.{
-            sdk,           "platforms", b.fmt("android-{d}", .{targetSdk}),
-            "android.jar",
-        }) },
-        .debug = options.lib.root_module.optimize == .debug,
-    });
-    const unsigned = packApk(b, options, .{ .resources = resources, .tools = tools });
+// 注册 apk 步骤，使用包内 JAR；宿主只需安装 JDK 11 或以上。
+pub fn addStep(b: *Build, dep: *Build.Dependency, options: Options) !void {
+    const target = options.lib.rootModuleTarget();
+    if (!target.abi.isAndroid()) return error.ExpectedAndroidTarget;
+    if (options.targetSdk < target.os.version_range.linux.android)
+        return error.TargetApiBelowMinimum;
+    // ARSCLib 1.4.0 的内置 Android framework 最高为 API 36。
+    if (options.targetSdk > 36) return error.UnsupportedTargetApi;
+    const unsigned = try packApk(b, dep, options);
     const apk = try signApk(b, .{
         .name = options.lib.name,
-        .tools = tools,
+        .signer = dep.path("sdk/apk/apksigner.jar"),
+        .source = dep.path("tools/Sign.java"),
         .apk = unsigned,
     });
     const install = b.addInstallFile(apk, b.fmt("apk/{s}.apk", .{options.lib.name}));
@@ -52,21 +43,22 @@ pub fn addStep(b: *Build, options: Options) !void {
 }
 
 // 生成 Manifest、图标图片及图标颜色配置。
-fn createResources(b: *Build, options: Options, targetSdk: u32) *WriteFile {
+fn createResources(b: *Build, options: Options) !*WriteFile {
     const app = options.app;
     // Manifest 与图标资源仅写入构建缓存，游戏无需维护 XML。
     const xml = b.addWriteFiles();
     _ = xml.add("AndroidManifest.xml", b.fmt(manifestXml, .{
-        app.package,
+        try xmlText(b, app.package),
         options.versionCode,
-        options.versionName,
-        // 最低 API 来自原生库目标，目标 API 来自已安装的 SDK Platform。
+        try xmlText(b, options.versionName),
+        // 最低 API 来自原生库目标，目标 API 由打包参数指定。
         options.lib.rootModuleTarget().os.version_range.linux.android,
-        targetSdk,
+        options.targetSdk,
         options.compressLib,
-        app.label,
+        try xmlText(b, app.label),
+        options.lib.root_module.optimize == .debug,
         @tagName(app.orientation),
-        options.lib.name,
+        try xmlText(b, options.lib.name),
     }));
     _ = xml.addCopyFile(app.icon, "res/mipmap-xxxhdpi/ic_launcher_foreground.png");
     // Android 自适应图标：将游戏图标作为前景，颜色资源作为背景。
@@ -85,102 +77,62 @@ fn createResources(b: *Build, options: Options, targetSdk: u32) *WriteFile {
         \\    <color name="ic_launcher_background">{s}</color>
         \\</resources>
         \\
-    , .{app.iconColor}));
+    , .{try xmlText(b, app.iconColor)}));
 
+    // 同时追踪资源文件及目录变化，避免缓存遗漏新增或删除的 assets。
+    _ = xml.addCopyDirectory(b.path(options.assets), "assets", .{});
     return xml;
 }
 
-// AAPT2 编译图片和颜色资源，链接为尚未加入动态库与游戏资源的 APK。
-fn compileResources(b: *Build, options: struct {
-    xml: *WriteFile,
-    tools: []const u8,
-    androidJar: Build.LazyPath,
-    debug: bool,
-}) Build.LazyPath {
-    const windows = b.graph.host.result.os.tag == .windows;
-    // AAPT2 编译图标和颜色，再合并 Manifest。
-    const aapt: Build.LazyPath = .{ .cwd_relative = b.pathJoin(&.{
-        options.tools, if (windows) "aapt2.exe" else "aapt2",
-    }) };
-    const compile = b.addRunFile(aapt);
-    compile.addArgs(&.{ "compile", "--dir" });
-    compile.addDirectoryArg(options.xml.getDirectory().path(b, "res"));
-    compile.addArg("-o");
-    const resources = compile.addOutputFileArg("resources.zip");
-    const link = b.addRunFile(aapt);
-    link.addArgs(&.{ "link", "--manifest" });
-    link.addFileArg(options.xml.getDirectory().path(b, "AndroidManifest.xml"));
-    link.addArg("-I");
-    link.addFileArg(options.androidJar);
-    if (options.debug) link.addArg("--debug-mode");
-    link.addArg("-o");
-    const resourceApk = link.addOutputFileArg("resources.apk");
-    link.addFileArg(resources);
-
-    return resourceApk;
-}
-
-// 合入动态库和游戏资源，再进行 16 KiB 对齐，为签名准备完整 APK。
-fn packApk(b: *Build, options: Options, input: struct {
-    resources: Build.LazyPath,
-    tools: []const u8,
-}) Build.LazyPath {
-    const windows = b.graph.host.result.os.tag == .windows;
-    const files = b.addWriteFiles();
+// Java 源文件由 JDK 直接运行，资源编译、组包和对齐共用一次调用。
+fn packApk(b: *Build, dep: *Build.Dependency, options: Options) !Build.LazyPath {
     const abi = switch (options.lib.rootModuleTarget().cpu.arch) {
         .aarch64 => "arm64-v8a",
         .arm, .thumb => "armeabi-v7a",
         .x86 => "x86",
         .x86_64 => "x86_64",
-        else => @panic("Unsupported Android ABI"),
+        else => return error.UnsupportedAndroidTarget,
     };
-    _ = files.addCopyFile(options.lib.getEmittedBin(), b.fmt(
-        "lib/{s}/lib{s}.so",
-        .{ abi, options.lib.name },
-    ));
-    // 游戏资源由 jar 加入，保证 Windows 生成的 ZIP 路径也使用斜杠。
-    _ = files.addCopyDirectory(b.path(options.assets), "assets", .{});
+    const resources = try createResources(b, options);
+    const pack = b.addSystemCommand(&.{
+        "java", "-Dfile.encoding=UTF-8", "--class-path",
+    });
+    pack.addFileArg(dep.path("sdk/apk/ARSCLib.jar"));
+    pack.addFileArg(dep.path("tools/Apk.java"));
+    pack.addDirectoryArg(resources.getDirectory());
+    pack.addArtifactArg(options.lib);
+    pack.addArg(abi);
+    pack.addDirectoryArg(resources.getDirectory().path(b, "assets"));
+    pack.addArg(if (options.compressLib) "true" else "false");
+    pack.addArg(if (options.compressAssets) "true" else "false");
+    return pack.addOutputFileArg("unsigned.apk");
+}
 
-    // 只修改临时副本，避免污染 AAPT2 的缓存输出。
-    const temp = b.addWriteFiles();
-    temp.mode = .tmp;
-    const unsigned = temp.addCopyFile(input.resources, "unsigned.apk");
-    // 两次合入依次修改同一 APK，分别应用动态库与游戏资源的压缩设置。
-    var last: *Build.Step = &temp.step;
-    for ([_]struct { path: []const u8, compress: bool }{
-        .{ .path = "lib", .compress = options.compressLib },
-        .{ .path = "assets", .compress = options.compressAssets },
-    }) |entry| {
-        const merge = b.addSystemCommand(&.{ "jar", "--update" });
-        if (!entry.compress) merge.addArg("--no-compress");
-        merge.addArg("--file");
-        merge.has_side_effects = true;
-        merge.addFileArg(unsigned);
-        merge.addArg("-C");
-        merge.addDirectoryArg(files.getDirectory());
-        merge.addArg(entry.path);
-        merge.step.dependOn(last);
-        last = &merge.step;
+// 字符串写入 XML 属性前转义，保留中文名称及引号等字符。
+fn xmlText(b: *Build, text: []const u8) ![]const u8 {
+    var result: std.ArrayList(u8) = .empty;
+    for (text) |char| {
+        switch (char) {
+            '&' => try result.appendSlice(b.allocator, "&amp;"),
+            '<' => try result.appendSlice(b.allocator, "&lt;"),
+            '>' => try result.appendSlice(b.allocator, "&gt;"),
+            '"' => try result.appendSlice(b.allocator, "&quot;"),
+            '\'' => try result.appendSlice(b.allocator, "&apos;"),
+            else => try result.append(b.allocator, char),
+        }
     }
-
-    // 未压缩的动态库按 16 KiB 页对齐，签名后不再修改 APK。
-    const zipalign = b.addRunFile(.{ .cwd_relative = b.pathJoin(&.{
-        input.tools, if (windows) "zipalign.exe" else "zipalign",
-    }) });
-    zipalign.addArgs(&.{ "-P", "16", "-f", "4" });
-    zipalign.addFileArg(unsigned);
-    const aligned = zipalign.addOutputFileArg("aligned.apk");
-    zipalign.step.dependOn(last);
-
-    return aligned;
+    return result.toOwnedSlice(b.allocator);
 }
 
 // 创建或复用调试密钥，对已完成组包和对齐的 APK 签名。
 fn signApk(b: *Build, options: struct {
     name: []const u8,
-    tools: []const u8,
+    signer: Build.LazyPath,
+    source: Build.LazyPath,
     apk: Build.LazyPath,
 }) !Build.LazyPath {
+    // 调试密钥可在构建之外创建或删除，每次重新计算生成步骤。
+    b.graph.poisonCache();
     const windows = b.graph.host.result.os.tag == .windows;
     // 复用 Android 默认调试密钥路径；新证书的身份描述标记 ZhuYu。
     const home = b.graph.environ_map.get(if (windows) "USERPROFILE" else "HOME").?;
@@ -209,61 +161,15 @@ fn signApk(b: *Build, options: struct {
         keyStep = &keytool.step;
     };
     const sign = b.addSystemCommand(&.{
-        "java", "--enable-native-access=ALL-UNNAMED", "-jar",
+        "java", "-Dfile.encoding=UTF-8", "--class-path",
     });
-    sign.addFileArg(.{ .cwd_relative = b.pathJoin(&.{
-        options.tools, "lib", "apksigner.jar",
-    }) });
-    sign.addArg("sign");
-    sign.addArg("--ks");
-    sign.addFileArg(key);
-    sign.addArgs(&.{
-        "--ks-key-alias", "androiddebugkey", "--ks-pass", "pass:android",
-        "--key-pass",     "pass:android",    "--out",
-    });
-    const apk = sign.addOutputFileArg(b.fmt("{s}.apk", .{options.name}));
+    sign.addFileArg(options.signer);
+    sign.addFileArg(options.source);
     sign.addFileArg(options.apk);
+    const apk = sign.addOutputFileArg(b.fmt("{s}.apk", .{options.name}));
+    sign.addFileArg(key);
     if (keyStep) |step| sign.step.dependOn(step);
     return apk;
-}
-
-// 按语义版本选择 Build Tools，安装或删除版本后重新执行构建配置。
-fn findBuildTools(b: *Build, sdk: []const u8) ![]const u8 {
-    const path = b.pathJoin(&.{ sdk, "build-tools" });
-    b.dependOnDirectoryContents(.{ .cwd_relative = path });
-    const io = b.graph.io;
-    var dir = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
-    defer dir.close(io);
-    var iterator = dir.iterate();
-    var selected: ?[]const u8 = null;
-    var latest: std.SemanticVersion = undefined;
-    while (try iterator.next(io)) |entry| {
-        if (entry.kind != .directory) continue;
-        const version = try std.SemanticVersion.parse(entry.name);
-        if (selected == null or version.order(latest) == .gt) {
-            selected = b.dupe(entry.name);
-            latest = version;
-        }
-    }
-    return selected orelse error.BuildToolsNotFound;
-}
-
-// 平台目录使用 android-API 命名，选择最高 API 作为构建和适配版本。
-fn findPlatform(b: *Build, sdk: []const u8) !u32 {
-    const path = b.pathJoin(&.{ sdk, "platforms" });
-    b.dependOnDirectoryContents(.{ .cwd_relative = path });
-    const io = b.graph.io;
-    var dir = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
-    defer dir.close(io);
-    var iterator = dir.iterate();
-    var latest: ?u32 = null;
-    while (try iterator.next(io)) |entry| {
-        if (entry.kind != .directory) continue;
-        const name = std.mem.cutPrefix(u8, entry.name, "android-") orelse continue;
-        const version = try std.fmt.parseUnsigned(u32, name, 10);
-        if (latest == null or version > latest.?) latest = version;
-    }
-    return latest orelse error.PlatformNotFound;
 }
 
 // Manifest 固定模板，应用属性与版本在生成时填入。
@@ -275,7 +181,7 @@ const manifestXml =
     \\    <uses-feature android:glEsVersion="0x00030001" android:required="true" />
     \\    <application android:allowBackup="false" android:hasCode="false"
     \\        android:extractNativeLibs="{}" android:icon="@mipmap/ic_launcher"
-    \\        android:label="{s}"
+    \\        android:label="{s}" android:debuggable="{}"
     \\        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
     \\        <activity android:name="android.app.NativeActivity"
     \\            android:exported="true" android:launchMode="singleTask"
