@@ -1,5 +1,5 @@
 const input = @import("../input.zig");
-const window = @import("../window.zig");
+const camera = @import("../camera.zig");
 const math = @import("../math.zig");
 const batch = @import("../batch.zig");
 const graphics = @import("../graphics.zig");
@@ -102,7 +102,7 @@ pub const Popup = struct {
 };
 
 pub fn popupPosition(popup: Popup) Vector2 {
-    const bounds = popup.bounds orelse window.size;
+    const bounds = popup.bounds orelse camera.size;
     const max = popup.maxSize orelse popup.size;
     var pos = popup.anchor.add(popup.offset);
 
@@ -186,8 +186,9 @@ pub fn MenuT(comptime T: type) type {
             self.pressed = null;
         }
 
+        // 在默认游戏逻辑画面内居中，不受窗口像素尺寸变化影响。
         pub fn centerInWindow(self: *Self) void {
-            self.position = window.size.sub(self.panel.size).scale(0.5);
+            self.position = camera.size.sub(self.panel.size).scale(0.5);
         }
 
         pub fn update(self: *Self, option: Option) ?T {
@@ -286,7 +287,7 @@ pub fn MenuT(comptime T: type) type {
         // 绘制遮罩、面板和按钮等非文字内容。
         pub fn drawImage(self: Self) void {
             if (self.overlay) |overlay| {
-                const rect: math.Rect = .init(.zero, window.size);
+                const rect: math.Rect = .init(.zero, camera.size);
                 batch.drawRect(rect, .{ .color = overlay });
             }
             self.drawPanel();

@@ -37,7 +37,7 @@ pub const Camera = struct {
 var buffer: [8]Camera = undefined;
 pub var stack: std.ArrayList(Camera) = .initBuffer(&buffer);
 pub var main: Camera = .window;
-pub var size: Vector2 = undefined;
+pub var size: Vector2 = undefined; // 默认游戏逻辑尺寸，不随窗口像素尺寸变化。
 pub var bound: Vector2 = undefined;
 
 pub fn init(cameraSize: Vector2) void {

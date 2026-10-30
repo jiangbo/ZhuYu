@@ -23,19 +23,19 @@ pub const ScaleEnum = enum {
 
 pub const Info = struct {
     title: [:0]const u8, // 窗口标题
-    size: math.Vector, // 窗口大小
-    logicSize: ?math.Vector = null, // 逻辑大小，默认和窗口大小相同
+    size: math.Vector, // 请求的窗口尺寸，高 DPI 下不等于实际渲染像素。
+    logicSize: ?math.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
     alignment: math.Vector = .center, // 对齐方式
     maxFileSize: usize = 1 * 1024 * 1024, // 最大加载文件大小
 };
 
-pub var size: math.Vector = .zero; // 默认绘制坐标尺寸。
-pub var rawSize: math.Vector = .zero; // 实际窗口像素尺寸，包含黑边。
+pub var size: math.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
+// 默认游戏画面在窗口中的像素区域，由缩放模式计算，不随绘制切换而改变。
 pub var viewRect: math.Rect = undefined;
-pub var scale: math.Vector = .one;
-pub var info: Info = undefined; // 当前窗口配置
+pub var scale: math.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
+var info: Info = undefined; // 当前窗口配置，由 run 设置。
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
 // 平台实现统一在这里选择，供入口、窗口和资源加载共用。
@@ -62,8 +62,8 @@ pub fn run(info_: Info) void {
 fn createDesc(info_: Info) sk.app.Desc {
     sk.time.setup();
     info = info_;
-    size = info.logicSize orelse info.size;
-    viewRect = .init(.zero, size);
+    camera.init(info.logicSize orelse info.size);
+    viewRect = .init(.zero, camera.size);
 
     if (builtin.os.tag == .windows) {
         if (info.disableIME) _ = platform.ImmDisableIME(-1);
@@ -92,7 +92,6 @@ export fn windowInit() void {
         .allocator = memory.sokolAllocator(sk.gfx.Allocator),
     });
     assets.init(io, info.maxFileSize);
-    camera.init(size);
     math.random.init(sk.time.now());
     call(root, "init", .{memory.allocator});
 }
@@ -109,31 +108,33 @@ export fn windowEvent(event: ?*const Event) void {
     }
 }
 
+// 按实际窗口像素和默认逻辑尺寸计算画面区域及输入、字体共用的缩放比例。
 pub fn computeViewRect() void {
-    rawSize = .xy(sk.app.widthf(), sk.app.heightf());
-    const ratio = rawSize.div(size);
+    size = .xy(sk.app.widthf(), sk.app.heightf());
+    const logicSize = camera.size;
+    const ratio = size.div(logicSize);
     viewRect = switch (info.scaleEnum) {
-        .none => .init(rawSize.sub(size).mul(info.alignment), size),
-        .stretch => .init(.zero, rawSize),
+        .none => .init(size.sub(logicSize).mul(info.alignment), logicSize),
+        .stretch => .init(.zero, size),
         .fit => blk: {
-            const minSize = size.scale(@min(ratio.x, ratio.y));
-            const position = rawSize.sub(minSize).mul(info.alignment);
+            const minSize = logicSize.scale(@min(ratio.x, ratio.y));
+            const position = size.sub(minSize).mul(info.alignment);
             break :blk .init(position, minSize);
         },
         .fill => blk: {
-            const maxSize = size.scale(@max(ratio.x, ratio.y));
-            const position = rawSize.sub(maxSize).mul(info.alignment);
+            const maxSize = logicSize.scale(@max(ratio.x, ratio.y));
+            const position = size.sub(maxSize).mul(info.alignment);
             break :blk .init(position, maxSize);
         },
         .integer => blk: {
             const min = @min(ratio.x, ratio.y);
             const usedScale = if (min < 1) min else @trunc(min);
-            const intSize = size.scale(usedScale);
-            const position = rawSize.sub(intSize).mul(info.alignment);
+            const intSize = logicSize.scale(usedScale);
+            const position = size.sub(intSize).mul(info.alignment);
             break :blk .init(position, intSize);
         },
     };
-    scale = viewRect.size.div(size);
+    scale = viewRect.size.div(logicSize);
 }
 
 pub var frameTicks: u64 = 0;
@@ -226,6 +227,6 @@ pub fn useWindowIcon(path: [:0]const u8) void {
 
 pub fn drawCenter(str: text.String, y: f32, option: text.Option) void {
     const textSize = text.measure(str, option);
-    const pos = size.mul(.xy(0.5, y)).sub(.xy(textSize.x / 2, 0));
+    const pos = camera.size.mul(.xy(0.5, y)).sub(.xy(textSize.x / 2, 0));
     text.draw(str, pos, option);
 }

@@ -32,7 +32,7 @@ pub fn init() void {
 // 根据窗口 DPI 设置摇杆启动区域。
 fn layout() void {
     stickCamera = .windowDpi();
-    const size = stickCamera.toWorld(window.rawSize);
+    const size = stickCamera.toWorld(window.size);
     area = .init(.zero, .xy(size.x * 0.25, size.y));
 }
 
@@ -103,7 +103,7 @@ pub fn reset() void {
 
 // 切换到全窗口视口和摇杆使用的 DPI 相机。
 pub fn begin() void {
-    const size = window.rawSize;
+    const size = window.size;
     batch.useViewport(.init(.zero, size), size);
     camera.push(stickCamera);
 }

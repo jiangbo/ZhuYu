@@ -55,7 +55,7 @@ pub fn init() void {
 // 相机统一处理 DPI，右侧按钮向窗口内侧留出握持空间。
 fn layout() void {
     buttonCamera = .windowDpi();
-    const size = buttonCamera.toWorld(window.rawSize);
+    const size = buttonCamera.toWorld(window.size);
     const confirm: math.Circle = .init(size.addXY(-100, -84), 44);
     // 菜单贴齐确定键的底边，功能键贴齐确定键的右边。
     const bottom = confirm.center.y + confirm.radius;
@@ -138,7 +138,7 @@ pub fn reset() void {
 
 // 切换到全窗口视口和按钮使用的 DPI 相机。
 pub fn begin() void {
-    const size = window.rawSize;
+    const size = window.size;
     batch.useViewport(.init(.zero, size), size);
     camera.push(buttonCamera);
 }

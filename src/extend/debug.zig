@@ -178,12 +178,12 @@ pub fn draw(rows: []const Row) void {
         "{d:.2} ms", .{frameTime},
         "用时 {d:.2} ms", .{usedTime});
     writeFormatLine(&columns, "窗口",
-        "{d:.0}x{d:.0}", .{ window.rawSize.x, window.rawSize.y },
-        "逻辑 {d:.0}x{d:.0}", .{ window.size.x, window.size.y });
+        "{d:.0}x{d:.0}", .{ window.size.x, window.size.y },
+        "逻辑 {d:.0}x{d:.0}", .{ camera.size.x, camera.size.y });
     // 显示触摸控件采用的界面倍率，与按钮相机使用同一计算。
     writeFormatLine(&columns, "显示",
         "界面 {d:.0}%", .{window.dpi() * 100},
-        "画面 {d:.0}%", .{window.viewRect.size.x / window.size.x * 100});
+        "画面 {d:.0}%", .{window.viewRect.size.x / camera.size.x * 100});
     // 按有效顶点数统计本帧上传的数据量。
     const vertexBytes = assets.frameStats.vertex * @sizeOf(graphics.Vertex);
     writeFormatLine(&columns, "图形",
@@ -231,7 +231,7 @@ pub fn draw(rows: []const Row) void {
     const scale = debugTextScale(labelSize.y);
     const padding = basePadding.scale(scale.x);
     const position = Vector2.xy(10, 10).scale(scale.x);
-    const panelWidth = window.size.x * 0.70;
+    const panelWidth = camera.size.x * 0.70;
     const contentWidth = (panelWidth - padding.x * 2) / scale.x;
     const valueWidth = (contentWidth - labelSize.x - gap * 2) / 2;
     const textOption = text.Option{
@@ -262,7 +262,7 @@ fn writeRow(columns: *Columns, row: Row) void {
 
 fn debugTextScale(contentHeight: f32) Vector2 {
     const baseHeight = contentHeight + basePadding.y * 2;
-    const maxHeight = window.size.y * 0.75;
+    const maxHeight = camera.size.y * 0.75;
 
     const rawScale = maxHeight / baseHeight;
 
