@@ -101,7 +101,7 @@ pub var resized: bool = false;
 
 export fn windowEvent(event: ?*const Event) void {
     if (event) |ev| {
-        input.handle(ev, .{ .offset = viewRect.min, .scale = scale });
+        input.handle(ev);
         if (ev.type == .RESIZED) resized = true;
 
         call(root, "event", .{ev});
@@ -142,9 +142,10 @@ export fn windowFrame() void {
     const frameStart = sk.time.now();
     assets.update();
     if (resized) computeViewRect();
+    if (input.anyMoved()) input.begin(viewRect.min, scale);
     const delta: f32 = @floatCast(sk.app.frameDuration());
     call(root, "frame", .{delta});
-    input.update();
+    input.end();
     resized = false;
     frameTicks = sk.time.since(frameStart);
 }
