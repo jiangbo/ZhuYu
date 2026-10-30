@@ -61,7 +61,8 @@ pub fn toWorld(point: Vector2) Vector2 {
     return main.toWorld(point);
 }
 
-pub fn viewport() math.Rect {
+// 返回主相机在世界坐标中的可见矩形，供地图裁剪使用。
+pub fn mainWorldRect() math.Rect {
     return .init(main.position, size.div(main.scale));
 }
 
