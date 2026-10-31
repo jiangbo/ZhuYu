@@ -317,9 +317,18 @@ pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
     }
 
     const view = renderPass.queryViewport();
-    sk.gfx.applyViewportf(view.min.x, view.min.y, //
-        view.size.x, view.size.y, true);
+    applyViewport(view.min, view.size);
     return view;
+}
+
+// 设置以渲染目标左上角为原点的像素视口。
+pub fn applyViewport(position: Vector2, size: Vector2) void {
+    sk.gfx.applyViewportf(position.x, position.y, size.x, size.y, true);
+}
+
+// 设置以渲染目标左上角为原点的像素裁剪区域。
+pub fn applyScissor(position: Vector2, size: Vector2) void {
+    sk.gfx.applyScissorRectf(position.x, position.y, size.x, size.y, true);
 }
 
 pub const endPass = sk.gfx.endPass;

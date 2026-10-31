@@ -29,22 +29,17 @@ pub const Option = struct {
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
     viewport: math.Rect, // 目标像素区域。
-    scissor: AreaCommand, // 裁剪区域及其绘制坐标范围
+    scissor: math.Rect, // 目标像素裁剪，离屏翻转在提交时处理。
     draw: DrawCommand, // 绘制命令
 };
 
 pub const TargetCommand = struct { color: Color, pass: RenderPass };
-// 裁剪命令记录逻辑区域及其绘制坐标范围。
-pub const AreaCommand = struct {
-    rect: math.Rect, // 相对视口的逻辑裁剪区域。
-    size: Vector2, // 记录命令时的绘制坐标范围。
-};
 pub const DrawCommand = struct {
     start: u32 = 0, // 起始顶点索引
     end: usize = 0, // 结束顶点索引
     view: graphics.View = .{}, // 纹理视图
-    camera: camera.Camera, // 绘制命令相机
-    size: Vector2, // 绘制坐标范围
+    camera: camera.Camera, // 本批次的基准相机快照。
+    size: Vector2, // 本批次绘制的逻辑尺寸。
 };
 
 // 当前绘制设置；创建命令时只复制本批次需要的状态。
@@ -107,19 +102,22 @@ pub fn useViewport(rect: math.Rect, size: Vector2) void {
     commands.appendAssumeCapacity(.{ .viewport = rect });
 }
 
-// 绘制期间查询逻辑坐标到目标像素的比例，包含相机缩放和 DPI。
+// 裁剪使用当前视口的逻辑坐标，不受相机影响；null 恢复完整视口。
+pub fn useScissor(rect: ?math.Rect) void {
+    endDrawCommand();
+    var clip = drawState.viewRect;
+    if (rect) |area| {
+        const scale = clip.size.div(drawState.size);
+        clip.min = clip.min.add(area.min.mul(scale));
+        clip.size = area.size.mul(scale);
+    }
+    commands.appendAssumeCapacity(.{ .scissor = clip });
+}
+
+// 当前相机每个坐标单位对应的目标像素数。
 pub fn queryPixelScale() Vector2 {
     const source = camera.stack.getLastOrNull() orelse drawState.camera;
     return drawState.viewRect.size.div(drawState.size).mul(source.scale);
-}
-
-// 设置逻辑坐标裁剪区域，null 恢复当前视口。
-pub fn useScissor(rect: ?math.Rect) void {
-    endDrawCommand();
-    commands.appendAssumeCapacity(.{ .scissor = .{
-        .rect = rect orelse math.Rect.init(.zero, drawState.size),
-        .size = drawState.size,
-    } });
 }
 
 // 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
@@ -333,19 +331,20 @@ pub fn flush() void {
             },
             .viewport => |view| {
                 viewport = view;
-                sk.gfx.applyViewportf(view.min.x, view.min.y, //
-                    view.size.x, view.size.y, true);
+                graphics.applyViewport(view.min, view.size);
                 // 切换视口时恢复完整裁剪，避免沿用旧视口的局部裁剪。
-                sk.gfx.applyScissorRectf(view.min.x, view.min.y, //
-                    view.size.x, view.size.y, true);
+                graphics.applyScissor(view.min, view.size);
             },
             .scissor => |clip| {
-                // 裁剪区域与离屏绘制保持相同的 Y 轴方向。
-                var rect = clip.rect;
-                if (flipY) rect.min.y = clip.size.y - rect.min.y - rect.size.y;
-                applyScissor(rect, viewport, clip.size);
+                var pos = clip.min;
+                // 离屏翻转后，原来的底部间距成为顶部间距。
+                if (flipY) {
+                    const gap = viewport.max().y - clip.max().y;
+                    pos.y = viewport.min.y + gap;
+                }
+                graphics.applyScissor(pos, clip.size);
             },
-            .draw => |draw| doDraw(draw, flipY, &pipeline),
+            .draw => |draw| pipeline = doDraw(draw, flipY, pipeline),
         }
     }
     flushed = true;
@@ -359,25 +358,15 @@ pub fn endDraw() void {
     graphics.commit();
 }
 
-// 将绘制坐标中的裁剪区域换算为实际像素。
-fn applyScissor(rect: math.Rect, view: math.Rect, size: Vector2) void {
-    const ratio = view.size.div(size);
-    const pos = view.min.add(rect.min.mul(ratio));
-    const clip = rect.size.mul(ratio);
-    sk.gfx.applyScissorRectf(pos.x, pos.y, clip.x, clip.y, true);
-}
-
-fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: *sk.gfx.Pipeline) void {
+// 提交一个绘制批次，并返回本次使用的流水线。
+fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: sk.gfx.Pipeline) sk.gfx.Pipeline {
     // 提交时获取视图配置，未指定流水线时使用默认图片流水线。
     const info = assets.view.get(cmd.view);
     const selected = info.pipeline orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
-    if (pipeline.id != selected.id) {
-        sk.gfx.applyPipeline(selected);
-        pipeline.* = selected;
-    }
+    if (pipeline.id != selected.id) sk.gfx.applyPipeline(selected);
 
     // 处理 uniform 变量
     const size = graphics.queryViewSize(cmd.view);
@@ -402,6 +391,7 @@ fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: *sk.gfx.Pipeline) void {
 
     // 绘制
     sk.gfx.draw(0, 4, @intCast(cmd.end - cmd.start));
+    return selected;
 }
 
 pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
