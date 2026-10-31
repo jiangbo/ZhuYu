@@ -5,11 +5,11 @@ layout(binding=0) uniform vs_params {
     vec4 textureVec;
 };
 
-in vec2 vertex_position; // X Y 像素坐标
+in vec2 vertex_position; // 世界坐标中的固定变换中心
 in float vertex_layer; // 纹理数组的层级
 in float vertex_radian; // 旋转的弧度
-in vec2 vertex_scale; // 缩放，像素尺寸
-in vec2 vertex_pivot; // 旋转中心，归一化坐标
+in vec2 vertex_scale; // 缩放后的绘制尺寸
+in vec2 vertex_pivot; // 缩放和旋转共用的中心，归一化坐标
 in vec4 vertex_texture; // 纹理坐标，xy是偏移量，zw是缩放
 in vec4 vertex_color; // 颜色
 
@@ -20,16 +20,14 @@ void main() {
     // 顶点
     vec2 corner = vec2(gl_VertexIndex & 1, gl_VertexIndex >> 1 & 1);
 
-    // 先缩放，缩放必须要在旋转之前做
-    vec2 scaledCorner = corner * vertex_scale;
-    vec2 scaledPivot  = vertex_pivot * vertex_scale;
-    vec2 scaled = scaledCorner - scaledPivot;
+    // 以固定中心为原点生成四角，再应用绘制尺寸。
+    vec2 scaled = (corner - vertex_pivot) * vertex_scale;
     // 再应用旋转
     float cosA = cos(vertex_radian);
     float sinA = sin(vertex_radian);
     vec2 rotated = mat2(cosA, sinA, -sinA, cosA) * scaled;
-    // 最后平移到世界坐标
-    vec3 point = vec3(rotated + scaledPivot + vertex_position.xy, 1);
+    // 最后平移到固定中心，缩放和旋转都不会移动这个中心。
+    vec3 point = vec3(rotated + vertex_position, 1);
     float clipX = dot(transformX.xyz, point);
     float clipY = dot(transformY.xyz, point);
     gl_Position = vec4(clipX, clipY, 0, 1);

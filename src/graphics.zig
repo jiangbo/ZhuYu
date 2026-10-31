@@ -16,11 +16,11 @@ pub const ImageId = assets.Id;
 
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
 pub const Vertex = extern struct {
-    position: math.Vector2 = .zero, // 顶点坐标
+    position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
     layer: f32 = 0, // 绘制层级
     radian: f32 = 0, // 旋转弧度
-    size: math.Vector2, // 大小
-    pivot: math.Vector2 = .zero, // 旋转中心
+    size: math.Vector2, // 缩放后的绘制尺寸。
+    pivot: math.Vector2 = .zero, // 固定中心在图片中的归一化位置。
     uvRect: math.Vector4, // 纹理 UV 区域
     color: Color = .white, // 顶点颜色
 };

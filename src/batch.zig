@@ -17,9 +17,9 @@ const Vertex = graphics.Vertex;
 
 pub const Option = struct {
     size: ?Vector2 = null, // 大小
-    scale: Vector2 = .one, // 缩放
-    anchor: Vector2 = .zero, // 锚点
-    pivot: Vector2 = .center, // 旋转中心
+    scale: Vector2 = .one, // 围绕 pivot 缩放。
+    anchor: Vector2 = .zero, // 变换前的定位锚点，归一化坐标。
+    pivot: Vector2 = .center, // 缩放和旋转共用的固定中心，归一化坐标。
     radian: f32 = 0, // 旋转弧度
     uvRect: ?math.Vector4 = null, // 纹理 UV 区域
     color: graphics.Color = .white, // 颜色
@@ -288,19 +288,22 @@ pub fn drawNine(nine: graphics.NineImage, rect: math.Rect) void {
     }
 }
 
+// 按原始尺寸定位，再围绕固定中心缩放和旋转。
 pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
     var cmd = currentDraw() orelse addCommand(image);
     if (cmd.view.id != image.view.id) cmd = addCommand(image);
 
     const size = option.size orelse image.size;
-    var drawPos, var drawSize = .{ pos, size.mul(option.scale) };
+    // 中心使用缩放前的尺寸，改变 scale 时保持位置不变。
+    var center = pos.add(size.mul(option.pivot.sub(option.anchor)));
+    var drawSize = size.mul(option.scale);
     if (option.camera orelse camera.stack.getLastOrNull()) |source| {
         drawSize = drawSize.mul(source.scale.div(cmd.camera.scale));
-        drawPos = cmd.camera.toWorld(source.toWindow(pos));
+        center = cmd.camera.toWorld(source.toWindow(center));
     }
 
     assets.gpu.addVertex(Vertex{
-        .position = drawPos.sub(drawSize.mul(option.anchor)),
+        .position = center,
         .layer = image.layer,
         .radian = option.radian,
         .size = drawSize,
