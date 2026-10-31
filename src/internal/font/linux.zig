@@ -35,7 +35,7 @@ pub extern fn FT_Done_FreeType(FT_Library) c_int;
 pub extern fn FT_New_Face(FT_Library, [*:0]const u8, c_long, *FT_Face) c_int;
 pub extern fn FT_Done_Face(FT_Face) c_int;
 pub extern fn FT_Select_Charmap(FT_Face, c_uint) c_int;
-pub extern fn FT_Set_Pixel_Sizes(FT_Face, c_uint, c_uint) c_int;
+pub extern fn FT_Set_Char_Size(FT_Face, c_long, c_long, c_uint, c_uint) c_int;
 pub extern fn FT_Get_Char_Index(FT_Face, c_ulong) c_uint;
 pub extern fn FT_Load_Glyph(FT_Face, c_uint, i32) c_int;
 

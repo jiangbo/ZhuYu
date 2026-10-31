@@ -64,12 +64,14 @@ pub fn init(option: Option) void {
 // 仅在像素字号变化时清除旧字形并更新字体度量。
 pub fn resize() void {
     std.debug.assert(opened);
-    const size = @ceil(baseSize * window.scale.maxAxis());
+    // 保留小数字号，最小生成 1 像素，避免窗口过小时字号无效。
+    const size = @max(1, baseSize * window.scale.maxAxis());
     std.debug.assert(size >= 1 and size <= 256);
     if (size == pixelSize) return;
 
     // 按字号预留常用容量，实际字形超出时再按需扩容。
-    const len: usize = @intFromFloat((size + 2) * (size + 2) * 4);
+    const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
+    const len: usize = @intFromFloat(side * side * 4);
     if (pixels.len < len) pixels = memory.allocator.realloc(pixels, len);
     clear();
     pixelSize = size;
@@ -269,6 +271,8 @@ const web = struct {
 // Linux 平台直接使用系统库查找字体，并生成字形像素。
 const linux = struct {
     const c = @import("font/linux.zig");
+    // FreeType 的 26.6 定点数有 6 位小数，除以 64 得到点数或像素数。
+    const fixedScale: f32 = 64;
 
     var library: c.FT_Library = null; // 当前后端独占的 FreeType 实例。
     var face: c.FT_Face = null; // 只打开匹配到的一个字体，不做缺字回退。
@@ -322,15 +326,19 @@ const linux = struct {
         library = null;
     }
 
-    // 为选定字体设置像素字号，并读取基线和行高度量。
+    // 以 1/64 点设置字号，并读取基线和行高度量。
     fn resize(size: f32) Metrics {
-        if (c.FT_Set_Pixel_Sizes(face, 0, @intFromFloat(size)) != 0)
+        // 点制规定每英寸 72 点；选择 72 DPI，使点数直接对应目标像素数。
+        const dpi: c_uint = 72;
+        const charSize: c_long = @intFromFloat(@round(size * fixedScale));
+        if (c.FT_Set_Char_Size(face, 0, charSize, dpi, dpi) != 0)
             @panic("font size unavailable");
         const faceMetrics = face.*.size.*.metrics;
+        const height = @as(f32, @floatFromInt(faceMetrics.height)) / fixedScale;
         return .{
-            .ascent = @as(f32, @floatFromInt(faceMetrics.ascender)) / 64,
-            .descent = -@as(f32, @floatFromInt(faceMetrics.descender)) / 64,
-            .height = @max(size, @as(f32, @floatFromInt(faceMetrics.height)) / 64),
+            .ascent = @as(f32, @floatFromInt(faceMetrics.ascender)) / fixedScale,
+            .descent = -@as(f32, @floatFromInt(faceMetrics.descender)) / fixedScale,
+            .height = @max(size, height),
         };
     }
 
@@ -351,7 +359,7 @@ const linux = struct {
                 },
                 .size = .xy(@floatFromInt(bitmap.width), @floatFromInt(bitmap.rows)),
             },
-            .advance = @as(f32, @floatFromInt(slot.advance.x)) / 64,
+            .advance = @as(f32, @floatFromInt(slot.advance.x)) / fixedScale,
         };
         if (bitmap.width == 0 or bitmap.rows == 0) return char;
 
