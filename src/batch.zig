@@ -6,6 +6,7 @@ const shader = @import("shader");
 const graphics = @import("graphics.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
+const window = @import("window.zig");
 
 const Image = graphics.Image;
 const ImageId = graphics.ImageId;
@@ -46,6 +47,13 @@ pub const DrawCommand = struct {
     size: Vector2, // 绘制坐标范围
 };
 
+// 当前绘制设置；创建命令时只复制本批次需要的状态。
+const DrawState = struct {
+    camera: camera.Camera, // 当前渲染相机。
+    size: Vector2, // 当前绘制的逻辑尺寸。
+    viewRect: math.Rect, // 当前绘制使用的实际像素视口。
+};
+
 pub var whiteImage: graphics.Image = undefined;
 pub var circleImage: graphics.Image = undefined;
 
@@ -54,8 +62,7 @@ pub var commands: std.ArrayList(Command) = .empty;
 
 var vertexBuffer: sk.gfx.Buffer = .{}; // 上传后用于绘制的顶点缓冲。
 var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
-var drawState: DrawCommand = undefined;
-var viewportSize: Vector2 = undefined; // beginDraw 初始化的当前视口像素尺寸。
+var drawState: DrawState = undefined; // 当前相机、逻辑尺寸和实际像素视口。
 var flushed = false;
 
 // 命令缓冲区由调用方持有，必须保持有效且容量足够。
@@ -76,10 +83,10 @@ pub fn beginDraw() void {
     assets.beginDraw();
     commands.clearRetainingCapacity();
     flushed = false;
-    viewportSize = (RenderPass{}).queryViewport().size;
     drawState = .{
         .camera = camera.main,
         .size = camera.size,
+        .viewRect = window.viewRect,
     };
 }
 
@@ -88,7 +95,8 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     commands.appendAssumeCapacity(.{
         .target = .{ .color = color, .pass = pass },
     });
-    viewportSize = pass.queryViewport().size;
+    drawState.viewRect = pass.queryViewport();
+    drawState.size = pass.querySize();
 }
 
 // 在当前渲染通道内切换视口和绘制坐标范围，同时重置裁剪区域。
@@ -98,13 +106,13 @@ pub fn useViewport(rect: math.Rect, size: Vector2) void {
         .viewport = .{ .rect = rect, .size = size },
     });
     drawState.size = size;
-    viewportSize = rect.size;
+    drawState.viewRect = rect;
 }
 
 // 绘制期间查询逻辑坐标到目标像素的比例，包含相机缩放和 DPI。
 pub fn queryPixelScale() Vector2 {
     const source = camera.stack.getLastOrNull() orelse drawState.camera;
-    return viewportSize.div(drawState.size).mul(source.scale);
+    return drawState.viewRect.size.div(drawState.size).mul(source.scale);
 }
 
 // 设置逻辑坐标裁剪区域，null 恢复当前视口。
@@ -131,10 +139,12 @@ fn currentDraw() ?*DrawCommand {
 
 fn addCommand(image: Image) *DrawCommand {
     endDrawCommand();
-    var draw = drawState;
-    draw.start = @intCast(assets.frameStats.vertex);
-    draw.view = image.view;
-    commands.appendAssumeCapacity(.{ .draw = draw });
+    commands.appendAssumeCapacity(.{ .draw = .{
+        .start = @intCast(assets.frameStats.vertex),
+        .view = image.view,
+        .camera = drawState.camera,
+        .size = drawState.size,
+    } });
     return currentDraw().?;
 }
 
