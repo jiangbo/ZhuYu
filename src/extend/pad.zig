@@ -138,12 +138,11 @@ pub fn reset() void {
 
 // 切换到全窗口视口和按钮使用的 DPI 相机。
 pub fn begin() void {
-    const size = window.size;
-    batch.useViewport(.init(.zero, size), size);
+    batch.useViewport(.init(.zero, window.size), window.size);
     camera.push(buttonCamera);
 }
 
-// 恢复进入绘制前的相机和窗口视口。
+// 恢复游戏视口和进入前的相机。
 pub fn end() void {
     camera.pop();
     batch.useViewport(window.viewRect, camera.size);

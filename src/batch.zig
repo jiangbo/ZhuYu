@@ -28,15 +28,15 @@ pub const Option = struct {
 
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
-    viewport: AreaCommand, // 视口及其绘制坐标范围
+    viewport: math.Rect, // 目标像素区域。
     scissor: AreaCommand, // 裁剪区域及其绘制坐标范围
     draw: DrawCommand, // 绘制命令
 };
 
 pub const TargetCommand = struct { color: Color, pass: RenderPass };
-// 视口和裁剪命令共用区域结构，坐标含义由命令类型决定。
+// 裁剪命令记录逻辑区域及其绘制坐标范围。
 pub const AreaCommand = struct {
-    rect: math.Rect, // 视口使用实际像素，裁剪使用绘制坐标。
+    rect: math.Rect, // 相对视口的逻辑裁剪区域。
     size: Vector2, // 记录命令时的绘制坐标范围。
 };
 pub const DrawCommand = struct {
@@ -99,14 +99,12 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     drawState.size = pass.querySize();
 }
 
-// 在当前渲染通道内切换视口和绘制坐标范围，同时重置裁剪区域。
+// 设置目标像素区域和对应的逻辑尺寸，同时重置裁剪区域。
 pub fn useViewport(rect: math.Rect, size: Vector2) void {
     endDrawCommand();
-    commands.appendAssumeCapacity(.{
-        .viewport = .{ .rect = rect, .size = size },
-    });
-    drawState.size = size;
     drawState.viewRect = rect;
+    drawState.size = size;
+    commands.appendAssumeCapacity(.{ .viewport = rect });
 }
 
 // 绘制期间查询逻辑坐标到目标像素的比例，包含相机缩放和 DPI。
@@ -334,10 +332,12 @@ pub fn flush() void {
                 activePass = true;
             },
             .viewport => |view| {
-                viewport = view.rect;
-                sk.gfx.applyViewportf(viewport.min.x, viewport.min.y, //
-                    viewport.size.x, viewport.size.y, true);
-                applyScissor(.init(.zero, view.size), viewport, view.size);
+                viewport = view;
+                sk.gfx.applyViewportf(view.min.x, view.min.y, //
+                    view.size.x, view.size.y, true);
+                // 切换视口时恢复完整裁剪，避免沿用旧视口的局部裁剪。
+                sk.gfx.applyScissorRectf(view.min.x, view.min.y, //
+                    view.size.x, view.size.y, true);
             },
             .scissor => |clip| {
                 // 裁剪区域与离屏绘制保持相同的 Y 轴方向。
