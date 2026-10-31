@@ -3,6 +3,7 @@ const std = @import("std");
 const sk = @import("sokol");
 const math = @import("math.zig");
 const assets = @import("assets.zig");
+const camera = @import("camera.zig");
 const memory = @import("internal/memory.zig");
 const window = @import("window.zig");
 
@@ -276,11 +277,18 @@ pub const RenderPass = struct {
     target: ?*const RenderTarget = null,
     viewport: ?math.Rect = null,
 
-    // 返回实际像素视口，未指定时使用离屏目标或窗口的绘制区域。
+    // 返回实际像素视口；离屏默认覆盖纹理，窗口默认使用游戏视口。
     pub fn queryViewport(self: RenderPass) math.Rect {
         if (self.viewport) |view| return view;
         if (self.target) |target| return target.image.rect();
         return window.viewRect;
+    }
+
+    // 返回绘制坐标尺寸；窗口默认使用游戏逻辑尺寸，自定义区域使用像素尺寸。
+    pub fn querySize(self: RenderPass) Vector2 {
+        if (self.viewport) |view| return view.size;
+        if (self.target) |target| return target.image.size;
+        return camera.size;
     }
 };
 
