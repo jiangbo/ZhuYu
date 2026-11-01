@@ -11,9 +11,11 @@ in float vertex_radian; // 旋转的弧度
 in vec2 vertex_scale; // 缩放后的绘制尺寸
 in vec2 vertex_pivot; // 缩放和旋转共用的中心，归一化坐标
 in vec4 vertex_texture; // 纹理坐标，xy是偏移量，zw是缩放
-in vec4 vertex_color; // 颜色
+in vec4 vertex_color; // 乘色
+in vec4 vertex_add_color; // 加色
 
 out vec4 color;
+out vec4 add_color;
 out vec3 uvw;
 
 void main() {
@@ -34,6 +36,7 @@ void main() {
 
     // 纹理
     color = vertex_color;
+    add_color = vertex_add_color;
     vec2 uv = vertex_texture.xy + corner * vertex_texture.zw;
     uvw = vec3(uv * textureVec.xy, vertex_layer);
 }
@@ -45,11 +48,12 @@ layout(binding=0) uniform texture2DArray tex;
 layout(binding=0) uniform sampler smp;
 
 in vec4 color;
+in vec4 add_color;
 in vec3 uvw;
 out vec4 frag_color;
 
 void main() {
-     frag_color = texture(sampler2DArray(tex, smp), uvw) * color;
+     frag_color = texture(sampler2DArray(tex, smp), uvw) * color + add_color;
 }
 @end
 
@@ -59,6 +63,7 @@ layout(binding=0) uniform texture2DArray tex;
 layout(binding=0) uniform sampler smp;
 
 in vec4 color;
+in vec4 add_color;
 in vec3 uvw;
 out vec4 frag_color;
 
@@ -74,7 +79,8 @@ void main() {
     vec2 screenSize = vec2(1.0) / fwidth(uvw.xy);
     float screenRange = max(0.5 * dot(unitRange, screenSize), 1.0);
     float opacity = clamp(distance * screenRange + 0.5, 0.0, 1.0);
-    frag_color = vec4(color.rgb, opacity * color.a);
+    // 先生成字形覆盖率，再应用乘色和加色。
+    frag_color = vec4(vec3(1.0), opacity) * color + add_color;
 }
 @end
 

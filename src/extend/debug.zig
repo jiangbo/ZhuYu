@@ -235,7 +235,7 @@ pub fn draw(rows: []const Row) void {
     const contentWidth = (panelWidth - padding.x * 2) / scale.x;
     const valueWidth = (contentWidth - labelSize.x - gap * 2) / 2;
     const textOption = text.Option{
-        .color = .rgba(0.86, 0.89, 0.90, 0.96),
+        .color = .rgba(219, 227, 230, 245),
         .scale = scale,
     };
     const panelSize = Vector2.xy(
@@ -244,7 +244,7 @@ pub fn draw(rows: []const Row) void {
     );
     const panel = Rect.init(position, panelSize);
 
-    batch.drawRect(panel, .{ .color = .rgba(0.07, 0.09, 0.11, 0.74) });
+    batch.drawRect(panel, .{ .color = .rgba(18, 23, 28, 189) });
 
     const contentPosition = position.add(padding);
     text.draw(labels, contentPosition, textOption);

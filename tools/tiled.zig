@@ -410,10 +410,10 @@ fn parseColor(text: []const u8) zhu.Color {
     const value = std.fmt.parseInt(u32, hex, 16) catch unreachable;
     const alpha: u32 = if (hex.len == 6) 255 else value >> 24;
     return .{
-        .r = @as(f32, @floatFromInt((value >> 16) & 0xFF)) / 255.0,
-        .g = @as(f32, @floatFromInt((value >> 8) & 0xFF)) / 255.0,
-        .b = @as(f32, @floatFromInt(value & 0xFF)) / 255.0,
-        .a = @as(f32, @floatFromInt(alpha)) / 255.0,
+        .r = @intCast((value >> 16) & 0xFF),
+        .g = @intCast((value >> 8) & 0xFF),
+        .b = @intCast(value & 0xFF),
+        .a = @intCast(alpha),
     };
 }
 

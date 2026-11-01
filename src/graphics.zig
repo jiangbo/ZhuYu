@@ -4,7 +4,6 @@ const sk = @import("sokol");
 const math = @import("math.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
-const memory = @import("internal/memory.zig");
 const window = @import("window.zig");
 
 pub const View = sk.gfx.View;
@@ -22,7 +21,8 @@ pub const Vertex = extern struct {
     size: math.Vector2, // 缩放后的绘制尺寸。
     pivot: math.Vector2 = .zero, // 固定中心在图片中的归一化位置。
     uvRect: math.Vector4, // 纹理 UV 区域
-    color: Color = .white, // 顶点颜色
+    color: Color = .white, // 乘色，按通道乘纹理。
+    addColor: Color = .all(0), // 加色，乘色后按通道相加。
 };
 
 pub fn queryViewSize(view: View) math.Vector {
@@ -304,7 +304,12 @@ pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
     var action = sk.gfx.PassAction{};
     action.colors[0] = .{
         .load_action = .CLEAR,
-        .clear_value = memory.reinterpret(sk.gfx.Color, color),
+        .clear_value = .{
+            .r = @as(f32, @floatFromInt(color.r)) / 255,
+            .g = @as(f32, @floatFromInt(color.g)) / 255,
+            .b = @as(f32, @floatFromInt(color.b)) / 255,
+            .a = @as(f32, @floatFromInt(color.a)) / 255,
+        },
     };
 
     if (renderPass.target) |target| {
@@ -334,35 +339,44 @@ pub fn applyScissor(position: Vector2, size: Vector2) void {
 pub const endPass = sk.gfx.endPass;
 pub const commit = sk.gfx.commit;
 
+// RGBA 通道使用 0～255，计算时转为浮点，保存时舍入。
 pub const Color = extern struct {
-    r: f32 = 0,
-    g: f32 = 0,
-    b: f32 = 0,
-    a: f32 = 1,
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 255,
 
-    pub const black = Color.rgb(0, 0, 0); // 黑色
-    pub const white = Color.rgb(1, 1, 1); // 白色
-    pub const midGray = Color.rgb(0.5, 0.5, 0.5); // 中灰色
+    pub const black = Color.gray(0, 255); // 黑色
+    pub const white = Color.all(255); // 白色
+    pub const midGray = Color.gray(128, 255); // 中灰色
+    pub const red = Color.rgb(255, 0, 0); // 红色
+    pub const green = Color.rgb(0, 255, 0); // 绿色
+    pub const blue = Color.rgb(0, 0, 255); // 蓝色
+    pub const yellow = Color.rgb(255, 255, 0); // 黄色
+    pub const cyan = Color.rgb(0, 255, 255); // 青色
+    pub const magenta = Color.rgb(255, 0, 255); // 品红色
 
-    pub const red = Color.rgb(1, 0, 0); // 红色
-    pub const green = Color.rgb(0, 1, 0); // 绿色
-    pub const blue = Color.rgb(0, 0, 1); // 蓝色
-
-    pub const yellow = Color.rgb(1, 1, 0); // 黄色
-    pub const cyan = Color.rgb(0, 1, 1); // 青色
-    pub const magenta = Color.rgb(1, 0, 1); // 品红色
-    pub fn rgb(r: f32, g: f32, b: f32) Color {
-        return .{ .r = r, .g = g, .b = b, .a = 1 };
+    // 创建不透明颜色。
+    pub fn rgb(r: u8, g: u8, b: u8) Color {
+        return .{ .r = r, .g = g, .b = b };
     }
 
-    pub fn rgba(r: f32, g: f32, b: f32, a: f32) Color {
+    // 创建带透明度的颜色。
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
         return .{ .r = r, .g = g, .b = b, .a = a };
     }
 
-    pub fn gray(v: f32, a: f32) Color {
+    // 将 RGBA 四个通道设为同一个值。
+    pub fn all(value: u8) Color {
+        return .{ .r = value, .g = value, .b = value, .a = value };
+    }
+
+    // 创建带透明度的灰色。
+    pub fn gray(v: u8, a: u8) Color {
         return .{ .r = v, .g = v, .b = v, .a = a };
     }
 
+    // 将线性 RGB 转为 sRGB，保持透明度。
     pub fn toSrgb(self: Color) Color {
         return .{
             .r = linearToSrgb(self.r),
@@ -372,17 +386,24 @@ pub const Color = extern struct {
         };
     }
 
+    // 在两个颜色之间插值，结果限制在字节范围内。
     pub fn mix(self: Color, other: Color, t: f32) Color {
-        return .{
-            .r = std.math.lerp(self.r, other.r, t),
-            .g = std.math.lerp(self.g, other.g, t),
-            .b = std.math.lerp(self.b, other.b, t),
-            .a = std.math.lerp(self.a, other.a, t),
-        };
+        var result: Color = undefined;
+        inline for (.{ "r", "g", "b", "a" }) |field| {
+            const start: f32 = @floatFromInt(@field(self, field));
+            const end: f32 = @floatFromInt(@field(other, field));
+            @field(result, field) = @intFromFloat(
+                @round(std.math.clamp(std.math.lerp(start, end, t), 0, 255)),
+            );
+        }
+        return result;
     }
 
-    fn linearToSrgb(v: f32) f32 {
-        if (v <= 0.0031308) return v * 12.92;
-        return 1.055 * std.math.pow(f32, v, 1.0 / 2.4) - 0.055;
+    // 归一化后转换，再舍入到最近的字节值。
+    fn linearToSrgb(value: u8) u8 {
+        const v = @as(f32, @floatFromInt(value)) / 255;
+        const result = if (v <= 0.0031308) v * 12.92 else //
+            1.055 * std.math.pow(f32, v, 1.0 / 2.4) - 0.055;
+        return @intFromFloat(@round(std.math.clamp(result * 255, 0, 255)));
     }
 };

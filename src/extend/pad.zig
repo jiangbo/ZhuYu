@@ -167,10 +167,10 @@ pub fn drawImage() void {
 // 根据按住状态选择颜色，绘制单个按钮的形状。
 pub fn drawShape(shape: math.Shape, down: bool) void {
     // 黑白配色：普通状态为半透明黑底，按住时使用深灰底和明亮白边。
-    const normalBorder = Color.rgba(1, 1, 1, 0.4);
-    const pressedBorder = Color.rgba(1, 1, 1, 0.95);
-    const normalFill = Color.rgba(0, 0, 0, 0.65);
-    const pressedFill = Color.rgba(0.25, 0.25, 0.25, 0.95);
+    const normalBorder = Color.gray(255, 102);
+    const pressedBorder = Color.gray(255, 242);
+    const normalFill = Color.gray(0, 166);
+    const pressedFill = Color.gray(64, 242);
     const border = if (down) pressedBorder else normalBorder;
     const fill = if (down) pressedFill else normalFill;
     switch (shape) {

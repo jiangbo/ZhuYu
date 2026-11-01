@@ -22,7 +22,8 @@ pub const Option = struct {
     pivot: Vector2 = .center, // 缩放和旋转共用的固定中心，归一化坐标。
     radian: f32 = 0, // 旋转弧度
     uvRect: ?math.Vector4 = null, // 纹理 UV 区域
-    color: graphics.Color = .white, // 颜色
+    color: Color = .white, // 乘色
+    addColor: Color = .all(0), // 加色
     camera: ?camera.Camera = null, // 指定绘制使用的相机
 };
 
@@ -154,7 +155,7 @@ pub fn drawVertices(items: []const Vertex, image: ?Image) void {
 }
 
 pub fn drawDebug(rect: math.Rect) void {
-    drawRect(rect, .{ .color = .rgba(1, 0, 1, 0.4) });
+    drawRect(rect, .{ .color = .rgba(255, 0, 255, 102) });
 }
 
 pub const LineOption = struct { color: Color = .white, width: f32 = 1 };
@@ -310,6 +311,7 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
         .pivot = option.pivot,
         .uvRect = option.uvRect orelse image.uvRect(),
         .color = option.color,
+        .addColor = option.addColor,
     });
 }
 
@@ -406,7 +408,8 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     vertexLayout.attrs[3].format = .FLOAT2;
     vertexLayout.attrs[4].format = .FLOAT2;
     vertexLayout.attrs[5].format = .FLOAT4;
-    vertexLayout.attrs[6].format = .FLOAT4;
+    vertexLayout.attrs[6].format = .UBYTE4N;
+    vertexLayout.attrs[7].format = .UBYTE4N;
     vertexLayout.buffers[0].step_func = .PER_INSTANCE;
 
     const shaderHandle = sk.gfx.makeShader(shaderDesc);
