@@ -64,6 +64,11 @@ pub fn build(b: *std.Build) !void {
         // iOS 单独链接色彩空间接口；macOS 通过 AppKit 重导出提供。
         zhu.linkFramework("CoreGraphics", .{});
     }
+    if (target.result.os.tag == .windows and font == .system) {
+        // DirectWrite 生成灰度字形，GDI 只用于读取离屏位图。
+        zhu.linkSystemLibrary("dwrite", .{});
+        zhu.linkSystemLibrary("gdi32", .{});
+    }
     if (target.result.abi.isAndroid()) {
         if (target.result.os.version_range.linux.android < 26)
             return error.AndroidRequiresApi26;
