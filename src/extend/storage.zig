@@ -158,7 +158,7 @@ fn readFromJs(gpa: std.mem.Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
 const em = struct {
     pub const Load = union(enum) { loaded: []u8, tooSmall: usize };
 
-    // 浏览器存档函数由 web.c 中的 EM_JS 静态接入。
+    // 浏览器存档函数由 web.zig 的 JavaScript 描述静态接入。
     extern fn zhu_file_exists(path: [*:0]const u8) c_int;
     extern fn zhu_file_load(path: [*:0]const u8, out: [*]u8, len: c_int) c_int;
     extern fn zhu_file_save(path: [*:0]const u8, data: [*]const u8, len: c_int) c_int;

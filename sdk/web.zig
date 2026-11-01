@@ -9,19 +9,6 @@ pub fn installEmsdk(b: *std.Build, dep: *std.Build.Dependency) void {
     b.step("install-emsdk", "Install Emscripten SDK").dependOn(install);
 }
 
-// 编译引擎时使用同一份 Emscripten 头文件和浏览器接入代码。
-pub fn add(
-    b: *std.Build,
-    zhu: *std.Build.Module,
-    library: *std.Build.Step.Compile,
-) void {
-    const emsdk = library.root_module.owner.dependency("emsdk", .{});
-    zhu.addSystemIncludePath(emsdk.path(
-        "upstream/emscripten/cache/sysroot/include",
-    ));
-    zhu.addCSourceFile(.{ .file = b.path("src/internal/web.c") });
-}
-
 // 游戏提供模块和页面配置，目标与优化方式直接取自模块。
 pub const WebOptions = struct {
     name: []const u8,
@@ -59,6 +46,23 @@ pub fn buildWeb(
         // https://codeberg.org/ziglang/zig/issues/31421
         .use_filesystem = true,
         .shell_file_path = options.shell,
-        .extra_args = options.extra_args,
+        // 显式保留 Zig 的 JS 描述和回调，再合入应用的链接参数。
+        .extra_args = try std.mem.concat(b.allocator, []const u8, &.{
+            &.{
+                "-Wl,--export=__em_js__zhu_font_open",
+                "-Wl,--export=__em_js__zhu_font_close",
+                "-Wl,--export=__em_js__zhu_font_metrics",
+                "-Wl,--export=__em_js__zhu_font_pixels",
+                "-Wl,--export=__em_js__zhu_coarse_pointer",
+                "-Wl,--export=__em_js__zhu_fetch_start",
+                "-Wl,--export=__em_js__zhu_fetch_stop",
+                "-Wl,--export=__em_js__zhu_file_exists",
+                "-Wl,--export=__em_js__zhu_file_load",
+                "-Wl,--export=__em_js__zhu_file_save",
+                "-Wl,--export=__em_lib_deps_zhu_storage",
+                "-Wl,--export=zhu_fetch_complete",
+            },
+            options.extra_args,
+        }),
     });
 }

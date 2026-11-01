@@ -40,13 +40,10 @@ pub fn build(b: *std.Build) !void {
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result);
 
-    const web = target.result.os.tag == .emscripten;
     const zhu = b.addModule("zhu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // Web 由 emcc 链接，关闭 C 的 UBSan。
-        .sanitize_c = if (web) .off else null,
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
@@ -105,7 +102,6 @@ fn buildCross(
         },
         .macos => libc = try macosSdk.add(b, zhu, library),
         .ios => libc = try iosSdk.add(b, zhu, library),
-        .emscripten => webSdk.add(b, zhu, library),
         else => {},
     }
     const tests = b.addTest(.{ .root_module = zhu });
