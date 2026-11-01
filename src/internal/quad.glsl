@@ -6,7 +6,7 @@ layout(binding=0) uniform vs_params {
 };
 
 in vec2 vertex_position; // 世界坐标中的固定变换中心
-in float vertex_layer; // 纹理数组的层级
+in uvec4 vertex_bytes; // x 为纹理层号，yzw 为保留字节，不归一化。
 in float vertex_radian; // 旋转的弧度
 in vec2 vertex_scale; // 缩放后的绘制尺寸
 in vec2 vertex_pivot; // 缩放、斜切和旋转共用的中心，归一化坐标
@@ -41,7 +41,7 @@ void main() {
     color = vertex_color;
     add_color = vertex_add_color;
     vec2 uv = vertex_texture.xy + corner * vertex_texture.zw;
-    uvw = vec3(uv * textureVec.xy, vertex_layer);
+    uvw = vec3(uv * textureVec.xy, float(vertex_bytes.x));
 }
 @end
 

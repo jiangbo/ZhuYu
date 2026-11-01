@@ -236,6 +236,8 @@ const atlas = struct {
     const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
 
     fn load(source: graphics.Atlas, smp: sk.gfx.Sampler) void {
+        // 层号使用一个字节，创建 GPU 纹理前检查图集页数。
+        std.debug.assert(source.imagePaths.len <= 256);
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
@@ -262,7 +264,7 @@ const atlas = struct {
         for (source.imagePaths, 0..) |path, i| {
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
-                .layer = @floatFromInt(i),
+                .layer = @intCast(i),
                 .offset = .zero,
                 .size = source.size,
             });

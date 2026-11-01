@@ -405,7 +405,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     var vertexLayout = sk.gfx.VertexLayoutState{};
 
     vertexLayout.attrs[0].format = .FLOAT2;
-    vertexLayout.attrs[1].format = .FLOAT;
+    vertexLayout.attrs[1].format = .UBYTE4;
     vertexLayout.attrs[2].format = .FLOAT;
     vertexLayout.attrs[3].format = .FLOAT2;
     vertexLayout.attrs[4].format = .FLOAT2;

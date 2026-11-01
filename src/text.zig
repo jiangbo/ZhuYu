@@ -476,7 +476,7 @@ pub const dynamic = struct {
         }
         const image = graphics.Image{
             .view = state.view,
-            .layer = @floatFromInt(state.layer),
+            .layer = @intCast(state.layer),
             .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
             .size = size,
         };

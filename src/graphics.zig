@@ -16,7 +16,8 @@ pub const ImageId = assets.Id;
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
 pub const Vertex = extern struct {
     position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
-    layer: f32 = 0, // 绘制层级
+    layer: u8 = 0, // 纹理数组层号，与保留字节共用一个 UBYTE4 属性。
+    reserved: [3]u8 = .{ 0, 0, 0 }, // 保留字节，暂不分配用途。
     radian: f32 = 0, // 旋转弧度
     size: math.Vector2, // 缩放后的绘制尺寸。
     pivot: math.Vector2 = .zero, // 固定中心在图片中的归一化位置。
@@ -25,6 +26,11 @@ pub const Vertex = extern struct {
     addColor: Color = .all(0), // 加色，乘色后按通道相加。
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
 };
+
+comptime {
+    // 编译时检查实例大小，防止字段变更破坏布局约定。
+    std.debug.assert(@sizeOf(Vertex) == 64);
+}
 
 pub fn queryViewSize(view: View) math.Vector {
     const image = sk.gfx.queryViewImage(view);
@@ -181,7 +187,7 @@ pub const Glyph = struct { image: Image, rect: math.Rect, advance: f32 };
 
 pub const Image = struct {
     view: sk.gfx.View = .{},
-    layer: f32 = 0,
+    layer: u8 = 0, // 纹理数组层号，范围 0～255。
     offset: math.Vector2 = .zero,
     size: math.Vector2 = .zero,
 

@@ -265,6 +265,7 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
 
     // 纹理数组的总页数包含字体图片。
     const pageCount = layout.pageCount + fontImages.len;
+    if (pageCount > 256) return error.AtlasLayerLimitExceeded;
     const imagePaths = try gpa.alloc([]const u8, pageCount);
     for (pages, 0..) |page, index| {
         const bytes = try encodePng(gpa, .{
