@@ -9,10 +9,11 @@ in vec2 vertex_position; // 世界坐标中的固定变换中心
 in float vertex_layer; // 纹理数组的层级
 in float vertex_radian; // 旋转的弧度
 in vec2 vertex_scale; // 缩放后的绘制尺寸
-in vec2 vertex_pivot; // 缩放和旋转共用的中心，归一化坐标
+in vec2 vertex_pivot; // 缩放、斜切和旋转共用的中心，归一化坐标
 in vec4 vertex_texture; // 纹理坐标，xy是偏移量，zw是缩放
 in vec4 vertex_color; // 乘色
 in vec4 vertex_add_color; // 加色
+in vec2 vertex_skew; // 斜切弧度，分别改变两条局部轴的方向。
 
 out vec4 color;
 out vec4 add_color;
@@ -24,11 +25,13 @@ void main() {
 
     // 以固定中心为原点生成四角，再应用绘制尺寸。
     vec2 scaled = (corner - vertex_pivot) * vertex_scale;
-    // 再应用旋转
-    float cosA = cos(vertex_radian);
-    float sinA = sin(vertex_radian);
-    vec2 rotated = mat2(cosA, sinA, -sinA, cosA) * scaled;
-    // 最后平移到固定中心，缩放和旋转都不会移动这个中心。
+    // 合并斜切和旋转，保持两条局部轴的长度。
+    float angleX = vertex_radian + vertex_skew.y;
+    float angleY = vertex_radian - vertex_skew.x;
+    vec2 axisX = vec2(cos(angleX), sin(angleX));
+    vec2 axisY = vec2(-sin(angleY), cos(angleY));
+    vec2 rotated = axisX * scaled.x + axisY * scaled.y;
+    // 最后平移到固定中心，缩放、斜切和旋转都不会移动这个中心。
     vec3 point = vec3(rotated + vertex_position, 1);
     float clipX = dot(transformX.xyz, point);
     float clipY = dot(transformY.xyz, point);

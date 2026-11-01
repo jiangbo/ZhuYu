@@ -19,8 +19,9 @@ pub const Option = struct {
     size: ?Vector2 = null, // 大小
     scale: Vector2 = .one, // 围绕 pivot 缩放。
     anchor: Vector2 = .zero, // 变换前的定位锚点，归一化坐标。
-    pivot: Vector2 = .center, // 缩放和旋转共用的固定中心，归一化坐标。
+    pivot: Vector2 = .center, // 缩放、斜切和旋转共用的固定中心。
     radian: f32 = 0, // 旋转弧度
+    skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
     uvRect: ?math.Vector4 = null, // 纹理 UV 区域
     color: Color = .white, // 乘色
     addColor: Color = .all(0), // 加色
@@ -289,7 +290,7 @@ pub fn drawNine(nine: graphics.NineImage, rect: math.Rect) void {
     }
 }
 
-// 按原始尺寸定位，再围绕固定中心缩放和旋转。
+// 按原始尺寸定位，再围绕固定中心缩放、斜切和旋转。
 pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
     var cmd = currentDraw() orelse addCommand(image);
     if (cmd.view.id != image.view.id) cmd = addCommand(image);
@@ -312,6 +313,7 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
         .uvRect = option.uvRect orelse image.uvRect(),
         .color = option.color,
         .addColor = option.addColor,
+        .skew = option.skew,
     });
 }
 
@@ -410,6 +412,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     vertexLayout.attrs[5].format = .FLOAT4;
     vertexLayout.attrs[6].format = .UBYTE4N;
     vertexLayout.attrs[7].format = .UBYTE4N;
+    vertexLayout.attrs[8].format = .FLOAT2;
     vertexLayout.buffers[0].step_func = .PER_INSTANCE;
 
     const shaderHandle = sk.gfx.makeShader(shaderDesc);

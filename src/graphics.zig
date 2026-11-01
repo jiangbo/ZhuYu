@@ -23,6 +23,7 @@ pub const Vertex = extern struct {
     uvRect: math.Vector4, // 纹理 UV 区域
     color: Color = .white, // 乘色，按通道乘纹理。
     addColor: Color = .all(0), // 加色，乘色后按通道相加。
+    skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
 };
 
 pub fn queryViewSize(view: View) math.Vector {
