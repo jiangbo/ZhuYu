@@ -1,22 +1,23 @@
 const std = @import("std");
 const options = @import("options");
+const sk = @import("sokol");
 
 const assets = @import("assets.zig");
 const math = @import("math.zig");
 const graphics = @import("graphics.zig");
 const batch = @import("batch.zig");
 const memory = @import("internal/memory.zig");
+const window = @import("window.zig");
 
 const Image = graphics.Image;
 const Vector2 = math.Vector2;
 const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
-const system = @import("internal/font.zig");
 // 编译时选定查找实现，排版与绘制共用同一个检索入口。
 const font = switch (options.font) {
     .bitmap, .msdf => static,
-    .system => system,
+    .system => dynamic,
 };
 
 var fontScale: f32 = undefined;
@@ -222,19 +223,6 @@ pub const init = switch (options.font) {
     .system => dynamic.init,
 };
 
-// 动态字体管理自己的初始化、字号更新和资源释放。
-pub const dynamic = struct {
-    // 初始化系统字体，并缓存基准字号和默认绘制缩放。
-    fn init(option: system.Option) void {
-        system.init(option);
-        fontSize = option.size;
-        fontScale = 1;
-    }
-
-    pub const resize = font.resize;
-    pub const deinit = font.deinit;
-};
-
 // 预生成字体直接借用有序数组，不建立运行时哈希索引。
 pub const static = struct {
     // 普通位图字体的初始化配置。
@@ -292,7 +280,6 @@ pub const static = struct {
 
     // 加载 MSDF 字体，指定默认显示字号并使用线性采样。
     fn initMsdf(zon: static.Font, option: MsdfOption) void {
-        const sk = @import("sokol");
         const shader = @import("shader");
 
         static.init(zon, .{ .filter = .linear, .size = option.size });
@@ -328,4 +315,251 @@ pub const static = struct {
         }
         return null;
     }
+};
+
+// 动态字体统一管理字形缓存、图集和平台字体的生命周期。
+pub const dynamic = struct {
+    pub const Option = struct {
+        family: [:0]const u8 = "sans-serif",
+        weight: enum { normal, bold } = .normal, // 普通或加粗字重。
+        size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
+    };
+
+    // 平台接口使用像素度量，公共层统一换算为逻辑单位。
+    pub const Metrics = extern struct { ascent: f32, descent: f32, height: f32 };
+    // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
+    pub const Char = extern struct { rect: math.Rect, advance: f32 };
+
+    // 只选择当前平台的字体接口，未实现的平台在实际调用时终止。
+    const backend = if (@hasDecl(window.platform, "font"))
+        window.platform.font
+    else
+        unsupported;
+
+    // 四层图集共用资源，记录上传位置及当前层的装箱位置。
+    const Atlas = struct {
+        texture: sk.gfx.Image,
+        view: sk.gfx.View,
+        upload: sk.gfx.Buffer, // 通过 GPU 模块创建和释放的上传缓冲。
+        offset: usize = 0, // 本帧下一个字形的上传偏移。
+        frame: u64, // 上传缓冲当前所属的帧。
+        layer: i32 = 0,
+        x: i32 = 1,
+        y: i32 = 1,
+        rowHeight: i32 = 0,
+    };
+
+    pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
+    var opened: bool = false; // 系统字体是否已经初始化。
+    var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
+    var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
+    var atlas: ?Atlas = null; // 首个可见字形出现时创建四层纹理数组。
+    var glyphs: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = undefined;
+    var pixels: []u8 = undefined; // 单线程生成字形时复用，容量不足才扩容。
+
+    // 初始化所选平台的系统字体和度量，不提前生成字形像素。
+    pub fn init(option: dynamic.Option) void {
+        std.debug.assert(!opened);
+        glyphs = .empty;
+        pixels = &.{};
+        backend.open(option);
+        opened = true;
+        fontSize = option.size;
+        fontScale = 1;
+        pixelSize = 0;
+        resize();
+    }
+
+    // 仅在像素字号变化时清除旧字形并更新字体度量。
+    pub fn resize() void {
+        std.debug.assert(opened);
+        // 保留小数字号，最小生成 1 像素，避免窗口过小时字号无效。
+        const size = @max(1, fontSize * window.scale.maxAxis());
+        std.debug.assert(size >= 1 and size <= 256);
+        if (size == pixelSize) return;
+
+        // 按字号预留常用容量，实际字形超出时再按需扩容。
+        const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
+        const len: usize = @intFromFloat(side * side * 4);
+        if (pixels.len < len) pixels = memory.allocator.realloc(pixels, len);
+        clear();
+        pixelSize = size;
+        std.log.info("font size: {d} px", .{pixelSize});
+        metrics = backend.resize(pixelSize);
+        dynamic.lineHeight = metrics.height * fontSize / pixelSize;
+    }
+
+    // 销毁字体图集，通过 GPU 模块释放上传缓冲，并清空字形索引。
+    fn clear() void {
+        if (atlas) |state| {
+            assets.view.destroy(state.view);
+            sk.gfx.destroyImage(state.texture);
+            assets.gpu.destroyBuffer(state.upload);
+        }
+        atlas = null;
+        glyphs.clearRetainingCapacity();
+    }
+
+    // 由游戏清理阶段调用，释放图集、字形索引和系统字体。
+    pub fn deinit() void {
+        if (!opened) return;
+        clear();
+        glyphs.deinit(memory.allocator.raw);
+        memory.allocator.free(pixels);
+        backend.close();
+        opened = false;
+    }
+
+    // 按码位查找固定字号的字形，缓存未命中时生成。
+    pub fn findGlyph(code: u32) graphics.Glyph {
+        std.debug.assert(opened);
+        if (glyphs.get(code)) |glyph| return glyph;
+        if (atlas) |*state| {
+            const frame = window.frameCount();
+            if (state.frame != frame) {
+                state.frame = frame;
+                state.offset = 0;
+            }
+        }
+        return createGlyph(code);
+    }
+
+    // 图集保留实际像素，绘制区域和前进距离归一到逻辑基准字号。
+    fn createGlyph(code: u32) graphics.Glyph {
+        // 容量不足时只返回字形信息，不写像素，等待扩容后再次调用。
+        var char = backend.pixels(code, pixels);
+        const size = char.rect.size;
+        const len: usize = @intFromFloat((size.x + 2) * (size.y + 2) * 4);
+        if (len > pixels.len) {
+            pixels = memory.allocator.realloc(pixels, len);
+            char = backend.pixels(code, pixels);
+            // 按重试返回的尺寸确认缓冲区已经足够。
+            const next = char.rect.size;
+            const needed: usize = @intFromFloat((next.x + 2) * (next.y + 2) * 4);
+            std.debug.assert(needed == pixels.len);
+        }
+        const factor = fontSize / pixelSize;
+        const glyph = graphics.Glyph{
+            .image = addImage(char.rect.size),
+            .rect = .{
+                .min = char.rect.min.addY(metrics.ascent).scale(factor),
+                .size = char.rect.size.scale(factor),
+            },
+            .advance = char.advance * factor,
+        };
+        glyphs.put(memory.allocator.raw, code, glyph) catch memory.oom();
+        return glyph;
+    }
+
+    // 每个字形包含一像素透明边框，当前层装满后使用下一层。
+    fn addImage(size: math.Vector2) graphics.Image {
+        // 空字形只参与排版，不占用图集和上传缓冲。
+        if (size.x == 0 or size.y == 0) return .{};
+
+        const width: i32 = @intFromFloat(size.x);
+        const height: i32 = @intFromFloat(size.y);
+
+        const state = if (atlas) |*value| value else addAtlas();
+        const atlasWidth = sk.gfx.queryImageWidth(state.texture);
+        const atlasHeight = sk.gfx.queryImageHeight(state.texture);
+        if (state.x + width + 1 > atlasWidth) {
+            state.x = 1;
+            state.y += state.rowHeight + 2;
+            state.rowHeight = 0;
+        }
+        if (state.y + height + 1 > atlasHeight) {
+            if (state.layer + 1 == sk.gfx.queryImageNumSlices(state.texture))
+                @panic("font atlas layer limit exceeded");
+            state.layer += 1;
+            state.x, state.y = .{ 1, 1 };
+            state.rowHeight = 0;
+        }
+        const image = graphics.Image{
+            .view = state.view,
+            .layer = @floatFromInt(state.layer),
+            .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
+            .size = size,
+        };
+
+        // 每个字形使用独立的上传区域，复制记录由 GPU 模块统一提交。
+        const left, const top = .{ state.x - 1, state.y - 1 };
+        const copyWidth, const copyHeight = .{ width + 2, height + 2 };
+        const len: usize = @intCast(copyWidth * copyHeight * 4);
+        sk.gfx.writeBufferTransient(.{
+            .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
+            .dst = .{ .buffer = state.upload, .offset = state.offset },
+        });
+        assets.gpu.addUpdate(.{
+            .src = .{
+                .buffer = state.upload,
+                .offset = state.offset,
+                .bytes_per_row = copyWidth * 4,
+                .bytes_per_slice = @intCast(len),
+            },
+            .dst = .{
+                .image = state.texture,
+                .x = left,
+                .y = top,
+                .slice = state.layer,
+            },
+            .size = .{ .width = copyWidth, .height = copyHeight, .num_slices = 1 },
+        });
+        state.offset += len;
+        state.x += copyWidth;
+        state.rowHeight = @max(state.rowHeight, height);
+        return image;
+    }
+
+    // 创建四层纹理数组，通过 GPU 模块创建共用的上传缓冲。
+    fn addAtlas() *Atlas {
+        const texture = sk.gfx.makeImage(.{
+            .width = 1024,
+            .height = 1024,
+            .type = .ARRAY,
+            .num_slices = 4,
+            .usage = .{ .copy_dst = true },
+            .label = "system font atlas",
+        });
+        const view = sk.gfx.makeView(.{ .texture = .{ .image = texture } });
+        assets.view.put(view, .{ .sampler = assets.sampler.nearest });
+        const upload = assets.gpu.makeBuffer(.{
+            .size = 1024 * 1024 * 4,
+            .usage = .{
+                .staging_buffer = true,
+                .write_transient = true,
+                .copy_src = true,
+            },
+            .label = "system font upload",
+        });
+        atlas = .{
+            .texture = texture,
+            .view = view,
+            .upload = upload,
+            .frame = window.frameCount(),
+        };
+        return &atlas.?;
+    }
+
+    // 尚未实现的平台模块：只有实际调用系统字体接口时才终止。
+    const unsupported = struct {
+        // 当前平台尚未实现字体打开。
+        fn open(_: dynamic.Option) void {
+            @panic("system font is not implemented on this platform");
+        }
+
+        // 当前平台尚未实现字体关闭。
+        fn close() void {
+            @panic("system font is not implemented on this platform");
+        }
+
+        // 当前平台尚未实现字号设置和字体度量。
+        fn resize(_: f32) Metrics {
+            @panic("system font is not implemented on this platform");
+        }
+
+        // 当前平台尚未实现字形像素生成。
+        fn pixels(_: u32, _: []u8) Char {
+            @panic("system font is not implemented on this platform");
+        }
+    };
 };

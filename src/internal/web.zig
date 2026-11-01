@@ -1,7 +1,46 @@
 //! 浏览器宿主接口，JavaScript 源码直接嵌入 Emscripten 的链接段。
+const dynamic = @import("../text.zig").dynamic;
+
+// 浏览器系统字体接口，画布状态由嵌入的 JavaScript 持有。
+pub const font = struct {
+    // 打开浏览器字体，宿主创建失败时直接终止。
+    pub fn open(option: dynamic.Option) void {
+        const weight: u32 = switch (option.weight) {
+            .normal => 400,
+            .bold => 700,
+        };
+        if (zhu_font_open(option.family, weight) != 0)
+            @panic("font unavailable");
+    }
+
+    // 释放浏览器保存的字体和画布引用。
+    pub fn close() void {
+        zhu_font_close();
+    }
+
+    // 设置像素字号并读取字体度量，后续像素生成沿用此字号。
+    pub fn resize(size: f32) dynamic.Metrics {
+        var result: dynamic.Metrics = undefined;
+        zhu_font_metrics(size, &result);
+        return result;
+    }
+
+    // 容量不足时只返回字形信息，不写像素，等待扩容后再次调用。
+    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+        var char: dynamic.Char = undefined;
+        _ = zhu_font_pixels(code, &char, buffer.ptr, @intCast(buffer.len));
+        return char;
+    }
+};
 
 // 查询主要指针类型，用于推测是否缺少实体键盘。
 pub extern "env" fn zhu_coarse_pointer() c_int;
+
+// 打开、关闭浏览器字体，并读取像素度量和字形数据。
+pub extern "env" fn zhu_font_open([*:0]const u8, u32) c_int;
+pub extern "env" fn zhu_font_close() void;
+pub extern "env" fn zhu_font_metrics(f32, *dynamic.Metrics) void;
+pub extern "env" fn zhu_font_pixels(u32, *dynamic.Char, [*]u8, u32) c_int;
 
 extern fn zhu_fetch_done(c_int, c_int, c_int) void;
 

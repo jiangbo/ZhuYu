@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const memory = @import("../internal/memory.zig");
+const android = @import("../internal/android.zig");
 
 const Parsed = std.json.Parsed;
 const XChaCha = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
@@ -22,7 +23,7 @@ pub fn init(info: std.process.Init, name: []const u8) void {
             name,
         }),
         .linux => if (builtin.abi.isAndroid())
-            @import("../internal/android.zig").dataPath()
+            android.dataPath()
         else if (env.get("XDG_DATA_HOME")) |data|
             memory.format(&pathBuffer, "{s}/{s}", .{ data, name })
         else

@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const web = @import("internal/web.zig");
 
 pub const sokol = @import("sokol");
 pub const window = @import("window.zig");
@@ -52,7 +51,7 @@ pub fn init(info: std.process.Init) void {
     window.io = info.io;
     if (builtin.os.tag == .emscripten) {
         // 主要指针为粗略指针时，推测可能没有实体键盘。
-        key.mayNotHave = web.zhu_coarse_pointer() != 0;
+        key.mayNotHave = window.platform.zhu_coarse_pointer() != 0;
     }
 }
 

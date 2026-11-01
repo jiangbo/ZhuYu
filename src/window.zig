@@ -38,14 +38,16 @@ pub var scale: math.Vector = .one; // 默认游戏画面从逻辑坐标到窗口
 var info: Info = undefined; // 当前窗口配置，由 run 设置。
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
-// 平台实现统一在这里选择，供入口、窗口和资源加载共用。
-pub const platform = if (builtin.os.tag == .windows) struct {
-    // 使用 Zig 自带的导入库名称，Linux 交叉编译时也能找到。
-    pub extern "imm32" fn ImmDisableIME(i32) std.os.windows.BOOL;
-} else if (builtin.abi.isAndroid())
-    @import("internal/android.zig")
-else
-    struct {};
+// 根据编译目标选择窗口及字体共用的平台实现。
+pub const platform = switch (builtin.os.tag) {
+    .windows => @import("internal/windows.zig"),
+    .linux => if (builtin.abi.isAndroid())
+        @import("internal/android.zig")
+    else
+        @import("internal/linux.zig"),
+    .emscripten => @import("internal/web.zig"),
+    else => struct {},
+};
 
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
     if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
