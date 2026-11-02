@@ -25,6 +25,7 @@ pub const Option = struct {
     uvRect: ?math.Vector4 = null, // 纹理 UV 区域
     color: Color = .white, // 乘色
     addColor: Color = .all(0), // 加色
+    pixelAlign: bool = false, // 是否对齐顶点到像素边界。
     camera: ?camera.Camera = null, // 指定绘制使用的相机
 };
 
@@ -314,6 +315,7 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
         .color = option.color,
         .addColor = option.addColor,
         .skew = option.skew,
+        .pixelAlign = option.pixelAlign,
     });
 }
 
@@ -351,7 +353,7 @@ pub fn flush() void {
                 }
                 graphics.applyScissor(pos, clip.size);
             },
-            .draw => |draw| pipeline = doDraw(draw, flipY, pipeline),
+            .draw => |draw| doDraw(draw, viewport.size, flipY, &pipeline),
         }
     }
     flushed = true;
@@ -365,26 +367,43 @@ pub fn endDraw() void {
     graphics.commit();
 }
 
-// 提交一个绘制批次，并返回本次使用的流水线。
-fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: sk.gfx.Pipeline) sk.gfx.Pipeline {
+// 提交一个绘制批次，并更新当前流水线。
+fn doDraw(
+    cmd: DrawCommand,
+    viewportSize: Vector2,
+    flipY: bool,
+    pipeline: *sk.gfx.Pipeline,
+) void {
     // 提交时获取视图配置，未指定流水线时使用默认图片流水线。
     const info = assets.view.get(cmd.view);
     const selected = info.pipeline orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
-    if (pipeline.id != selected.id) sk.gfx.applyPipeline(selected);
+    if (pipeline.id != selected.id) {
+        sk.gfx.applyPipeline(selected);
+        pipeline.* = selected;
+    }
 
-    // 处理 uniform 变量
+    // Sokol 将浮点视口截断为整数，对齐必须使用同样的实际像素尺寸。
+    const pixels = Vector2.xy(@trunc(viewportSize.x), @trunc(viewportSize.y));
+    if (pixels.x <= 0 or pixels.y <= 0) return;
     const size = graphics.queryViewSize(cmd.view);
     const scale = cmd.camera.scale.mul(.xy(2, -2)).div(cmd.size);
-    const offset = cmd.camera.position.mul(scale).neg();
-    var rowY = [_]f32{ 0, scale.y, offset.y + 1, 0 };
+    var offset = cmd.camera.position.mul(scale).neg();
+    if (camera.roundPosition) {
+        // 在实际视口像素中取整平移量，不修改相机的逻辑位置。
+        const half = pixels.scale(0.5);
+        offset = offset.mul(half).round().div(half);
+    }
+    var rowY = [_]f32{ 0, scale.y, offset.y + 1, pixels.y / 2 };
     if (flipY) rowY[1], rowY[2] = .{ -rowY[1], -rowY[2] };
     const uniforms = sk.gfx.asRange(&shader.VsParams{
-        .transformX = .{ scale.x, 0, offset.x - 1, 0 },
+        // 投影行的 w 保存半视口尺寸。
+        .transformX = .{ scale.x, 0, offset.x - 1, pixels.x / 2 },
         .transformY = rowY,
-        .textureVec = .{ 1 / size.x, 1 / size.y, 1, 1 },
+        // xy 为纹理尺寸倒数，zw 为一个像素对应的裁剪坐标步长。
+        .textureVec = .{ 1 / size.x, 1 / size.y, 2 / pixels.x, 2 / pixels.y },
     });
     sk.gfx.applyUniforms(shader.UB_vs_params, uniforms);
 
@@ -398,7 +417,6 @@ fn doDraw(cmd: DrawCommand, flipY: bool, pipeline: sk.gfx.Pipeline) sk.gfx.Pipel
 
     // 绘制
     sk.gfx.draw(0, 4, @intCast(cmd.end - cmd.start));
-    return selected;
 }
 
 pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {

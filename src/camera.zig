@@ -2,7 +2,6 @@ const std = @import("std");
 
 const math = @import("math.zig");
 const key = @import("input.zig").key;
-const window = @import("window.zig");
 
 const Vector2 = math.Vector2;
 
@@ -37,6 +36,9 @@ pub const Camera = struct {
 var buffer: [8]Camera = undefined;
 pub var stack: std.ArrayList(Camera) = .initBuffer(&buffer);
 pub var main: Camera = .window;
+// 仅在渲染时将相机平移对齐到实际像素。
+// TODO：支持切换渲染相机时，重新考虑此设置的归属和实现。
+pub var roundPosition: bool = false;
 pub var size: Vector2 = undefined; // 默认游戏逻辑尺寸，不随窗口像素尺寸变化。
 pub var bound: Vector2 = undefined;
 
@@ -96,14 +98,6 @@ pub fn deadFollow(pos: Vector2, deadSize: Vector2) void {
     clampBound();
 }
 
-// 将主相机位置对齐到窗口的实际像素。
-pub fn roundMainPosition() void {
-    const scale = main.scale.mul(window.scale);
-    const origin = window.viewRect.min;
-    const pixel = main.position.mul(scale).sub(origin).round();
-    main.position = pixel.add(origin).div(scale);
-}
-
 pub fn smoothFollow(pos: Vector2, smooth: f32) void {
     const target = pos.sub(size.div(main.scale).scale(0.5));
     const distance = target.sub(main.position);
@@ -121,9 +115,4 @@ pub fn smoothFollow(pos: Vector2, smooth: f32) void {
         main.position.y += moved;
     }
     clampBound();
-}
-
-test "round main position" {
-    init(.xy(640, 480));
-    roundMainPosition();
 }

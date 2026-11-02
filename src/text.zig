@@ -27,6 +27,7 @@ pub const Option = struct {
     offset: Vector2 = .zero, // 文字位置偏移
     scale: Vector2 = .one, // 基于默认字号的缩放
     color: Color = .white, // 文字的颜色
+    pixelAlign: bool = false, // 是否对齐每个字形的顶点到像素边界。
     max: f32 = std.math.floatMax(f32), // 最大宽度，超过换行
     spacing: f32 = 0, // 文字间的间距
     anchor: ?Vector2 = null, // 锚点
@@ -152,6 +153,7 @@ fn layout(
             batch.drawImage(glyph.image, charPos, .{
                 .size = glyph.rect.size.mul(scale),
                 .color = option.color,
+                .pixelAlign = option.pixelAlign,
             });
         }
         assets.frameStats.text += 1;

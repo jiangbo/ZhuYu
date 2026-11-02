@@ -1,12 +1,12 @@
 @vs vs
 layout(binding=0) uniform vs_params {
-    vec4 transformX;
-    vec4 transformY;
-    vec4 textureVec;
+    vec4 transformX; // xyz 为投影行，w 为半视口宽度。
+    vec4 transformY; // xyz 为投影行，w 为半视口高度。
+    vec4 textureVec; // xy 为纹理尺寸倒数，zw 为像素步长。
 };
 
 in vec2 vertex_position; // 世界坐标中的固定变换中心
-in uvec4 vertex_bytes; // x 为纹理层号，yzw 为保留字节，不归一化。
+in uvec4 vertex_bytes; // x 为层号，z 为像素对齐开关，yw 保留，不归一化。
 in float vertex_radian; // 旋转的弧度
 in vec2 vertex_scale; // 缩放后的绘制尺寸
 in vec2 vertex_pivot; // 缩放、斜切和旋转共用的中心，归一化坐标
@@ -33,9 +33,13 @@ void main() {
     vec2 rotated = axisX * scaled.x + axisY * scaled.y;
     // 最后平移到固定中心，缩放、斜切和旋转都不会移动这个中心。
     vec3 point = vec3(rotated + vertex_position, 1);
-    float clipX = dot(transformX.xyz, point);
-    float clipY = dot(transformY.xyz, point);
-    gl_Position = vec4(clipX, clipY, 0, 1);
+    // 默认直接使用投影结果，仅开启对齐时换算像素坐标。
+    vec2 clip = vec2(dot(transformX.xyz, point), dot(transformY.xyz, point));
+    if (vertex_bytes.z != 0u) {
+        vec2 pixel = (clip + 1.0) * vec2(transformX.w, transformY.w);
+        clip = floor(pixel + 0.5) * textureVec.zw - 1.0;
+    }
+    gl_Position = vec4(clip, 0, 1);
 
     // 纹理
     color = vertex_color;

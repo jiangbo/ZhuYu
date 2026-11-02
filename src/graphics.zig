@@ -17,7 +17,9 @@ pub const ImageId = assets.Id;
 pub const Vertex = extern struct {
     position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
     layer: u8 = 0, // 纹理数组层号，与保留字节共用一个 UBYTE4 属性。
-    reserved: [3]u8 = .{ 0, 0, 0 }, // 保留字节，暂不分配用途。
+    reservedBefore: u8 = 0, // 保留字节，暂不分配用途。
+    pixelAlign: bool = false, // 是否对齐顶点到像素边界。
+    reservedAfter: u8 = 0, // 保留字节，暂不分配用途。
     radian: f32 = 0, // 旋转弧度
     size: math.Vector2, // 缩放后的绘制尺寸。
     pivot: math.Vector2 = .zero, // 固定中心在图片中的归一化位置。
@@ -30,6 +32,7 @@ pub const Vertex = extern struct {
 comptime {
     // 编译时检查实例大小，防止字段变更破坏布局约定。
     std.debug.assert(@sizeOf(Vertex) == 64);
+    std.debug.assert(@offsetOf(Vertex, "pixelAlign") == 10);
 }
 
 pub fn queryViewSize(view: View) math.Vector {
