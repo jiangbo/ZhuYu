@@ -2,7 +2,7 @@
 //! 按需合成 PCM；同一个播放器的控制和采样调用必须由调用方同步。
 //!
 //! FM 包络、波形参考 Opal，Win9x 音高和音量模型参考 libADLMIDI。
-//! 来源、版权和 MIT 许可见仓库根目录 licenses/midi.txt。
+//! 来源、版权和 MIT 许可见 src/licenses/midi.txt。
 const std = @import("std");
 
 /// 已解析的音乐和播放状态。init 后调用 fillSamples，结束后调用 deinit。

@@ -2,7 +2,7 @@
 //! 码本、Floor 1、Residue 和重叠窗口参考 stb_vorbis 1.22。
 //! 上游基准（nothings/stb）：
 //! https://github.com/nothings/stb/commit/31c1ad37456438565541f4919958214b6e762fb4
-//! 来源与许可见仓库根目录 licenses/vorbis.txt。控制和采样由调用方同步。
+//! 来源与许可见 src/licenses/vorbis.txt。控制和采样由调用方同步。
 const std = @import("std");
 
 /// 持有压缩包、解码配置和播放状态；采样阶段不分配内存。
