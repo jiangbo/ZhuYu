@@ -387,6 +387,14 @@ pub const Color = extern struct {
         return .{ .r = v, .g = v, .b = v, .a = a };
     }
 
+    // 返回指定透明度的颜色，比例限制在 0～1，RGB 保持不变。
+    pub fn withAlpha(self: Color, percent: f32) Color {
+        const opacity = std.math.clamp(percent, 0, 1);
+        var color = self;
+        color.a = @intFromFloat(@round(opacity * 255));
+        return color;
+    }
+
     // 将线性 RGB 转为 sRGB，保持透明度。
     pub fn toSrgb(self: Color) Color {
         return .{

@@ -323,6 +323,7 @@ pub const dynamic = struct {
         family: [:0]const u8 = "sans-serif",
         weight: enum { normal, bold } = .normal, // 普通或加粗字重。
         size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
+        filter: graphics.Filter = .nearest, // 字形图片的默认采样方式。
     };
 
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
@@ -351,6 +352,7 @@ pub const dynamic = struct {
 
     pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var opened: bool = false; // 系统字体是否已经初始化。
+    var filter: graphics.Filter = .nearest; // 初始化时选定，字号变化后继续使用。
     var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
     var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
     var atlas: ?Atlas = null; // 首个可见字形出现时创建四层纹理数组。
@@ -365,6 +367,7 @@ pub const dynamic = struct {
         backend.open(option);
         opened = true;
         fontSize = option.size;
+        filter = option.filter;
         fontScale = 1;
         pixelSize = 0;
         resize();
@@ -477,6 +480,7 @@ pub const dynamic = struct {
         const image = graphics.Image{
             .view = state.view,
             .layer = @intCast(state.layer),
+            .filter = filter,
             .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
             .size = size,
         };
