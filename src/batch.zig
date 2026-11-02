@@ -27,7 +27,6 @@ pub const Option = struct {
     addColor: Color = .all(0), // 加色
     filter: ?graphics.Filter = null, // null 使用图片自身的采样方式。
     pixelAlign: bool = false, // 是否对齐顶点到像素边界。
-    camera: ?camera.Camera = null, // 指定绘制使用的相机
 };
 
 pub const Command = union(enum) {
@@ -292,8 +291,18 @@ pub fn drawNine(nine: graphics.NineImage, rect: math.Rect) void {
     }
 }
 
-// 按原始尺寸定位，再围绕固定中心缩放、斜切和旋转。
+// 使用相机栈绘制图片，栈为空时不做相机转换。
 pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
+    drawCamera(image, pos, camera.stack.getLastOrNull(), option);
+}
+
+// 忽略相机栈，按指定相机转换；null 直接提交，仍应用批次渲染相机。
+pub fn drawCamera(
+    image: Image,
+    pos: Vector2,
+    source: ?camera.Camera,
+    option: Option,
+) void {
     var cmd = currentDraw() orelse addCommand(image);
     if (cmd.view.id != image.view.id) cmd = addCommand(image);
 
@@ -301,9 +310,9 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
     // 中心使用缩放前的尺寸，改变 scale 时保持位置不变。
     var center = pos.add(size.mul(option.pivot.sub(option.anchor)));
     var drawSize = size.mul(option.scale);
-    if (option.camera orelse camera.stack.getLastOrNull()) |source| {
-        drawSize = drawSize.mul(source.scale.div(cmd.camera.scale));
-        center = cmd.camera.toWorld(source.toWindow(center));
+    if (source) |view| {
+        drawSize = drawSize.mul(view.scale.div(cmd.camera.scale));
+        center = cmd.camera.toWorld(view.toWindow(center));
     }
 
     assets.gpu.addVertex(Vertex{
