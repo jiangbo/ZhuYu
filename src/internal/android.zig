@@ -1,41 +1,119 @@
 const std = @import("std");
 const root = @import("root");
 const sk = @import("sokol");
+const dynamic = @import("../text.zig").dynamic;
+const memory = @import("memory.zig");
 
 // JNI 固定槽位，只声明本模块调用的方法，其余位置保留指针大小。
 const Jni = extern struct {
-    beforeDelete: [23]?*anyopaque,
+    beforeFindClass: [6]?*anyopaque,
+    FindClass: *const fn (*Env, [*:0]const u8) callconv(.c) ?*anyopaque,
+    beforeExceptionDescribe: [9]?*anyopaque,
+    ExceptionDescribe: *const fn (*Env) callconv(.c) void,
+    ExceptionClear: *const fn (*Env) callconv(.c) void,
+    beforePushLocalFrame: [1]?*anyopaque,
+    PushLocalFrame: *const fn (*Env, c_int) callconv(.c) c_int,
+    PopLocalFrame: *const fn (*Env, ?*anyopaque) callconv(.c) ?*anyopaque,
+    NewGlobalRef: *const fn (*Env, ?*anyopaque) callconv(.c) ?*anyopaque,
+    DeleteGlobalRef: *const fn (*Env, ?*anyopaque) callconv(.c) void,
     DeleteLocalRef: *const fn (*Env, ?*anyopaque) callconv(.c) void,
-    beforeClass: [7]?*anyopaque,
+    beforeNewObjectA: [6]?*anyopaque,
+    NewObjectA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) ?*anyopaque,
     GetObjectClass: *const fn (*Env, ?*anyopaque) callconv(.c) ?*anyopaque,
-    isInstanceOf: ?*anyopaque,
+    beforeGetMethodID: [1]?*anyopaque,
     GetMethodID: *const fn (
         *Env,
         ?*anyopaque,
         [*:0]const u8,
         [*:0]const u8,
     ) callconv(.c) ?*anyopaque,
-    beforeObject: [2]?*anyopaque,
+    beforeCallObjectMethodA: [2]?*anyopaque,
     CallObjectMethodA: *const fn (
         *Env,
         ?*anyopaque,
         *anyopaque,
         ?[*]const Value,
     ) callconv(.c) ?*anyopaque,
-    beforeVoid: [26]?*anyopaque,
+    beforeCallIntMethodA: [14]?*anyopaque,
+    CallIntMethodA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) c_int,
+    beforeCallFloatMethodA: [5]?*anyopaque,
+    CallFloatMethodA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) f32,
+    beforeCallVoidMethodA: [5]?*anyopaque,
     CallVoidMethodA: *const fn (
         *Env,
         ?*anyopaque,
         *anyopaque,
         ?[*]const Value,
     ) callconv(.c) void,
+    beforeGetFieldID: [30]?*anyopaque,
+    GetFieldID: *const fn (
+        *Env,
+        ?*anyopaque,
+        [*:0]const u8,
+        [*:0]const u8,
+    ) callconv(.c) ?*anyopaque,
+    beforeGetIntField: [5]?*anyopaque,
+    GetIntField: *const fn (*Env, ?*anyopaque, *anyopaque) callconv(.c) c_int,
+    beforeGetFloatField: [1]?*anyopaque,
+    GetFloatField: *const fn (*Env, ?*anyopaque, *anyopaque) callconv(.c) f32,
+    beforeGetStaticMethodID: [10]?*anyopaque,
+    GetStaticMethodID: *const fn (
+        *Env,
+        ?*anyopaque,
+        [*:0]const u8,
+        [*:0]const u8,
+    ) callconv(.c) ?*anyopaque,
+    beforeCallStaticObjectMethodA: [2]?*anyopaque,
+    CallStaticObjectMethodA: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+        ?[*]const Value,
+    ) callconv(.c) ?*anyopaque,
+    beforeGetStaticFieldID: [27]?*anyopaque,
+    GetStaticFieldID: *const fn (
+        *Env,
+        ?*anyopaque,
+        [*:0]const u8,
+        [*:0]const u8,
+    ) callconv(.c) ?*anyopaque,
+    GetStaticObjectField: *const fn (
+        *Env,
+        ?*anyopaque,
+        *anyopaque,
+    ) callconv(.c) ?*anyopaque,
+    beforeNewString: [17]?*anyopaque,
+    NewString: *const fn (*Env, [*]const u16, c_int) callconv(.c) ?*anyopaque,
+    beforeExceptionCheck: [64]?*anyopaque,
+    ExceptionCheck: *const fn (*Env) callconv(.c) u8,
+    NewDirectByteBuffer: *const fn (*Env, [*]u8, i64) callconv(.c) ?*anyopaque,
 };
 
 // JNIEnv 是函数表指针，NDK 向应用提供它的地址。
 const Env = *const Jni;
 
-// 当前只传 jint；jlong 保持 JNI jvalue 的大小和对齐。
-const Value = extern union { int: c_int, long: i64 };
+// JNI 参数共用 jvalue 布局，jlong 保持大小和对齐。
+const Value = extern union {
+    int: c_int,
+    long: i64,
+    float: f32,
+    object: ?*anyopaque,
+};
 
 // 只访问焦点回调，保留它之前的六个生命周期回调槽位。
 const Callbacks = extern struct {
@@ -235,3 +313,326 @@ fn panicMessage(message: []const u8, _: ?usize) noreturn {
         message.ptr,
     );
 }
+
+// Android 系统字体和平台入口共用 JNI 声明。
+pub const font = struct {
+    // JavaVM 可以跨线程使用，JNIEnv 只在所属线程内使用。
+    const Vm = *const extern struct {
+        beforeAttach: [4]?*anyopaque,
+        AttachCurrentThread: *const fn (*Vm, *?*Env, ?*anyopaque) callconv(.c) c_int,
+        DetachCurrentThread: *const fn (*Vm) callconv(.c) c_int,
+        GetEnv: *const fn (*Vm, *?*Env, c_int) callconv(.c) c_int,
+    };
+
+    var vm: *Vm = undefined; // 当前 NativeActivity 所属的 JavaVM。
+    var attached: bool = false; // 只解除本后端建立的线程关联。
+    var paint: *anyopaque = undefined; // 持有字体、字号、字重及中文语言设置。
+    var bounds: *anyopaque = undefined; // 每个字形复用的整数边界对象。
+    var metrics: *anyopaque = undefined; // 字号变化时复用的字体度量对象。
+    var bitmapClass: *anyopaque = undefined; // 扩容时调用静态工厂需要的类引用。
+    var config: *anyopaque = undefined; // ALPHA_8 配置，只存覆盖率。
+    var bitmap: ?*anyopaque = null; // 容量不足时替换的系统位图。
+    var canvas: ?*anyopaque = null; // 与当前位图绑定的离屏画布。
+    var bitmapWidth: c_int = 0; // 当前位图宽度，包含透明边框。
+    var bitmapHeight: c_int = 0; // 当前位图高度，包含透明边框。
+    var rowBytes: usize = 0; // 系统位图实际行跨度，可能含对齐字节。
+    var alpha: []u8 = &.{}; // 接收位图覆盖率的复用缓冲区。
+
+    // 方法及字段 ID 在初始化时查找，生成字形时直接调用。
+    var setSize: *anyopaque = undefined;
+    var getMetrics: *anyopaque = undefined;
+    var getBounds: *anyopaque = undefined;
+    var measureText: *anyopaque = undefined;
+    var createBitmap: *anyopaque = undefined;
+    var canvasClass: *anyopaque = undefined;
+    var canvasInit: *anyopaque = undefined;
+    var eraseColor: *anyopaque = undefined;
+    var drawText: *anyopaque = undefined;
+    var copyPixels: *anyopaque = undefined;
+    var getRowBytes: *anyopaque = undefined;
+    var boundFields: [4]*anyopaque = undefined; // left、top、right、bottom。
+    var metricFields: [3]*anyopaque = undefined; // ascent、descent、leading。
+
+    // 打开系统字体，在游戏线程取得 JNI 环境，所有持久对象使用全局引用。
+    pub fn open(option: dynamic.Option) void {
+        const activity: *const Activity =
+            @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
+        vm = @ptrCast(@alignCast(activity.vm.?));
+        var env: ?*Env = null;
+        // JNI 1.6 的版本编号，未关联的线程返回 JNI_EDETACHED（-2）。
+        const status = vm.*.GetEnv(vm, &env, 0x00010006);
+        attached = status == -2;
+        if (attached) {
+            if (vm.*.AttachCurrentThread(vm, &env, null) != 0)
+                @panic("font JNI thread attach failed");
+        } else if (status != 0) @panic("font JNI unavailable");
+        const e = env.?;
+        begin(e);
+        defer end(e);
+        const jni = e.*;
+
+        const paintClass = class(e, "android/graphics/Paint");
+        const rectClass = class(e, "android/graphics/Rect");
+        const metricsClass = class(e, "android/graphics/Paint$FontMetrics");
+        const typefaceClass = class(e, "android/graphics/Typeface");
+        const localeClass = class(e, "java/util/Locale");
+        bitmapClass = hold(e, class(e, "android/graphics/Bitmap"));
+        canvasClass = hold(e, class(e, "android/graphics/Canvas"));
+        const configClass = class(e, "android/graphics/Bitmap$Config");
+        config = hold(e, staticObject(e, configClass, "ALPHA_8", //
+            "Landroid/graphics/Bitmap$Config;"));
+
+        // Paint 的第 0 位开启抗锯齿；采样过滤仍由公共字形图集控制。
+        const paintInit = method(e, paintClass, "<init>", "(I)V");
+        paint = hold(e, object(e, jni.NewObjectA(e, paintClass, //
+            paintInit, &.{.{ .int = 1 }})));
+        const rectInit = method(e, rectClass, "<init>", "()V");
+        bounds = hold(e, object(e, jni.NewObjectA(e, rectClass, rectInit, null)));
+        const metricsInit = method(e, metricsClass, "<init>", "()V");
+        metrics = hold(e, object(e, jni.NewObjectA(e, metricsClass, //
+            metricsInit, null)));
+
+        // 字体名称使用标准 UTF-8 转 UTF-16，避免 JNI 修改版 UTF-8 的限制。
+        const len = std.unicode.calcUtf16LeLen(option.family) catch
+            @panic("font name is not valid UTF-8");
+        const name = memory.allocator.alloc(u16, len);
+        defer memory.allocator.free(name);
+        _ = std.unicode.utf8ToUtf16Le(name, option.family) catch unreachable;
+        const family = object(e, jni.NewString(e, name.ptr, @intCast(name.len)));
+        const create = object(e, jni.GetStaticMethodID(e, typefaceClass, "create", //
+            "(Ljava/lang/String;I)Landroid/graphics/Typeface;"));
+        const face = object(e, jni.CallStaticObjectMethodA(e, typefaceClass, //
+            create, &.{
+                .{ .object = family },
+                .{ .int = if (option.weight == .bold) 1 else 0 },
+            }));
+        const setTypeface = method(e, paintClass, "setTypeface", //
+            "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
+        _ = jni.CallObjectMethodA(e, paint, setTypeface, &.{.{ .object = face }});
+        check(e);
+        const locale = staticObject(e, localeClass, "SIMPLIFIED_CHINESE", //
+            "Ljava/util/Locale;");
+        call(e, paint, method(e, paintClass, "setTextLocale", //
+            "(Ljava/util/Locale;)V"), &.{.{ .object = locale }});
+        call(e, paint, method(e, paintClass, "setColor", "(I)V"), &.{.{ .int = -1 }});
+
+        setSize = method(e, paintClass, "setTextSize", "(F)V");
+        getMetrics = method(e, paintClass, "getFontMetrics", //
+            "(Landroid/graphics/Paint$FontMetrics;)F");
+        getBounds = method(e, paintClass, "getTextBounds", //
+            "(Ljava/lang/String;IILandroid/graphics/Rect;)V");
+        measureText = method(e, paintClass, "measureText", "(Ljava/lang/String;)F");
+        createBitmap = object(e, jni.GetStaticMethodID(e, bitmapClass, //
+            "createBitmap", //
+            "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;"));
+        canvasInit = method(e, canvasClass, "<init>", "(Landroid/graphics/Bitmap;)V");
+        eraseColor = method(e, bitmapClass, "eraseColor", "(I)V");
+        drawText = method(e, canvasClass, "drawText", //
+            "(Ljava/lang/String;FFLandroid/graphics/Paint;)V");
+        copyPixels = method(e, bitmapClass, "copyPixelsToBuffer", //
+            "(Ljava/nio/Buffer;)V");
+        getRowBytes = method(e, bitmapClass, "getRowBytes", "()I");
+        for ([_][*:0]const u8{ "left", "top", "right", "bottom" }, 0..) |key, i| {
+            boundFields[i] = object(e, jni.GetFieldID(e, rectClass, key, "I"));
+        }
+        for ([_][*:0]const u8{ "ascent", "descent", "leading" }, 0..) |key, i| {
+            metricFields[i] = object(e, jni.GetFieldID(e, metricsClass, key, "F"));
+        }
+    }
+
+    // Android 的 ascent 为负，公共层统一使用正的基线上方距离。
+    pub fn resize(size: f32) dynamic.Metrics {
+        const e = environment();
+        call(e, paint, setSize, &.{.{ .float = size }});
+        const height = e.*.CallFloatMethodA(e, paint, //
+            getMetrics, &.{.{ .object = metrics }});
+        check(e);
+        const ascent = e.*.GetFloatField(e, metrics, metricFields[0]);
+        const descent = e.*.GetFloatField(e, metrics, metricFields[1]);
+        const leading = e.*.GetFloatField(e, metrics, metricFields[2]);
+        check(e);
+        return .{
+            .ascent = -ascent,
+            .descent = descent,
+            .height = @max(size, @max(height, descent - ascent + leading)),
+        };
+    }
+
+    // 单个码位编码成 UTF-16，位图覆盖率转换为白色 RGBA。
+    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+        const e = environment();
+        begin(e);
+        defer end(e);
+        const jni = e.*;
+        var utf16: [2]u16 = undefined;
+        var count: c_int = 1;
+        if (code <= 0xffff) {
+            utf16[0] = @intCast(code);
+        } else {
+            utf16[0] = @intCast(0xd800 + ((code - 0x10000) >> 10));
+            utf16[1] = @intCast(0xdc00 + ((code - 0x10000) & 0x3ff));
+            count = 2;
+        }
+        const text = object(e, jni.NewString(e, &utf16, count));
+        call(e, paint, getBounds, &.{
+            .{ .object = text }, .{ .int = 0 },
+            .{ .int = count },   .{ .object = bounds },
+        });
+        const left = jni.GetIntField(e, bounds, boundFields[0]);
+        const top = jni.GetIntField(e, bounds, boundFields[1]);
+        const width = jni.GetIntField(e, bounds, boundFields[2]) - left;
+        const height = jni.GetIntField(e, bounds, boundFields[3]) - top;
+        const advance = jni.CallFloatMethodA(e, paint, //
+            measureText, &.{.{ .object = text }});
+        check(e);
+        const char = dynamic.Char{
+            .rect = .{
+                .min = .xy(@floatFromInt(left), @floatFromInt(top)),
+                .size = .xy(@floatFromInt(width), @floatFromInt(height)),
+            },
+            .advance = advance,
+        };
+        if (width == 0 or height == 0) return char;
+        const stride: usize = @intCast((width + 2) * 4);
+        const len = stride * @as(usize, @intCast(height + 2));
+        if (buffer.len < len) return char;
+        grow(e, width + 2, height + 2);
+        call(e, bitmap.?, eraseColor, &.{.{ .int = 0 }});
+        call(e, canvas.?, drawText, &.{
+            .{ .object = text },
+            .{ .float = @floatFromInt(1 - left) },
+            .{ .float = @floatFromInt(1 - top) },
+            .{ .object = paint },
+        });
+        const bytes = object(e, jni.NewDirectByteBuffer(e, alpha.ptr, //
+            @intCast(rowBytes * @as(usize, @intCast(bitmapHeight)))));
+        call(e, bitmap.?, copyPixels, &.{.{ .object = bytes }});
+        @memset(buffer[0..len], 0);
+        for (0..@as(usize, @intCast(height))) |y| {
+            for (0..@as(usize, @intCast(width))) |x| {
+                const offset = (y + 1) * stride + (x + 1) * 4;
+                @memset(buffer[offset..][0..3], 255);
+                buffer[offset + 3] = alpha[(y + 1) * rowBytes + x + 1];
+            }
+        }
+        return char;
+    }
+
+    // 位图和画布只在容量不足时替换，读回时遵循系统返回的行跨度。
+    fn grow(e: *Env, width: c_int, height: c_int) void {
+        if (width <= bitmapWidth and height <= bitmapHeight) return;
+        const jni = e.*;
+        if (canvas) |value| jni.DeleteGlobalRef(e, value);
+        if (bitmap) |value| jni.DeleteGlobalRef(e, value);
+        bitmapWidth = @max(width, bitmapWidth);
+        bitmapHeight = @max(height, bitmapHeight);
+        bitmap = hold(e, object(e, jni.CallStaticObjectMethodA(e, bitmapClass, //
+            createBitmap, &.{
+                .{ .int = bitmapWidth }, .{ .int = bitmapHeight },
+                .{ .object = config },
+            })));
+        canvas = hold(e, object(e, jni.NewObjectA(e, canvasClass, //
+            canvasInit, &.{.{ .object = bitmap }})));
+        const stride = jni.CallIntMethodA(e, bitmap, getRowBytes, null);
+        check(e);
+        rowBytes = @intCast(stride);
+        const len = rowBytes * @as(usize, @intCast(bitmapHeight));
+        if (alpha.len < len) alpha = memory.allocator.realloc(alpha, len);
+    }
+
+    // 释放所有全局引用及缓冲区，再按需解除线程关联。
+    pub fn close() void {
+        const e = environment();
+        const jni = e.*;
+        if (canvas) |value| jni.DeleteGlobalRef(e, value);
+        if (bitmap) |value| jni.DeleteGlobalRef(e, value);
+        for ([_]*anyopaque{
+            paint, bounds, metrics, bitmapClass, canvasClass, config,
+        }) |value| jni.DeleteGlobalRef(e, value);
+        canvas = null;
+        bitmap = null;
+        bitmapWidth = 0;
+        bitmapHeight = 0;
+        rowBytes = 0;
+        memory.allocator.free(alpha);
+        alpha = &.{};
+        if (attached) {
+            if (vm.*.DetachCurrentThread(vm) != 0)
+                @panic("font JNI thread detach failed");
+            attached = false;
+        }
+    }
+
+    // 每次取得当前线程的环境，避免误用 Activity 的 UI 线程环境。
+    fn environment() *Env {
+        var env: ?*Env = null;
+        if (vm.*.GetEnv(vm, &env, 0x00010006) != 0)
+            @panic("font JNI thread unavailable");
+        return env.?;
+    }
+
+    // 原生线程不会自动清理局部引用，每次生成字形建立独立引用帧。
+    fn begin(e: *Env) void {
+        if (e.*.PushLocalFrame(e, 32) != 0) fail(e);
+    }
+
+    // 退出引用帧时释放本次调用创建的全部局部引用。
+    fn end(e: *Env) void {
+        _ = e.*.PopLocalFrame(e, null);
+    }
+
+    // 系统异常输出到 Logcat 后终止，避免带着未处理异常继续调用 JNI。
+    fn check(e: *Env) void {
+        if (e.*.ExceptionCheck(e) != 0) fail(e);
+    }
+
+    // 保留 Java 异常堆栈，再进入引擎的统一 panic 日志。
+    fn fail(e: *Env) noreturn {
+        e.*.ExceptionDescribe(e);
+        e.*.ExceptionClear(e);
+        @panic("system font JNI call failed");
+    }
+
+    // 必须返回对象或 ID 的 JNI 调用统一检查空值与异常。
+    fn object(e: *Env, value: ?*anyopaque) *anyopaque {
+        check(e);
+        return value orelse @panic("system font JNI object unavailable");
+    }
+
+    // 全局引用跨越本次调用，关闭时统一释放。
+    fn hold(e: *Env, value: *anyopaque) *anyopaque {
+        return object(e, e.*.NewGlobalRef(e, value));
+    }
+
+    // 仅查找 Android 自带的系统类，不需要应用的类加载器。
+    fn class(e: *Env, name: [*:0]const u8) *anyopaque {
+        return object(e, e.*.FindClass(e, name));
+    }
+
+    // 查找系统类的实例方法，签名与 Android 公开 API 一致。
+    fn method(
+        e: *Env,
+        owner: *anyopaque,
+        name: [*:0]const u8, //
+        signature: [*:0]const u8,
+    ) *anyopaque {
+        return object(e, e.*.GetMethodID(e, owner, name, signature));
+    }
+
+    // 读取系统框架公开的单例对象，如中文语言和位图配置。
+    fn staticObject(
+        e: *Env,
+        owner: *anyopaque,
+        name: [*:0]const u8, //
+        signature: [*:0]const u8,
+    ) *anyopaque {
+        const field = object(e, e.*.GetStaticFieldID(e, owner, name, signature));
+        return object(e, e.*.GetStaticObjectField(e, owner, field));
+    }
+
+    // 所有实例 void 方法都在调用后立即检查 Java 异常。
+    fn call(e: *Env, value: *anyopaque, id: *anyopaque, args: []const Value) void {
+        e.*.CallVoidMethodA(e, value, id, args.ptr);
+        check(e);
+    }
+};
