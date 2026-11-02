@@ -205,20 +205,20 @@ extern fn AAsset_getLength64(*anyopaque) i64;
 extern fn AAsset_read(*anyopaque, [*]u8, usize) c_int;
 extern fn AAsset_close(*anyopaque) void;
 
-// 后台线程直接读取 APK 资源，避免 FILE 和 funopen 的中转。
-pub fn readAsset(path: [:0]const u8, buffer: []u8) ![]const u8 {
+// 后台打开 APK 资源，按实际长度分配并读取。
+pub fn readAsset(path: [:0]const u8, allocator: std.mem.Allocator) ![]u8 {
     const activity: *const Activity =
         @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
     const asset = AAssetManager_open(activity.assetManager, path, 2) orelse
         return error.FileNotFound;
     defer AAsset_close(asset);
     const size: usize = @intCast(AAsset_getLength64(asset));
-    if (size > buffer.len) return error.BufferTooSmall;
-    const data = buffer[0..size];
-    // AAsset_read 返回本次读取量，持续读取到文件声明的长度。
+    const data = try allocator.alloc(u8, size);
+    errdefer allocator.free(data);
     var offset: usize = 0;
     while (offset < data.len) {
-        const count = AAsset_read(asset, data[offset..].ptr, data.len - offset);
+        const remaining = data[offset..];
+        const count = AAsset_read(asset, remaining.ptr, remaining.len);
         if (count < 0) return error.ReadFailed;
         if (count == 0) return error.UnexpectedEof;
         offset += @intCast(count);

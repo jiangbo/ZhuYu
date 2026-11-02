@@ -29,7 +29,6 @@ pub const Info = struct {
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
     alignment: math.Vector = .center, // 对齐方式
-    maxFileSize: usize = 1 * 1024 * 1024, // 最大加载文件大小
 };
 
 pub var size: math.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
@@ -95,7 +94,7 @@ export fn windowInit() void {
         .logger = .{ .func = sk.log.func },
         .allocator = memory.sokolAllocator(sk.gfx.Allocator),
     });
-    assets.init(io, info.maxFileSize);
+    assets.init(io);
     math.random.init(sk.time.now());
     call(root, "init", .{memory.allocator});
 }

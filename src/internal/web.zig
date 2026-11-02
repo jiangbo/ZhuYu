@@ -144,7 +144,7 @@ export var __em_js__zhu_coarse_pointer align(1) linksection("em_js") =
 // 每个槽位只保留一个请求，完成后将结果通知 Wasm。
 export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
     (
-        \\(int lane, const char *path, unsigned char *out, int len)<::>{
+        \\(int lane, const char *path)<::>{
         \\    const jobs = Module.zhu_fetch_jobs ||= [];
         \\    const job = new AbortController();
         \\    jobs[lane] = job;
@@ -160,12 +160,9 @@ export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
         \\        const data = new Uint8Array(await response.arrayBuffer());
         \\        if (jobs[lane] !== job) return;
         \\        jobs[lane] = null;
-        \\        if (data.length > len) {
-        \\            _zhu_fetch_complete(lane, 0, 2);
-        \\        } else {
-        \\            HEAPU8.set(data, out);
-        \\            _zhu_fetch_complete(lane, data.length, 0);
-        \\        }
+        \\        const out = _zhu_fetch_alloc(lane, data.length);
+        \\        HEAPU8.set(data, out);
+        \\        _zhu_fetch_complete(lane, data.length, 0);
         \\    }).catch(() => {
         \\        if (jobs[lane] !== job) return;
         \\        jobs[lane] = null;

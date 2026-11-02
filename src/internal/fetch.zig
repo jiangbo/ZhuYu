@@ -28,7 +28,6 @@ const Slot = struct {
 var allocator: std.mem.Allocator = undefined;
 var io: std.Io = undefined;
 var assetDir: std.Io.Dir = undefined; // 首次请求时打开，读取线程退出后关闭。
-var maxFileSize: usize = 0;
 var requests: std.ArrayList(Request) = .empty; // 仅主线程访问的等待队列。
 var nextRequest: usize = 0;
 var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
@@ -38,11 +37,10 @@ var stop: std.atomic.Value(bool) = .init(false);
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 只保存加载配置，不打开目录或启动线程。
-pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator, maxSize: usize) void {
+pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator) void {
     std.debug.assert(!started);
     io = fileIo;
     allocator = gpa;
-    maxFileSize = maxSize;
 }
 
 // 打开可执行文件旁边的 assets 目录。
@@ -54,7 +52,7 @@ fn openAssetDir() !std.Io.Dir {
     return exeDir.openDir(io, "assets", .{});
 }
 
-// 路径和队列在主线程分配，后台线程不访问引擎分配器。
+// 主线程登记路径和请求队列，文件内容由后台按实际长度分配。
 pub fn send(path: [:0]const u8, callback: *const fn (Response) void) void {
     // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
     if (!started) {
@@ -94,16 +92,9 @@ pub fn dowork() void {
         if (nextRequest == requests.items.len) continue;
         slot.request = requests.items[nextRequest];
         nextRequest += 1;
-        slot.buffer = allocator.alloc(u8, maxFileSize) catch
-            @panic("out of memory");
         slot.state.store(.queued, .release);
         if (builtin.os.tag == .emscripten) {
-            zhu_fetch_start(
-                @intCast(lane),
-                slot.request.path.ptr,
-                slot.buffer.ptr,
-                @intCast(slot.buffer.len),
-            );
+            zhu_fetch_start(@intCast(lane), slot.request.path.ptr);
         } else {
             wake.set(io);
         }
@@ -150,33 +141,41 @@ fn run() void {
         for (&slots) |*slot| {
             if (stop.load(.acquire)) return;
             if (slot.state.load(.acquire) != .queued) continue;
-            slot.result = read(slot.request.path, slot.buffer);
+            const data = read(slot.request.path) catch |err| {
+                slot.result = err;
+                slot.state.store(.done, .release);
+                continue;
+            };
+            slot.buffer = data;
+            slot.result = data;
             slot.state.store(.done, .release);
         }
     }
 }
 
-// 路径统一相对于资源目录，Android 直接读取 APK 中的同名资源。
-fn read(path: [:0]const u8, buffer: []u8) ![]const u8 {
-    if (builtin.abi.isAndroid()) return android.readAsset(path, buffer);
+// 后台打开文件，按实际长度分配并读取，回调接收缓冲的所有权。
+fn read(path: [:0]const u8) ![]u8 {
+    if (builtin.abi.isAndroid()) return android.readAsset(path, allocator);
     const file = try assetDir.openFile(io, path, .{});
     defer file.close(io);
-    const size = try file.length(io);
-    if (size > buffer.len) return error.BufferTooSmall;
-    const data = buffer[0..@intCast(size)];
-    if (try file.readPositionalAll(io, data, 0) != size) {
+    const size: usize = @intCast(try file.length(io));
+    const buffer = try allocator.alloc(u8, size);
+    errdefer allocator.free(buffer);
+    if (try file.readPositionalAll(io, buffer, 0) != size) {
         return error.UnexpectedEof;
     }
-    return data;
+    return buffer;
 }
 
-extern fn zhu_fetch_start(
-    lane: c_int,
-    path: [*:0]const u8,
-    buffer: [*]u8,
-    size: c_int,
-) void;
+extern fn zhu_fetch_start(lane: c_int, path: [*:0]const u8) void;
 extern fn zhu_fetch_stop() void;
+
+// 浏览器拿到响应后，按实际字节数在主线程分配 Wasm 内存。
+fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
+    const slot = &slots[@intCast(lane)];
+    slot.buffer = allocator.alloc(u8, size) catch @panic("out of memory");
+    return slot.buffer.ptr;
+}
 
 // 由浏览器事件循环回传结果，资源回调仍由下一帧 dowork 执行。
 fn webDone(lane: c_int, size: c_int, status: c_int) callconv(.c) void {
@@ -184,7 +183,6 @@ fn webDone(lane: c_int, size: c_int, status: c_int) callconv(.c) void {
     slot.result = switch (status) {
         0 => slot.buffer[0..@intCast(size)],
         1 => error.HttpFailed,
-        2 => error.BufferTooSmall,
         3 => error.NetworkFailed,
         else => unreachable,
     };
@@ -193,6 +191,7 @@ fn webDone(lane: c_int, size: c_int, status: c_int) callconv(.c) void {
 
 comptime {
     if (builtin.os.tag == .emscripten) {
+        @export(&webAlloc, .{ .name = "zhu_fetch_alloc" });
         @export(&webDone, .{ .name = "zhu_fetch_done" });
     }
 }

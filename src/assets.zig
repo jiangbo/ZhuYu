@@ -19,7 +19,7 @@ pub var io: std.Io = undefined;
 pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
-pub fn init(io_: std.Io, maxSize: usize) void {
+pub fn init(io_: std.Io) void {
     io = io_;
     allocator = memory.allocator.raw;
     // 开启 append 时只读取程序尾部的资源包，否则启动外部资源加载器。
@@ -27,7 +27,7 @@ pub fn init(io_: std.Io, maxSize: usize) void {
         file.init() catch |err| {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
-    } else fetch.setup(io, allocator, maxSize);
+    } else fetch.setup(io, allocator);
 
     sampler.init();
 }
