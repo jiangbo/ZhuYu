@@ -269,11 +269,9 @@ pub const static = struct {
             }, option.filter);
         }
 
-        const sampler = assets.sampler.get(option.filter);
         for (data.images, 0..) |path, i| {
             const image = assets.getImage(assets.id(path)).?;
-            const current = assets.view.get(image.view).sampler;
-            std.debug.assert(current.id == sampler.id);
+            std.debug.assert(image.filter == option.filter);
             images[i] = image;
         }
         invalidGlyph = searchGlyph('?').?;
@@ -288,7 +286,7 @@ pub const static = struct {
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
         const pipeline = batch.createPipeline(desc);
         for (images[0..data.images.len]) |image| {
-            assets.view.getPtr(image.view).pipeline = pipeline;
+            assets.view.put(image.view, pipeline);
         }
     }
 
@@ -523,7 +521,7 @@ pub const dynamic = struct {
             .label = "system font atlas",
         });
         const view = sk.gfx.makeView(.{ .texture = .{ .image = texture } });
-        assets.view.put(view, .{ .sampler = assets.sampler.nearest });
+        assets.view.put(view, null);
         const upload = assets.gpu.makeBuffer(.{
             .size = 1024 * 1024 * 4,
             .usage = .{

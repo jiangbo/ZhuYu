@@ -62,11 +62,9 @@ pub const ImageOption = struct {
 };
 
 pub fn loadImage(path: Path, option: ImageOption) Image {
-    const smp = sampler.get(option.filter);
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
     if (entry.found_existing) {
-        const current = view.get(entry.value_ptr.view).sampler;
-        std.debug.assert(current.id == smp.id);
+        std.debug.assert(entry.value_ptr.filter == option.filter);
         return entry.value_ptr.*;
     }
 
@@ -74,8 +72,9 @@ pub fn loadImage(path: Path, option: ImageOption) Image {
     entry.value_ptr.* = .{
         .view = imageView,
         .size = option.size,
+        .filter = option.filter,
     };
-    view.put(imageView, .{ .sampler = smp });
+    view.put(imageView, null);
     _ = file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
@@ -94,7 +93,7 @@ pub fn id(name: []const u8) Id {
 }
 
 pub fn loadAtlas(source: graphics.Atlas, filter: graphics.Filter) void {
-    atlas.load(source, sampler.get(filter));
+    atlas.load(source, filter);
 }
 
 pub fn getImage(imageId: Id) ?graphics.Image {
@@ -122,14 +121,6 @@ pub const sampler = struct {
             .min_filter = .LINEAR,
             .mag_filter = .LINEAR,
         });
-    }
-
-    // 返回过滤方式对应的采样器。
-    pub fn get(filter: graphics.Filter) sk.gfx.Sampler {
-        return switch (filter) {
-            .nearest => nearest,
-            .linear => linear,
-        };
     }
 };
 
@@ -235,15 +226,14 @@ const atlas = struct {
     // 打包为文件加载回调的 64 位标识。
     const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
 
-    fn load(source: graphics.Atlas, smp: sk.gfx.Sampler) void {
+    fn load(source: graphics.Atlas, filter: Filter) void {
         // 层号使用一个字节，创建 GPU 纹理前检查图集页数。
         std.debug.assert(source.imagePaths.len <= 256);
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
             const image = imageCache.get(atlasId).?;
-            const current = view.get(image.view).sampler;
-            std.debug.assert(current.id == smp.id);
+            std.debug.assert(image.filter == filter);
             return;
         }
 
@@ -256,7 +246,7 @@ const atlas = struct {
                 .num_slices = @intCast(source.imagePaths.len),
             }) },
         });
-        view.put(atlasView, .{ .sampler = smp });
+        view.put(atlasView, null);
         entry.value_ptr.* = 0;
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
@@ -265,6 +255,7 @@ const atlas = struct {
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
                 .layer = @intCast(i),
+                .filter = filter,
                 .offset = .zero,
                 .size = source.size,
             });
@@ -279,6 +270,7 @@ const atlas = struct {
         for (source.images) |image| {
             var img = image;
             img.view = atlasView;
+            img.filter = filter;
             imageCache.putAssumeCapacity(image.view.id, img);
         }
     }
@@ -325,27 +317,17 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
 }
 
 pub const view = struct {
-    // 每个采样视图共用的绘制配置，流水线为空时使用默认流水线。
-    pub const Info = struct {
-        sampler: sk.gfx.Sampler,
-        pipeline: ?sk.gfx.Pipeline = null,
-    };
+    // 记录采样视图及其流水线，null 使用默认图片流水线。
+    var cache: std.AutoHashMapUnmanaged(graphics.View, ?sk.gfx.Pipeline) = .empty;
 
-    var cache: std.AutoHashMapUnmanaged(graphics.View, Info) = .empty;
-
-    // 创建视图后登记，初始化字体时也可更新已有配置。
-    pub fn put(source: graphics.View, value: Info) void {
-        cache.put(allocator, source, value) catch oom();
+    // 创建视图时登记，初始化字体时也可更新流水线。
+    pub fn put(source: graphics.View, pipeline: ?sk.gfx.Pipeline) void {
+        cache.put(allocator, source, pipeline) catch oom();
     }
 
-    // 返回配置副本，绘制时仅按视图句柄查找。
-    pub fn get(source: graphics.View) Info {
+    // 返回视图的流水线，视图必须已经登记。
+    pub fn get(source: graphics.View) ?sk.gfx.Pipeline {
         return cache.get(source).?;
-    }
-
-    // 返回可修改的配置指针，缓存扩容或移除记录后不能继续持有。
-    pub fn getPtr(source: graphics.View) *Info {
-        return cache.getPtr(source).?;
     }
 
     // 提前释放采样视图，同时移除记录，退出时不再重复销毁。
@@ -354,7 +336,7 @@ pub const view = struct {
         sk.gfx.destroyView(source);
     }
 
-    // 销毁仍在缓存中的采样视图，再释放配置表。
+    // 销毁仍在缓存中的采样视图，再释放记录表。
     pub fn deinit() void {
         var iterator = cache.keyIterator();
         while (iterator.next()) |key| sk.gfx.destroyView(key.*);

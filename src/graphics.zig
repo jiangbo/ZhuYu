@@ -17,7 +17,7 @@ pub const ImageId = assets.Id;
 pub const Vertex = extern struct {
     position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
     layer: u8 = 0, // 纹理数组层号，与保留字节共用一个 UBYTE4 属性。
-    reservedBefore: u8 = 0, // 保留字节，暂不分配用途。
+    filter: Filter = .nearest, // 本实例的采样方式。
     pixelAlign: bool = false, // 是否对齐顶点到像素边界。
     reservedAfter: u8 = 0, // 保留字节，暂不分配用途。
     radian: f32 = 0, // 旋转弧度
@@ -32,6 +32,7 @@ pub const Vertex = extern struct {
 comptime {
     // 编译时检查实例大小，防止字段变更破坏布局约定。
     std.debug.assert(@sizeOf(Vertex) == 64);
+    std.debug.assert(@offsetOf(Vertex, "filter") == 9);
     std.debug.assert(@offsetOf(Vertex, "pixelAlign") == 10);
 }
 
@@ -183,7 +184,7 @@ pub fn loopFramesX(comptime count: u8, size: Vector2, d: f32) //
     return result;
 }
 
-pub const Filter = enum { nearest, linear };
+pub const Filter = enum(u8) { nearest, linear };
 
 // 图集取样使用纹理像素，绘制区域使用相对排版起点的逻辑单位。
 pub const Glyph = struct { image: Image, rect: math.Rect, advance: f32 };
@@ -191,6 +192,7 @@ pub const Glyph = struct { image: Image, rect: math.Rect, advance: f32 };
 pub const Image = struct {
     view: sk.gfx.View = .{},
     layer: u8 = 0, // 纹理数组层号，范围 0～255。
+    filter: Filter = .nearest, // 图片默认的采样方式。
     offset: math.Vector2 = .zero,
     size: math.Vector2 = .zero,
 
@@ -275,11 +277,10 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
     const view = sk.gfx.makeView(.{
         .texture = .{ .image = colorImage },
     });
-    const sampler = assets.sampler.get(filter);
-    assets.view.put(view, .{ .sampler = sampler });
+    assets.view.put(view, null);
     return .{
         .pass = pass,
-        .image = .{ .view = view, .size = size },
+        .image = .{ .view = view, .size = size, .filter = filter },
     };
 }
 

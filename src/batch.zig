@@ -25,6 +25,7 @@ pub const Option = struct {
     uvRect: ?math.Vector4 = null, // 纹理 UV 区域
     color: Color = .white, // 乘色
     addColor: Color = .all(0), // 加色
+    filter: ?graphics.Filter = null, // null 使用图片自身的采样方式。
     pixelAlign: bool = false, // 是否对齐顶点到像素边界。
     camera: ?camera.Camera = null, // 指定绘制使用的相机
 };
@@ -308,6 +309,7 @@ pub fn drawImage(image: Image, pos: Vector2, option: Option) void {
     assets.gpu.addVertex(Vertex{
         .position = center,
         .layer = image.layer,
+        .filter = option.filter orelse image.filter,
         .radian = option.radian,
         .size = drawSize,
         .pivot = option.pivot,
@@ -374,9 +376,8 @@ fn doDraw(
     flipY: bool,
     pipeline: *sk.gfx.Pipeline,
 ) void {
-    // 提交时获取视图配置，未指定流水线时使用默认图片流水线。
-    const info = assets.view.get(cmd.view);
-    const selected = info.pipeline orelse defaultPipeline;
+    // 未指定流水线时使用默认图片流水线。
+    const selected = assets.view.get(cmd.view) orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
@@ -412,7 +413,8 @@ fn doDraw(
     bindings.views[0] = cmd.view;
     bindings.vertex_buffers[0] = vertexBuffer;
     bindings.vertex_buffer_offsets[0] = @intCast(cmd.start * @sizeOf(Vertex));
-    bindings.samplers[0] = info.sampler;
+    bindings.samplers[0] = assets.sampler.nearest;
+    bindings.samplers[1] = assets.sampler.linear;
     sk.gfx.applyBindings(bindings);
 
     // 绘制

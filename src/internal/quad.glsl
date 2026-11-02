@@ -6,7 +6,7 @@ layout(binding=0) uniform vs_params {
 };
 
 in vec2 vertex_position; // 世界坐标中的固定变换中心
-in uvec4 vertex_bytes; // x 为层号，z 为像素对齐开关，yw 保留，不归一化。
+in uvec4 vertex_bytes; // x 为层号，y 为采样方式，z 为像素对齐开关，w 保留，不归一化。
 in float vertex_radian; // 旋转的弧度
 in vec2 vertex_scale; // 缩放后的绘制尺寸
 in vec2 vertex_pivot; // 缩放、斜切和旋转共用的中心，归一化坐标
@@ -18,6 +18,7 @@ in vec2 vertex_skew; // 斜切弧度，分别改变两条局部轴的方向。
 out vec4 color;
 out vec4 add_color;
 out vec3 uvw;
+flat out uint filterMode;
 
 void main() {
     // 顶点
@@ -46,32 +47,45 @@ void main() {
     add_color = vertex_add_color;
     vec2 uv = vertex_texture.xy + corner * vertex_texture.zw;
     uvw = vec3(uv * textureVec.xy, float(vertex_bytes.x));
+    filterMode = vertex_bytes.y;
 }
 @end
 
 @fs fs
 
 layout(binding=0) uniform texture2DArray tex;
-layout(binding=0) uniform sampler smp;
+layout(binding=0) uniform sampler nearestSmp;
+layout(binding=1) uniform sampler linearSmp;
 
 in vec4 color;
 in vec4 add_color;
 in vec3 uvw;
+flat in uint filterMode;
 out vec4 frag_color;
 
 void main() {
-     frag_color = texture(sampler2DArray(tex, smp), uvw) * color + add_color;
+    // 分支之前计算导数，避免混合采样方式时依赖非一致控制流中的导数。
+    vec2 dx = dFdx(uvw.xy);
+    vec2 dy = dFdy(uvw.xy);
+    vec4 sampled;
+    if (filterMode == 0u) {
+        sampled = textureGrad(sampler2DArray(tex, nearestSmp), uvw, dx, dy);
+    } else {
+        sampled = textureGrad(sampler2DArray(tex, linearSmp), uvw, dx, dy);
+    }
+    frag_color = sampled * color + add_color;
 }
 @end
 
 @fs msdf_fs
 
 layout(binding=0) uniform texture2DArray tex;
-layout(binding=0) uniform sampler smp;
+layout(binding=1) uniform sampler linearSmp;
 
 in vec4 color;
 in vec4 add_color;
 in vec3 uvw;
+flat in uint filterMode;
 out vec4 frag_color;
 
 float median(float red, float green, float blue) {
@@ -79,10 +93,10 @@ float median(float red, float green, float blue) {
 }
 
 void main() {
-    vec3 value = texture(sampler2DArray(tex, smp), uvw).rgb;
+    vec3 value = texture(sampler2DArray(tex, linearSmp), uvw).rgb;
     float distance = median(value.r, value.g, value.b) - 0.5;
     vec2 unitRange = vec2(2.0) /
-        vec2(textureSize(sampler2DArray(tex, smp), 0).xy);
+        vec2(textureSize(sampler2DArray(tex, linearSmp), 0).xy);
     vec2 screenSize = vec2(1.0) / fwidth(uvw.xy);
     float screenRange = max(0.5 * dot(unitRange, screenSize), 1.0);
     float opacity = clamp(distance * screenRange + 0.5, 0.0, 1.0);
