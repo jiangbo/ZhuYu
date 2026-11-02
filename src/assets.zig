@@ -163,8 +163,7 @@ pub const gpu = struct {
     // 在渲染通道开始前提交图片更新并上传顶点。
     // 返回当前有效的缓冲句柄，未扩容时返回原句柄。
     pub fn upload(buffer: sk.gfx.Buffer) sk.gfx.Buffer {
-        for (updates.items) |value| sk.gfx.copyBufferToImage(value);
-        updates.clearRetainingCapacity();
+        uploadImageUpdates();
 
         if (vertices.items.len == 0) return buffer;
         const data = sk.gfx.asRange(vertices.items);
@@ -182,6 +181,12 @@ pub const gpu = struct {
             .dst = .{ .buffer = result },
         });
         return result;
+    }
+
+    // 执行排队的纹理复制，完成后源缓冲可交给 Sokol 销毁。
+    pub fn uploadImageUpdates() void {
+        for (updates.items) |value| sk.gfx.copyBufferToImage(value);
+        updates.clearRetainingCapacity();
     }
 
     // 登记由引擎统一销毁的流水线。

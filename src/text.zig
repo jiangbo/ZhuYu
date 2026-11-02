@@ -353,7 +353,7 @@ pub const dynamic = struct {
     var resizeWait: ?f32 = null; // 没有等待中的缩放时为 null。
     var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
     var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
-    var glyphState: GlyphState = undefined; // 初始化时创建，刷新时复用。
+    var glyphState: GlyphState = undefined; // 上传缓冲按需创建并扩容。
     var glyphs: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = undefined;
     var pixels: []u8 = undefined; // 单线程生成字形时复用，容量不足才扩容。
 
@@ -368,15 +368,7 @@ pub const dynamic = struct {
         fontSize = option.size;
         fontOption = option;
         glyphState = .{
-            .upload = assets.gpu.makeBuffer(.{
-                .size = 1024 * 1024 * 4,
-                .usage = .{
-                    .staging_buffer = true,
-                    .write_transient = true,
-                    .copy_src = true,
-                },
-                .label = "system font upload",
-            }),
+            .upload = .{},
             .layer = fontOption.atlas.layer,
             .frame = window.frameCount(),
         };
@@ -513,6 +505,22 @@ pub const dynamic = struct {
         const left, const top = .{ state.x - 1, state.y - 1 };
         const copyWidth, const copyHeight = .{ width + 2, height + 2 };
         const len: usize = @intCast(copyWidth * copyHeight * 4);
+        const capacity = sk.gfx.queryBufferSize(state.upload);
+        if (state.offset + len > capacity) {
+            // 先消费旧缓冲的复制记录，不搬迁已上传的字形数据。
+            assets.gpu.uploadImageUpdates();
+            assets.gpu.destroyBuffer(state.upload);
+            state.upload = assets.gpu.makeBuffer(.{
+                .size = @max(@max(capacity * 2, len), 64 * 1024),
+                .usage = .{
+                    .staging_buffer = true,
+                    .write_transient = true,
+                    .copy_src = true,
+                },
+                .label = "system font upload",
+            });
+            state.offset = 0;
+        }
         sk.gfx.writeBufferTransient(.{
             .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
             .dst = .{ .buffer = state.upload, .offset = state.offset },
