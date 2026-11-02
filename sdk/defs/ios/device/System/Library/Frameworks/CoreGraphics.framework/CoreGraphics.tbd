@@ -6,6 +6,9 @@ current-version: 1774.0.1
 compatibility-version: 64
 exports:
   - targets: ["arm64-ios"]
-    symbols: ["_CGColorSpaceCreateWithName", "_CGColorSpaceRelease",
+    symbols: ["_CGBitmapContextCreate", "_CGColorSpaceCreateWithName",
+                     "_CGColorSpaceRelease", "_CGContextRelease",
+                     "_CGContextSetShouldAntialias",
+                     "_CGContextSetShouldSmoothFonts", "_CGContextSetTextPosition",
                      "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
 ...

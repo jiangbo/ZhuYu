@@ -194,7 +194,13 @@ def extract(zig, sdk, sources, targets, frameworks, output, links):
                         defined.update(defs)
                         undefined.update(refs)
                         headers.update(paths)
-                required[arch] = undefined - defined
+                # Zig 直接声明的字体接口也必须保留，避免重建 SDK 后丢失符号。
+                source = (Path(__file__).resolve().parent.parent /
+                          "src/internal/apple.zig").read_text()
+                font_symbols = {"_" + name for name in re.findall(
+                    r"extern (?:fn|var) (\w+)", source
+                )}
+                required[arch] = (undefined - defined) | font_symbols
 
     # 两类目录只存放生成材料，重新提取时清除旧版本留下的文件。
     for root in (output, links):
@@ -286,7 +292,8 @@ def main(platform, output):
             ("aarch64-macos.14.0", "arm64-macos"),
             ("x86_64-macos.14.0", "x86_64-macos"),
         ), ("AppKit", "Metal", "QuartzCore", "AudioToolbox",
-            "Foundation", "CoreGraphics", "CoreFoundation"), output, links)
+            "Foundation", "CoreGraphics", "CoreFoundation", "CoreText"),
+            output, links)
     else:
         for name, sdk, targets in (
             ("device", args.sdk, (("aarch64-ios.15.0", "arm64-ios"),)),
@@ -298,4 +305,5 @@ def main(platform, output):
             extract(args.zig, sdk.resolve(), sources, targets, (
                 "UIKit", "Metal", "QuartzCore", "AudioToolbox", "AVFoundation",
                 "AVFAudio", "Foundation", "CoreGraphics", "CoreFoundation",
+                "CoreText",
             ), output / name, links / name)

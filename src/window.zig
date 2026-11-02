@@ -41,6 +41,7 @@ pub var io: std.Io = undefined; // 加载资源时使用的 IO
 // 根据编译目标选择窗口及字体共用的平台实现。
 pub const platform = switch (builtin.os.tag) {
     .windows => @import("internal/windows.zig"),
+    .macos, .ios => @import("internal/apple.zig"),
     .linux => if (builtin.abi.isAndroid())
         @import("internal/android.zig")
     else

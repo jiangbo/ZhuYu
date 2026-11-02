@@ -6,15 +6,21 @@ current-version: 1774.0.4
 compatibility-version: 64
 exports:
   - targets: ["arm64-macos"]
-    symbols: ["_CGAssociateMouseAndMouseCursorPosition",
+    symbols: ["_CGAssociateMouseAndMouseCursorPosition", "_CGBitmapContextCreate",
                      "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
-                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
-                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_CGColorSpaceRelease", "_CGContextRelease",
+                     "_CGContextSetShouldAntialias",
+                     "_CGContextSetShouldSmoothFonts", "_CGContextSetTextPosition",
+                     "_CGDataProviderCreateWithCFData", "_CGDataProviderRelease",
+                     "_CGImageCreate", "_CGImageRelease",
                      "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
   - targets: ["x86_64-macos"]
-    symbols: ["_CGAssociateMouseAndMouseCursorPosition",
+    symbols: ["_CGAssociateMouseAndMouseCursorPosition", "_CGBitmapContextCreate",
                      "_CGColorSpaceCreateDeviceRGB", "_CGColorSpaceCreateWithName",
-                     "_CGColorSpaceRelease", "_CGDataProviderCreateWithCFData",
-                     "_CGDataProviderRelease", "_CGImageCreate", "_CGImageRelease",
+                     "_CGColorSpaceRelease", "_CGContextRelease",
+                     "_CGContextSetShouldAntialias",
+                     "_CGContextSetShouldSmoothFonts", "_CGContextSetTextPosition",
+                     "_CGDataProviderCreateWithCFData", "_CGDataProviderRelease",
+                     "_CGImageCreate", "_CGImageRelease",
                      "_kCGColorSpaceExtendedLinearDisplayP3", "_kCGColorSpaceSRGB"]
 ...

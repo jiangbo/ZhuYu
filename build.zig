@@ -49,26 +49,15 @@ pub fn build(b: *std.Build) !void {
     zhu.addImport("shader", shader);
     zhu.addOptions("options", options);
 
-    // 本机与交叉构建共用平台库声明和 GLES 库名修正。
-    if (linuxOnly) {
-        if (linuxGles) {
-            fixLinuxGles(sokolDep.artifact("sokol_clib").root_module);
-        }
-        if (font == .system) {
-            // 系统字体统一声明依赖，交叉构建另行提供占位库。
-            zhu.linkSystemLibrary("freetype", .{});
-            zhu.linkSystemLibrary("fontconfig", .{});
-        }
+    // 本机与交叉构建共用 GLES 库名修正。
+    if (linuxGles) {
+        fixLinuxGles(sokolDep.artifact("sokol_clib").root_module);
     }
     if (target.result.os.tag == .ios) {
         // iOS 单独链接色彩空间接口；macOS 通过 AppKit 重导出提供。
         zhu.linkFramework("CoreGraphics", .{});
     }
-    if (target.result.os.tag == .windows and font == .system) {
-        // DirectWrite 生成灰度字形，GDI 只用于读取离屏位图。
-        zhu.linkSystemLibrary("dwrite", .{});
-        zhu.linkSystemLibrary("gdi32", .{});
-    }
+    if (font == .system) linkSystemFont(zhu);
     if (target.result.abi.isAndroid()) {
         if (target.result.os.version_range.linux.android < 26)
             return error.AndroidRequiresApi26;
@@ -86,6 +75,30 @@ pub fn build(b: *std.Build) !void {
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&runTests.step);
+}
+
+// 系统字体依赖集中声明，在平台 SDK 处理链接输入前调用。
+fn linkSystemFont(zhu: *std.Build.Module) void {
+    const target = zhu.resolved_target.?.result;
+    switch (target.os.tag) {
+        .linux => {
+            if (target.abi.isAndroid()) return;
+            // Linux 桌面通过 Fontconfig 选字，FreeType 生成字形。
+            zhu.linkSystemLibrary("freetype", .{});
+            zhu.linkSystemLibrary("fontconfig", .{});
+        },
+        .macos, .ios => {
+            // Apple 共用 CoreText 度量和 CoreGraphics 离屏绘制。
+            zhu.linkFramework("CoreText", .{});
+            zhu.linkFramework("CoreGraphics", .{});
+        },
+        .windows => {
+            // DirectWrite 生成灰度字形，GDI 读取离屏位图。
+            zhu.linkSystemLibrary("dwrite", .{});
+            zhu.linkSystemLibrary("gdi32", .{});
+        },
+        else => {},
+    }
 }
 
 // 非 native 的 SDK、Web 接入和测试产物配置集中在此处。

@@ -6,6 +6,8 @@ current-version: 2048.1.101
 compatibility-version: 150
 exports:
   - targets: ["arm64-ios"]
-    symbols: ["_NSRunLoopCommonModes", "___CFConstantStringClassReference"]
+    symbols: ["_CFAttributedStringCreate", "_CFDictionaryCreate", "_CFRelease",
+                     "_CFStringCreateWithBytes", "_NSRunLoopCommonModes",
+                     "___CFConstantStringClassReference"]
     objc-classes: ["NSMutableArray", "NSNull", "NSRunLoop"]
 ...
