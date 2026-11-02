@@ -33,6 +33,8 @@ pub fn add(
     sokol.addSystemIncludePath(b.path(b.fmt("sdk/linux/{s}/include", .{name})));
     inline for (.{
         .{ "asound", 2 },
+        .{ "pulse", 0 },
+        .{ "pulse-simple", 0 },
         .{ "X11", 6 },
         .{ "Xi", 6 },
         .{ "Xcursor", 1 },

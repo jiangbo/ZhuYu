@@ -1,0 +1,4 @@
+pa_simple_drain@@PULSE_0
+pa_simple_free@@PULSE_0
+pa_simple_new@@PULSE_0
+pa_simple_write@@PULSE_0
