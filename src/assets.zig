@@ -92,8 +92,8 @@ pub fn id(name: []const u8) Id {
     return std.hash.Fnv1a_32.hash(name);
 }
 
-pub fn loadAtlas(source: graphics.Atlas, filter: graphics.Filter) void {
-    atlas.load(source, filter);
+pub fn loadAtlas(source: graphics.Atlas, filter: Filter) void {
+    _ = atlas.load(source, 0, filter);
 }
 
 pub fn getImage(imageId: Id) ?graphics.Image {
@@ -220,34 +220,38 @@ pub const gpu = struct {
     }
 };
 
-const atlas = struct {
+pub const atlas = struct {
+    // 记录每个图集剩余待加载的图片页数。
     var cache: std.AutoHashMapUnmanaged(Id, i32) = .empty;
 
     // 打包为文件加载回调的 64 位标识。
     const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
 
-    fn load(source: graphics.Atlas, filter: Filter) void {
+    // 加载图片并预留可写页；返回整页 Image，layer 是首个可写层。
+    pub fn load(source: graphics.Atlas, pages: u8, filter: Filter) Image {
         // 层号使用一个字节，创建 GPU 纹理前检查图集页数。
-        std.debug.assert(source.imagePaths.len <= 256);
+        std.debug.assert(source.imagePaths.len > 0);
+        std.debug.assert(source.imagePaths.len + pages <= 256);
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
-            const image = imageCache.get(atlasId).?;
+            var image = imageCache.get(atlasId).?;
             std.debug.assert(image.filter == filter);
-            return;
+            image.layer = if (pages == 0) 0 else @intCast(source.imagePaths.len);
+            return image;
         }
 
         const atlasView = sk.gfx.makeView(.{
             .texture = .{ .image = sk.gfx.makeImage(.{
-                .usage = .{ .write_unsealed = true },
+                .usage = .{ .write_unsealed = true, .copy_dst = pages > 0 },
                 .width = @intFromFloat(source.size.x),
                 .height = @intFromFloat(source.size.y),
                 .type = .ARRAY,
-                .num_slices = @intCast(source.imagePaths.len),
+                .num_slices = @intCast(source.imagePaths.len + pages),
             }) },
         });
         view.put(atlasView, null);
-        entry.value_ptr.* = 0;
+        entry.value_ptr.* = @intCast(source.imagePaths.len);
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
         imageCache.ensureUnusedCapacity(allocator, len) catch oom();
@@ -273,6 +277,12 @@ const atlas = struct {
             img.filter = filter;
             imageCache.putAssumeCapacity(image.view.id, img);
         }
+        return .{
+            .view = atlasView,
+            .layer = if (pages == 0) 0 else @intCast(source.imagePaths.len),
+            .size = source.size,
+            .filter = filter,
+        };
     }
 
     fn handler(response: Response) void {
@@ -295,8 +305,8 @@ const atlas = struct {
         });
 
         const count = cache.getPtr(pageIndex.atlasId).?;
-        count.* += 1;
-        if (count.* == sk.gfx.queryImageNumSlices(atlasImage)) {
+        count.* -= 1;
+        if (count.* == 0) {
             sk.gfx.sealImage(atlasImage);
         }
     }
@@ -367,11 +377,7 @@ pub const view = struct {
             .height = h,
             .type = .ARRAY,
             .num_slices = layers,
-            .data = init: {
-                var imageData = sk.gfx.ImageData{};
-                imageData.mip_levels[0] = sk.gfx.asRange(data);
-                break :init imageData;
-            },
+            .data = sk.gfx.asRange(data),
         });
     }
 };

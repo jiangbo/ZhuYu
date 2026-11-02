@@ -320,6 +320,7 @@ pub const static = struct {
 // 动态字体统一管理字形缓存、图集和平台字体的生命周期。
 pub const dynamic = struct {
     pub const Option = struct {
+        atlas: graphics.Image, // layer 为首个字形层，后续层均可写。
         family: [:0]const u8 = "sans-serif",
         weight: enum { normal, bold } = .normal, // 普通或加粗字重。
         size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
@@ -332,16 +333,11 @@ pub const dynamic = struct {
     // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
     pub const Char = extern struct { rect: math.Rect, advance: f32 };
 
-    // 只选择当前平台的字体接口，未实现的平台在实际调用时终止。
-    const backend = if (@hasDecl(window.platform, "font"))
-        window.platform.font
-    else
-        unsupported;
+    // 直接使用当前平台的字体接口。
+    const backend = window.platform.font;
 
-    // 四层图集共用资源，记录上传位置及当前层的装箱位置。
-    const Atlas = struct {
-        texture: sk.gfx.Image,
-        view: sk.gfx.View,
+    // 字形上传及装箱状态，不持有图片纹理。
+    const GlyphState = struct {
         upload: sk.gfx.Buffer, // 通过 GPU 模块创建和释放的上传缓冲。
         offset: usize = 0, // 本帧下一个字形的上传偏移。
         frame: u64, // 上传缓冲当前所属的帧。
@@ -353,12 +349,11 @@ pub const dynamic = struct {
 
     pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var opened: bool = false; // 系统字体是否已经初始化。
-    var resizeDelay: f32 = undefined; // 初始化时指定的缩放刷新延迟。
+    var fontOption: dynamic.Option = undefined; // 保存初始化配置，使用时直接读取。
     var resizeWait: ?f32 = null; // 没有等待中的缩放时为 null。
-    var filter: graphics.Filter = .nearest; // 初始化时选定，字号变化后继续使用。
     var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
     var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
-    var atlas: ?Atlas = null; // 首个可见字形出现时创建四层纹理数组。
+    var glyphState: GlyphState = undefined; // 初始化时创建，刷新时复用。
     var glyphs: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = undefined;
     var pixels: []u8 = undefined; // 单线程生成字形时复用，容量不足才扩容。
 
@@ -371,8 +366,20 @@ pub const dynamic = struct {
         backend.open(option);
         opened = true;
         fontSize = option.size;
-        filter = option.filter;
-        resizeDelay = option.resizeDelay;
+        fontOption = option;
+        glyphState = .{
+            .upload = assets.gpu.makeBuffer(.{
+                .size = 1024 * 1024 * 4,
+                .usage = .{
+                    .staging_buffer = true,
+                    .write_transient = true,
+                    .copy_src = true,
+                },
+                .label = "system font upload",
+            }),
+            .layer = fontOption.atlas.layer,
+            .frame = window.frameCount(),
+        };
         resizeWait = null;
         fontScale = 1;
         pixelSize = 0;
@@ -382,7 +389,7 @@ pub const dynamic = struct {
     // 每帧在游戏绘制前更新，连续缩放时重新开始等待。
     pub fn update(delta: f32) void {
         if (!opened) return;
-        if (window.resized) resizeWait = resizeDelay;
+        if (window.resized) resizeWait = fontOption.resizeDelay;
         if (resizeWait) |wait| {
             if (wait <= 0 or (!window.resized and wait <= delta)) {
                 resizeWait = null;
@@ -405,28 +412,21 @@ pub const dynamic = struct {
         const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
         const len: usize = @intFromFloat(side * side * 4);
         if (pixels.len < len) pixels = memory.allocator.realloc(pixels, len);
-        clear();
+        // 重置装箱位置，保留上传缓冲及本帧已使用的上传区域。
+        glyphState.layer = fontOption.atlas.layer;
+        glyphState.x, glyphState.y = .{ 1, 1 };
+        glyphState.rowHeight = 0;
+        glyphs.clearRetainingCapacity();
         pixelSize = size;
         std.log.info("font size: {d} px", .{pixelSize});
         metrics = backend.resize(pixelSize);
         dynamic.lineHeight = metrics.height * fontSize / pixelSize;
     }
 
-    // 销毁字体图集，通过 GPU 模块释放上传缓冲，并清空字形索引。
-    fn clear() void {
-        if (atlas) |state| {
-            assets.view.destroy(state.view);
-            sk.gfx.destroyImage(state.texture);
-            assets.gpu.destroyBuffer(state.upload);
-        }
-        atlas = null;
-        glyphs.clearRetainingCapacity();
-    }
-
-    // 由游戏清理阶段调用，释放图集、字形索引和系统字体。
+    // 释放字形上传缓冲、字形索引和系统字体。
     pub fn deinit() void {
         if (!opened) return;
-        clear();
+        assets.gpu.destroyBuffer(glyphState.upload);
         glyphs.deinit(memory.allocator.raw);
         memory.allocator.free(pixels);
         backend.close();
@@ -437,12 +437,15 @@ pub const dynamic = struct {
     pub fn findGlyph(code: u32) graphics.Glyph {
         std.debug.assert(opened);
         if (glyphs.get(code)) |glyph| return glyph;
-        if (atlas) |*state| {
-            const frame = window.frameCount();
-            if (state.frame != frame) {
-                state.frame = frame;
-                state.offset = 0;
-            }
+        // 图集尚未就绪时返回空字形，不生成像素，也不写入缓存。
+        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
+        if (sk.gfx.queryImageState(texture) != .VALID) {
+            return .{ .image = .{}, .rect = .init(.zero, .zero), .advance = 0 };
+        }
+        const frame = window.frameCount();
+        if (glyphState.frame != frame) {
+            glyphState.frame = frame;
+            glyphState.offset = 0;
         }
         return createGlyph(code);
     }
@@ -482,25 +485,26 @@ pub const dynamic = struct {
         const width: i32 = @intFromFloat(size.x);
         const height: i32 = @intFromFloat(size.y);
 
-        const state = if (atlas) |*value| value else addAtlas();
-        const atlasWidth = sk.gfx.queryImageWidth(state.texture);
-        const atlasHeight = sk.gfx.queryImageHeight(state.texture);
+        const state = &glyphState;
+        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
+        const atlasWidth = sk.gfx.queryImageWidth(texture);
+        const atlasHeight = sk.gfx.queryImageHeight(texture);
         if (state.x + width + 1 > atlasWidth) {
             state.x = 1;
             state.y += state.rowHeight + 2;
             state.rowHeight = 0;
         }
         if (state.y + height + 1 > atlasHeight) {
-            if (state.layer + 1 == sk.gfx.queryImageNumSlices(state.texture))
+            if (state.layer + 1 == sk.gfx.queryImageNumSlices(texture))
                 @panic("font atlas layer limit exceeded");
             state.layer += 1;
             state.x, state.y = .{ 1, 1 };
             state.rowHeight = 0;
         }
         const image = graphics.Image{
-            .view = state.view,
+            .view = fontOption.atlas.view,
             .layer = @intCast(state.layer),
-            .filter = filter,
+            .filter = fontOption.filter,
             .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
             .size = size,
         };
@@ -521,7 +525,7 @@ pub const dynamic = struct {
                 .bytes_per_slice = @intCast(len),
             },
             .dst = .{
-                .image = state.texture,
+                .image = texture,
                 .x = left,
                 .y = top,
                 .slice = state.layer,
@@ -533,57 +537,4 @@ pub const dynamic = struct {
         state.rowHeight = @max(state.rowHeight, height);
         return image;
     }
-
-    // 创建四层纹理数组，通过 GPU 模块创建共用的上传缓冲。
-    fn addAtlas() *Atlas {
-        const texture = sk.gfx.makeImage(.{
-            .width = 1024,
-            .height = 1024,
-            .type = .ARRAY,
-            .num_slices = 4,
-            .usage = .{ .copy_dst = true },
-            .label = "system font atlas",
-        });
-        const view = sk.gfx.makeView(.{ .texture = .{ .image = texture } });
-        assets.view.put(view, null);
-        const upload = assets.gpu.makeBuffer(.{
-            .size = 1024 * 1024 * 4,
-            .usage = .{
-                .staging_buffer = true,
-                .write_transient = true,
-                .copy_src = true,
-            },
-            .label = "system font upload",
-        });
-        atlas = .{
-            .texture = texture,
-            .view = view,
-            .upload = upload,
-            .frame = window.frameCount(),
-        };
-        return &atlas.?;
-    }
-
-    // 尚未实现的平台模块：只有实际调用系统字体接口时才终止。
-    const unsupported = struct {
-        // 当前平台尚未实现字体打开。
-        fn open(_: dynamic.Option) void {
-            @panic("system font is not implemented on this platform");
-        }
-
-        // 当前平台尚未实现字体关闭。
-        fn close() void {
-            @panic("system font is not implemented on this platform");
-        }
-
-        // 当前平台尚未实现字号设置和字体度量。
-        fn resize(_: f32) Metrics {
-            @panic("system font is not implemented on this platform");
-        }
-
-        // 当前平台尚未实现字形像素生成。
-        fn pixels(_: u32, _: []u8) Char {
-            @panic("system font is not implemented on this platform");
-        }
-    };
 };
