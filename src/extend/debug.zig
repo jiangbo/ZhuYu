@@ -198,8 +198,8 @@ pub fn draw(rows: []const Row) void {
         "精灵 {}", .{assets.frameStats.vertex},
         "文字 {}", .{assets.frameStats.text});
     writeFormatLine(&columns, "内存",
-        "使用 {} KB", .{memory.counter.used / 1024},
-        "最高 {} KB", .{memory.counter.max / 1024});
+        "使用 {} KB", .{memory.counter.used.load(.monotonic) / 1024},
+        "最高 {} KB", .{memory.counter.max.load(.monotonic) / 1024});
     writeFormatLine(&columns, "鼠标",
         "{d:.1}, {d:.1}", .{ input.mouse.raw.x, input.mouse.raw.y },
         "{d:.1}, {d:.1}", .{ input.mouse.pos.x, input.mouse.pos.y });

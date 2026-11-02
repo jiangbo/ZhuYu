@@ -77,12 +77,13 @@ pub fn oom() noreturn {
 }
 pub const Counter = struct {
     child: std.mem.Allocator,
-    used: usize,
-    max: usize,
-    count: usize,
+    // 各项独立统计，不要求读取时属于同一个瞬间。
+    used: std.atomic.Value(usize) = .init(0),
+    max: std.atomic.Value(usize) = .init(0),
+    count: std.atomic.Value(usize) = .init(0),
 
     pub fn init(child: std.mem.Allocator) Counter {
-        return .{ .child = child, .used = 0, .max = 0, .count = 0 };
+        return .{ .child = child };
     }
 
     pub fn allocator(self: *Counter) std.mem.Allocator {
@@ -101,9 +102,11 @@ pub const Counter = struct {
     fn alloc(ctx: *anyopaque, len: usize, a: A, r: usize) ?[*]u8 {
         const self: *Counter = @ptrCast(@alignCast(ctx));
         const p = self.child.rawAlloc(len, a, r) orelse return null;
-        self.count += 1;
-        self.used += len;
-        self.max = @max(self.max, self.used);
+        _ = self.count.fetchAdd(1, .monotonic);
+        const used = self.used.fetchAdd(len, .monotonic) + len;
+        if (used > self.max.load(.monotonic)) {
+            _ = self.max.fetchMax(used, .monotonic);
+        }
         return p;
     }
 
@@ -111,9 +114,16 @@ pub const Counter = struct {
         const self: *Counter = @ptrCast(@alignCast(ctx));
         const stable = self.child.rawResize(b, a, len, r);
         if (stable) {
-            self.count += 1;
-            self.used = self.used - b.len + len;
-            self.max = @max(self.max, self.used);
+            _ = self.count.fetchAdd(1, .monotonic);
+            if (len > b.len) {
+                const growth = len - b.len;
+                const used = self.used.fetchAdd(growth, .monotonic) + growth;
+                if (used > self.max.load(.monotonic)) {
+                    _ = self.max.fetchMax(used, .monotonic);
+                }
+            } else {
+                _ = self.used.fetchSub(b.len - len, .monotonic);
+            }
         }
         return stable;
     }
@@ -121,15 +131,22 @@ pub const Counter = struct {
     fn remap(ctx: *anyopaque, m: []u8, a: A, len: usize, r: usize) ?[*]u8 {
         const self: *Counter = @ptrCast(@alignCast(ctx));
         const n = self.child.rawRemap(m, a, len, r) orelse return null;
-        self.count += 1;
-        self.used = self.used - m.len + len;
-        self.max = @max(self.max, self.used);
+        _ = self.count.fetchAdd(1, .monotonic);
+        if (len > m.len) {
+            const growth = len - m.len;
+            const used = self.used.fetchAdd(growth, .monotonic) + growth;
+            if (used > self.max.load(.monotonic)) {
+                _ = self.max.fetchMax(used, .monotonic);
+            }
+        } else {
+            _ = self.used.fetchSub(m.len - len, .monotonic);
+        }
         return n;
     }
 
     fn frees(ctx: *anyopaque, buf: []u8, a: A, r: usize) void {
         const self: *Counter = @ptrCast(@alignCast(ctx));
-        self.used -= buf.len;
+        _ = self.used.fetchSub(buf.len, .monotonic);
         return self.child.rawFree(buf, a, r);
     }
 };
