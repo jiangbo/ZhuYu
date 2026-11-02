@@ -9,6 +9,7 @@ const camera = @import("camera.zig");
 const input = @import("input.zig");
 const memory = @import("internal/memory.zig");
 const text = @import("text.zig");
+const options = @import("options");
 
 pub const Event = sk.app.Event;
 
@@ -147,6 +148,7 @@ export fn windowFrame() void {
     if (resized) computeViewRect();
     if (input.anyMoved()) input.begin(viewRect.min, scale);
     const delta: f32 = @floatCast(sk.app.frameDuration());
+    if (options.font == .system) text.dynamic.update(delta);
     call(root, "frame", .{delta});
     input.end();
     resized = false;

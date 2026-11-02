@@ -324,6 +324,7 @@ pub const dynamic = struct {
         weight: enum { normal, bold } = .normal, // 普通或加粗字重。
         size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
         filter: graphics.Filter = .nearest, // 字形图片的默认采样方式。
+        resizeDelay: f32 = 0.4, // 窗口停止变化后等待多少秒再刷新字形。
     };
 
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
@@ -352,6 +353,8 @@ pub const dynamic = struct {
 
     pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var opened: bool = false; // 系统字体是否已经初始化。
+    var resizeDelay: f32 = undefined; // 初始化时指定的缩放刷新延迟。
+    var resizeWait: ?f32 = null; // 没有等待中的缩放时为 null。
     var filter: graphics.Filter = .nearest; // 初始化时选定，字号变化后继续使用。
     var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
     var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
@@ -362,15 +365,32 @@ pub const dynamic = struct {
     // 初始化所选平台的系统字体和度量，不提前生成字形像素。
     pub fn init(option: dynamic.Option) void {
         std.debug.assert(!opened);
+        std.debug.assert(option.resizeDelay >= 0);
         glyphs = .empty;
         pixels = &.{};
         backend.open(option);
         opened = true;
         fontSize = option.size;
         filter = option.filter;
+        resizeDelay = option.resizeDelay;
+        resizeWait = null;
         fontScale = 1;
         pixelSize = 0;
         resize();
+    }
+
+    // 每帧在游戏绘制前更新，连续缩放时重新开始等待。
+    pub fn update(delta: f32) void {
+        if (!opened) return;
+        if (window.resized) resizeWait = resizeDelay;
+        if (resizeWait) |wait| {
+            if (wait <= 0 or (!window.resized and wait <= delta)) {
+                resizeWait = null;
+                resize();
+            } else if (!window.resized) {
+                resizeWait = wait - delta;
+            }
+        }
     }
 
     // 仅在像素字号变化时清除旧字形并更新字体度量。
