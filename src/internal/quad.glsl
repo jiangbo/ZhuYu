@@ -18,7 +18,9 @@ in vec2 vertex_skew; // 斜切弧度，分别改变两条局部轴的方向。
 out vec4 color;
 out vec4 add_color;
 out vec3 uvw;
+#ifdef SAMPLERS
 flat out uint filterMode;
+#endif
 
 void main() {
     // 顶点
@@ -47,23 +49,32 @@ void main() {
     add_color = vertex_add_color;
     vec2 uv = vertex_texture.xy + corner * vertex_texture.zw;
     uvw = vec3(uv * textureVec.xy, float(vertex_bytes.x));
+#ifdef SAMPLERS
     filterMode = vertex_bytes.y;
+#endif
 }
 @end
 
 @fs fs
 
 layout(binding=0) uniform texture2DArray tex;
+#ifdef SAMPLERS
 layout(binding=0) uniform sampler nearestSmp;
 layout(binding=1) uniform sampler linearSmp;
+#else
+layout(binding=0) uniform sampler smp;
+#endif
 
 in vec4 color;
 in vec4 add_color;
 in vec3 uvw;
+#ifdef SAMPLERS
 flat in uint filterMode;
+#endif
 out vec4 frag_color;
 
 void main() {
+#ifdef SAMPLERS
     // 分支之前计算导数，避免混合采样方式时依赖非一致控制流中的导数。
     vec2 dx = dFdx(uvw.xy);
     vec2 dy = dFdy(uvw.xy);
@@ -73,6 +84,9 @@ void main() {
     } else {
         sampled = textureGrad(sampler2DArray(tex, linearSmp), uvw, dx, dy);
     }
+#else
+    vec4 sampled = texture(sampler2DArray(tex, smp), uvw);
+#endif
     frag_color = sampled * color + add_color;
 }
 @end
@@ -80,12 +94,18 @@ void main() {
 @fs msdf_fs
 
 layout(binding=0) uniform texture2DArray tex;
+#ifdef SAMPLERS
 layout(binding=1) uniform sampler linearSmp;
+#else
+layout(binding=0) uniform sampler linearSmp;
+#endif
 
 in vec4 color;
 in vec4 add_color;
 in vec3 uvw;
+#ifdef SAMPLERS
 flat in uint filterMode;
+#endif
 out vec4 frag_color;
 
 float median(float red, float green, float blue) {

@@ -306,7 +306,7 @@ pub const static = struct {
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
         const pipeline = batch.createPipeline(desc);
         for (images[0..data.images.len]) |image| {
-            assets.view.put(image.view, pipeline);
+            assets.view.getPtr(image.view).pipeline = pipeline;
         }
     }
 

@@ -7,6 +7,7 @@ const graphics = @import("graphics.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
 const window = @import("window.zig");
+const options = @import("options");
 
 const Image = graphics.Image;
 const ImageId = graphics.ImageId;
@@ -386,7 +387,8 @@ fn doDraw(
     pipeline: *sk.gfx.Pipeline,
 ) void {
     // 未指定流水线时使用默认图片流水线。
-    const selected = assets.view.get(cmd.view) orelse defaultPipeline;
+    const info = assets.view.get(cmd.view);
+    const selected = info.pipeline orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
@@ -422,8 +424,12 @@ fn doDraw(
     bindings.views[0] = cmd.view;
     bindings.vertex_buffers[0] = vertexBuffer;
     bindings.vertex_buffer_offsets[0] = @intCast(cmd.start * @sizeOf(Vertex));
-    bindings.samplers[0] = assets.sampler.nearest;
-    bindings.samplers[1] = assets.sampler.linear;
+    if (options.samplers) {
+        bindings.samplers[0] = assets.sampler.nearest;
+        bindings.samplers[1] = assets.sampler.linear;
+    } else {
+        bindings.samplers[0] = info.sampler;
+    }
     sk.gfx.applyBindings(bindings);
 
     // 绘制

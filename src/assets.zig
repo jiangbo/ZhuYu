@@ -74,7 +74,7 @@ pub fn loadImage(path: Path, option: ImageOption) Image {
         .size = option.size,
         .filter = option.filter,
     };
-    view.put(imageView, null);
+    view.put(imageView, .{ .sampler = sampler.get(option.filter) });
     _ = file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
@@ -121,6 +121,14 @@ pub const sampler = struct {
             .min_filter = .LINEAR,
             .mag_filter = .LINEAR,
         });
+    }
+
+    // 返回过滤方式对应的采样器。
+    pub fn get(filter: Filter) sk.gfx.Sampler {
+        return switch (filter) {
+            .nearest => nearest,
+            .linear => linear,
+        };
     }
 };
 
@@ -255,7 +263,7 @@ pub const atlas = struct {
                 .num_slices = @intCast(source.imagePaths.len + pages),
             }) },
         });
-        view.put(atlasView, null);
+        view.put(atlasView, .{ .sampler = sampler.get(filter) });
         entry.value_ptr.* = @intCast(source.imagePaths.len);
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
@@ -332,17 +340,27 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
 }
 
 pub const view = struct {
-    // 记录采样视图及其流水线，null 使用默认图片流水线。
-    var cache: std.AutoHashMapUnmanaged(graphics.View, ?sk.gfx.Pipeline) = .empty;
+    // 视图的绘制配置，流水线为空时使用默认图片流水线。
+    pub const Info = struct {
+        sampler: sk.gfx.Sampler,
+        pipeline: ?sk.gfx.Pipeline = null,
+    };
 
-    // 创建视图时登记，初始化字体时也可更新流水线。
-    pub fn put(source: graphics.View, pipeline: ?sk.gfx.Pipeline) void {
-        cache.put(allocator, source, pipeline) catch oom();
+    var cache: std.AutoHashMapUnmanaged(graphics.View, Info) = .empty;
+
+    // 创建视图时登记采样器与流水线。
+    pub fn put(source: graphics.View, info: Info) void {
+        cache.put(allocator, source, info) catch oom();
     }
 
-    // 返回视图的流水线，视图必须已经登记。
-    pub fn get(source: graphics.View) ?sk.gfx.Pipeline {
+    // 返回视图配置，视图必须已经登记。
+    pub fn get(source: graphics.View) Info {
         return cache.get(source).?;
+    }
+
+    // 用于修改已有流水线，缓存扩容或移除记录后指针失效。
+    pub fn getPtr(source: graphics.View) *Info {
+        return cache.getPtr(source).?;
     }
 
     // 提前释放采样视图，同时移除记录，退出时不再重复销毁。

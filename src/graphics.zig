@@ -277,7 +277,7 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
     const view = sk.gfx.makeView(.{
         .texture = .{ .image = colorImage },
     });
-    assets.view.put(view, null);
+    assets.view.put(view, .{ .sampler = assets.sampler.get(filter) });
     return .{
         .pass = pass,
         .image = .{ .view = view, .size = size, .filter = filter },

@@ -23,10 +23,13 @@ pub fn build(b: *std.Build) !void {
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
+    // 默认按纹理绑定一个采样器，开启后允许实例分别选择过滤方式。
+    const samplers = b.option(bool, "samplers", "Use two samplers") orelse false;
     const options = b.addOptions();
     options.addOption(FontMode, "font", font);
     options.addOption(bool, "append", append);
     options.addOption(bool, "midi", midi);
+    options.addOption(bool, "samplers", samplers);
 
     // 参数读取完成后，统一计算平台和构建方式。
     const linuxOnly = target.result.os.tag == .linux and !target.result.abi.isAndroid();
@@ -39,7 +42,7 @@ pub fn build(b: *std.Build) !void {
         .egl = linuxGles,
     });
     const sokolModule = sokolDep.module("sokol");
-    const shader = try createShader(b, sokolDep, target.result);
+    const shader = try createShader(b, sokolDep, target.result, samplers);
 
     const zhu = b.addModule("zhu", .{
         .root_source_file = b.path("src/root.zig"),
@@ -145,16 +148,20 @@ fn fixLinuxGles(module: *std.Build.Module) void {
     }
 }
 
+// 生成目标平台的着色器模块。
 fn createShader(
     b: *std.Build,
     sokolDep: *std.Build.Dependency,
     target: std.Target,
+    samplers: bool,
 ) !*std.Build.Module {
     const sokolModule = sokolDep.module("sokol");
+    var defines = [_][]const u8{"SAMPLERS"};
     return try sokol.shdc.createModule(b, "shader", sokolModule, .{
         .shdc_dep = sokolDep.builder.dependency("shdc", .{}),
         .input = "src/internal/quad.glsl",
         .output = "quad.glsl.zig",
+        .defines = if (samplers) &defines else null,
         // 保留对应平台可能使用的 shader 格式。
         .slang = switch (target.os.tag) {
             .windows => .{ .hlsl5 = true, .glsl410 = true },
