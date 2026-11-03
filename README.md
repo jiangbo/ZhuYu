@@ -9,8 +9,10 @@ ZhuYu 是一个用 Zig 编写的 2D 游戏开发库，基于 Sokol。
 
 - 窗口管理、缩放，以及键盘、鼠标和最多 8 点触摸输入。
 - 2D 批量绘制、相机、图集、动画和渲染目标。
-- 图片与音频资源加载。
-- 文字绘制、界面控件和 Tiled 地图支持。
+- 图片和音频资源加载，以及音效、背景音乐和 MIDI 播放。
+- 位图字体、MSDF 字体和系统字体绘制。
+- 界面控件、Tiled 地图和本地数据存储。
+- 图集、字体和音频资源处理工具，以及跨平台构建与打包接口。
 
 ## 构建要求
 
@@ -83,6 +85,20 @@ Linux 交叉编译也支持 musl，通过目标三元组中的 ABI 选择对应�
 
 生成 Linux 占位库需要创建符号链接。在 Windows 上，管理员进程也可能没有启用
 `SeCreateSymbolicLinkPrivilege`，需在启动 Zig 的进程中启用该权限。
+
+### 示例
+
+`examples/` 下的每个示例都是独立的 Zig 项目，通过本地路径依赖引擎源码。
+例如，构建和运行清屏示例：
+
+```sh
+cd examples/clear
+zig build
+zig build run
+```
+
+交叉编译时向 `zig build` 传入上表中的目标，仅编译和链接，不运行产物。
+Web 目标需先执行 `zig build install-emsdk` 安装 Emscripten。
 
 ### 运行测试
 
