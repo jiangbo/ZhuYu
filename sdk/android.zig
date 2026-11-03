@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// 交叉构建只使用包内材料，引擎、Sokol 和最终产物共用 libc 配置。
+// 按需下载 Android 材料，引擎、Sokol 和最终产物共用 libc 配置。
 pub fn add(
     b: *std.Build,
     zhu: *std.Build.Module,
@@ -14,7 +14,9 @@ pub fn add(
         .x86_64 => "x86_64-linux-android",
         else => return error.UnsupportedAndroidTarget,
     };
-    const root = try b.root.joinString(b.allocator, "sdk/android");
+    const sdk = try b.dependencyLazy("sdk_android", .{});
+    // libc 配置需要实际目录，使用依赖解压后的根路径。
+    const root = try sdk.builder.root.joinString(b.allocator, "");
     const include = b.pathJoin(&.{ root, "usr", "include" });
     const archInclude = b.pathJoin(&.{ include, arch });
     const libraries = b.pathJoin(&.{

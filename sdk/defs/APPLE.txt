@@ -1,0 +1,20 @@
+Apple 精简链接描述维护
+
+生成工具为 sdk/defs/apple.py，需要 Python 3.10 或以上、PyYAML、Zig、
+原始 Apple SDK 和 Sokol 的 src/sokol/c 源码目录。
+原始 SDK 路径必须显式传入，不依赖 ZhuYu-sdk 的仓库位置。
+
+在 ZhuYu 仓库根目录执行：
+python sdk/defs/apple.py macos /path/to/MacOSX14.0.sdk /path/to/sokol/src/sokol/c
+python sdk/defs/apple.py ios /path/to/iPhoneOS17.0.sdk /path/to/sokol/src/sokol/c \
+    --simulator /path/to/iPhoneSimulator17.0.sdk
+
+--zig 指定 Zig；--output 指定对应平台的 defs 输出目录。
+默认分别写入 sdk/defs/macos/ 和 sdk/defs/ios/；iOS 下分 device/、simulator/。
+生成前先编译 Sokol，合并 Debug、ReleaseFast 和各架构的未定义符号。
+同时读取本仓库 src/internal/apple.zig 中直接声明的字体接口。
+按原 SDK 的真实重导出关系生成精简 Framework TBD 和 libobjc.tbd，
+并结合 libSystem 的完整公开接口校验符号覆盖，全部成功后写入结果。
+
+本工具不提取头文件，不生成 SDKSettings.json，不修改 SDK 的 libSystem。
+头文件清单和 SDK 材料提取流程独立保存在 ZhuYu-sdk 仓库。

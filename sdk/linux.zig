@@ -9,6 +9,8 @@ pub fn add(
     zhu: *std.Build.Module,
     library: *std.Build.Step.Compile,
 ) !void {
+    // 只有 Linux 交叉构建需要远程 SDK，本机构建继续使用系统依赖。
+    const sdk = try b.dependencyLazy("sdk_linux", .{});
     const sokol = library.root_module;
     // 构建入口已校验选项；这里只读取原值，避免重复声明选项。
     const gles = if (b.user_input_options.get("gles3")) |value|
@@ -30,7 +32,7 @@ pub fn add(
     const abi = zhu.resolved_target.?.result.abi;
     if (!abi.isGnu() and !abi.isMusl()) return error.UnsupportedLinuxAbi;
     const name = if (abi.isMusl()) "musl" else "gnu";
-    sokol.addSystemIncludePath(b.path(b.fmt("sdk/linux/{s}/include", .{name})));
+    sokol.addSystemIncludePath(sdk.path(b.fmt("{s}/include", .{name})));
     inline for (.{
         .{ "asound", 2 },
         .{ "pulse", 0 },

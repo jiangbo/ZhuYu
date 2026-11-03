@@ -6,35 +6,35 @@ pub fn add(
     zhu: *std.Build.Module,
     sokol: *std.Build.Step.Compile,
 ) !std.Build.LazyPath {
+    const sdk = try b.dependencyLazy("sdk_ios", .{});
     const target = zhu.resolved_target.?.result;
     const name = if (target.abi == .simulator) "simulator" else "device";
-    const root = b.fmt("sdk/ios/{s}", .{name});
     // 头文件和完整 libSystem 留在 SDK，精简链接描述随代码维护。
     const links = b.fmt("sdk/defs/ios/{s}", .{name});
     for ([_]*std.Build.Module{ zhu, sokol.root_module }) |module| {
-        module.addSystemIncludePath(b.path(b.pathJoin(&.{ root, "usr/include" })));
+        module.addSystemIncludePath(sdk.path(b.fmt("{s}/usr/include", .{name})));
         module.addSystemFrameworkPath(b.path(b.pathJoin(&.{
             links, "System/Library/Frameworks",
         })));
         module.addLibraryPath(b.path(b.pathJoin(&.{ links, "usr/lib" })));
-        module.addLibraryPath(b.path(b.pathJoin(&.{ root, "usr/lib" })));
+        module.addLibraryPath(sdk.path(b.fmt("{s}/usr/lib", .{name})));
     }
     // 精简 TBD 直接链接原来由其他框架重导出的接口。
     zhu.linkFramework("CoreFoundation", .{});
     zhu.linkFramework("AVFAudio", .{});
     zhu.linkSystemLibrary("objc", .{ .use_pkg_config = .no });
-    const file = try libcFile(b, target);
+    const file = try libcFile(b, sdk, name);
     sokol.setLibCFile(file);
     return file;
 }
 
 // 最终产物和 Sokol 使用同一平台的 libc，避免混用真机与模拟器符号。
-pub fn libcFile(b: *std.Build, target: std.Target) !std.Build.LazyPath {
-    const name = if (target.abi == .simulator) "simulator" else "device";
-    const sdk = try b.root.joinString(
-        b.allocator,
-        b.fmt("sdk/ios/{s}", .{name}),
-    );
+fn libcFile(
+    b: *std.Build,
+    dependency: *std.Build.Dependency,
+    name: []const u8,
+) !std.Build.LazyPath {
+    const sdk = try dependency.builder.root.joinString(b.allocator, name);
     const include = b.pathJoin(&.{ sdk, "usr", "include" });
     const lib = b.pathJoin(&.{ sdk, "usr", "lib" });
     const text = b.fmt(

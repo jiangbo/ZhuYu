@@ -23,7 +23,7 @@ pub const Options = struct {
     app: AppConfig,
 };
 
-// 注册 apk 步骤，使用包内 JAR；宿主只需安装 JDK 11 或以上。
+// 注册 apk 步骤时下载工具包，宿主只需安装 JDK 11 或以上。
 pub fn addStep(b: *Build, dep: *Build.Dependency, options: Options) !void {
     const target = options.lib.rootModuleTarget();
     if (!target.abi.isAndroid()) return error.ExpectedAndroidTarget;
@@ -31,10 +31,11 @@ pub fn addStep(b: *Build, dep: *Build.Dependency, options: Options) !void {
         return error.TargetApiBelowMinimum;
     // ARSCLib 1.4.0 的内置 Android framework 最高为 API 36。
     if (options.targetSdk > 36) return error.UnsupportedTargetApi;
-    const unsigned = try packApk(b, dep, options);
+    const sdk = try dep.builder.dependencyLazy("sdk_apk", .{});
+    const unsigned = try packApk(b, dep, sdk, options);
     const apk = try signApk(b, .{
         .name = options.lib.name,
-        .signer = dep.path("sdk/apk/apksigner.jar"),
+        .signer = sdk.path("apksigner.jar"),
         .source = dep.path("tools/Sign.java"),
         .apk = unsigned,
     });
@@ -85,7 +86,12 @@ fn createResources(b: *Build, options: Options) !*WriteFile {
 }
 
 // Java 源文件由 JDK 直接运行，资源编译、组包和对齐共用一次调用。
-fn packApk(b: *Build, dep: *Build.Dependency, options: Options) !Build.LazyPath {
+fn packApk(
+    b: *Build,
+    dep: *Build.Dependency,
+    sdk: *Build.Dependency,
+    options: Options,
+) !Build.LazyPath {
     const abi = switch (options.lib.rootModuleTarget().cpu.arch) {
         .aarch64 => "arm64-v8a",
         .arm, .thumb => "armeabi-v7a",
@@ -97,7 +103,7 @@ fn packApk(b: *Build, dep: *Build.Dependency, options: Options) !Build.LazyPath 
     const pack = b.addSystemCommand(&.{
         "java", "-Dfile.encoding=UTF-8", "--class-path",
     });
-    pack.addFileArg(dep.path("sdk/apk/ARSCLib.jar"));
+    pack.addFileArg(sdk.path("ARSCLib.jar"));
     pack.addFileArg(dep.path("tools/Apk.java"));
     pack.addDirectoryArg(resources.getDirectory());
     pack.addArtifactArg(options.lib);

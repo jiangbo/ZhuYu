@@ -6,26 +6,27 @@ pub fn add(
     zhu: *std.Build.Module,
     sokol: *std.Build.Step.Compile,
 ) !std.Build.LazyPath {
+    const sdk = try b.dependencyLazy("sdk_macos", .{});
     for ([_]*std.Build.Module{ zhu, sokol.root_module }) |module| {
-        module.addSystemIncludePath(b.path("sdk/macos/usr/include"));
+        module.addSystemIncludePath(sdk.path("usr/include"));
         module.addSystemFrameworkPath(b.path(
             "sdk/defs/macos/System/Library/Frameworks",
         ));
         module.addLibraryPath(b.path("sdk/defs/macos/usr/lib"));
-        module.addLibraryPath(b.path("sdk/macos/usr/lib"));
+        module.addLibraryPath(sdk.path("usr/lib"));
     }
     // 精简 TBD 不包含重导出链，直接链接 Sokol 实际引用的框架和运行库。
     zhu.linkFramework("Foundation", .{});
     zhu.linkFramework("CoreFoundation", .{});
     zhu.linkSystemLibrary("objc", .{ .use_pkg_config = .no });
-    const file = try libcFile(b);
+    const file = try libcFile(b, sdk);
     sokol.setLibCFile(file);
     return file;
 }
 
 // libc 和 SDK 版本属于最终编译步骤，不能仅通过模块的搜索路径传递。
-pub fn libcFile(b: *std.Build) !std.Build.LazyPath {
-    const sdk = try b.root.joinString(b.allocator, "sdk/macos");
+fn libcFile(b: *std.Build, dependency: *std.Build.Dependency) !std.Build.LazyPath {
+    const sdk = try dependency.builder.root.joinString(b.allocator, "");
     const include = b.pathJoin(&.{ sdk, "usr", "include" });
     const lib = b.pathJoin(&.{ sdk, "usr", "lib" });
     const text = b.fmt(

@@ -30,13 +30,21 @@ Windows 和 macOS 的依据见 [Sokol 窗口实现]，Android 的依据见 [AAud
 
 Windows 7 支持可参考 [VxKex 项目](https://github.com/i486/VxKex)。
 
-Linux 使用 X11 和 ALSA；支持 OpenGL 4.3 Core，以及 OpenGL ES 3.1 + EGL。
+Linux 使用 X11，音频跟随 Sokol 的默认后端使用 PulseAudio；
+支持 OpenGL 4.3 Core，以及 OpenGL ES 3.1 + EGL。
 Wayland 桌面需要 XWayland。
 
 [Sokol 窗口实现]: https://github.com/floooh/sokol/blob/master/sokol_app.h
 [AAudio 系统要求]: https://developer.android.com/ndk/guides/stable_apis#audio
 
-构建目标示例（有最低系统版本要求的平台需显式指定版本）：
+### 交叉编译
+
+ZhuYu 根据构建目标自动下载并缓存所需的
+[SDK](https://github.com/jiangbo/ZhuYu-sdk/releases)。
+Linux、macOS 本机构建使用本机开发环境。
+
+以下目标和命令用于已经接入 ZhuYu 构建接口的应用项目。
+有最低系统版本要求的平台需显式指定版本：
 
 | 构建目标 | `-Dtarget` |
 | --- | --- |
@@ -47,12 +55,34 @@ Wayland 桌面需要 XWayland。
 | macOS Intel | `x86_64-macos.14.0` |
 | iOS 真机 | `aarch64-ios.15.0` |
 | iOS Apple Silicon 模拟器 | `aarch64-ios.15.0-simulator` |
+| iOS Intel 模拟器 | `x86_64-ios.15.0-simulator` |
 | Android ARM64 | `aarch64-linux-android.26` |
+| Android ARMv7 | `arm-linux-androideabi.26` |
+| Android x86 | `x86-linux-android.26` |
+| Android x86_64 | `x86_64-linux-android.26` |
 
 其他 Android 架构同样使用 API 26。APK 的 `minSdkVersion` 从编译目标的 API
-版本取得；`targetSdkVersion` 从已安装的 SDK Platform 取得，两者不要混淆。
+版本取得；`targetSdkVersion` 由 APK 打包选项的 `targetSdk` 指定，默认是 36。
+当前 ARSCLib 的内置 framework 最高支持 API 36。
 
 最低系统版本不随 Zig、SDK 或流水线的系统版本自动提高，更改前需明确确认。
+
+例如，在应用项目目录中执行：
+
+```sh
+zig build '-Dtarget=aarch64-linux.3.7-gnu.2.17' -Doptimize=fast
+zig build '-Dtarget=aarch64-macos.14.0' -Doptimize=fast
+zig build '-Dtarget=aarch64-ios.15.0' -Doptimize=fast
+zig build '-Dtarget=aarch64-ios.15.0-simulator' -Doptimize=fast
+zig build apk '-Dtarget=aarch64-linux-android.26' -Doptimize=fast
+```
+
+Linux 交叉编译也支持 musl，通过目标三元组中的 ABI 选择对应材料。
+
+### Windows 上交叉编译 Linux
+
+生成 Linux 占位库需要创建符号链接。在 Windows 上，管理员进程也可能没有启用
+`SeCreateSymbolicLinkPrivilege`，需在启动 Zig 的进程中启用该权限。
 
 ### 运行测试
 
