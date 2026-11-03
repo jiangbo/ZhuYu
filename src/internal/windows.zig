@@ -3,7 +3,7 @@ const std = @import("std");
 const dynamic = @import("../text.zig").dynamic;
 const assert = std.debug.assert;
 
-// 按 Windows ABI 声明，x86 使用 stdcall，x64 使用统一调用约定。
+// 按 Windows ABI 声明，x86 使用 stdcall，x64 和 ARM64 使用各自的系统调用约定。
 pub extern "imm32" fn ImmDisableIME(i32) callconv(.winapi) std.os.windows.BOOL;
 
 // COM 接口的首字段都是虚表指针，前三个方法共用 IUnknown ABI。

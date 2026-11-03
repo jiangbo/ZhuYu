@@ -9,6 +9,7 @@ pub fn add(
     const arch = switch (zhu.resolved_target.?.result.cpu.arch) {
         .x86 => "x86",
         .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
         else => return error.UnsupportedWindowsArch,
     };
     const sdk = try b.dependencyLazy("sdk_windows", .{});

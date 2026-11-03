@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .sdk_windows = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/windows.tar.gz",
-            .hash = "N-V-__8AADzviQIk34ONwM9sQ7izPKoLd3RMKLsvXNE4FTDu",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.3.0/windows.tar.gz",
+            .hash = "N-V-__8AAFqKhAWV3b20evz9y6hx36Z4gAxlKs4infKR1PT4",
             .lazy = true,
         },
         .sdk_linux = .{
