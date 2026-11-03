@@ -1,0 +1,10 @@
+.{
+    .name = .zhuyu_clear,
+    .version = "0.1.0",
+    .fingerprint = 0xdc0ab08b857a3236,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .zhuyu = .{ .path = "../.." },
+    },
+    .paths = .{""},
+}
