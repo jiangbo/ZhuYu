@@ -43,25 +43,35 @@ Wayland 桌面需要 XWayland。
 
 ZhuYu 根据构建目标自动下载并缓存所需的
 [SDK](https://github.com/jiangbo/ZhuYu-sdk/releases)。
-Linux、macOS 本机构建使用本机开发环境。
+Linux、macOS、Windows 本机构建使用本机开发环境。
 
 以下目标和命令用于已经接入 ZhuYu 构建接口的应用项目。
 有最低系统版本要求的平台需显式指定版本：
 
 | 构建目标 | `-Dtarget` |
 | --- | --- |
-| Windows x86_64 | `x86_64-windows.win8-gnu` |
-| Linux x86_64 | `x86_64-linux.2.6.4-gnu.2.16` |
-| Linux ARM64 | `aarch64-linux.3.7-gnu.2.17` |
+| Windows x86 GNU | `x86-windows.win8-gnu` |
+| Windows x86_64 GNU | `x86_64-windows.win8-gnu` |
+| Windows x86 MSVC | `x86-windows.win8-msvc` |
+| Windows x86_64 MSVC | `x86_64-windows.win8-msvc` |
+| Linux x86 GNU | `x86-linux.2.6.4-gnu.2.16` |
+| Linux x86_64 GNU | `x86_64-linux.2.6.4-gnu.2.16` |
+| Linux x86 musl | `x86-linux.2.6.4-musl` |
+| Linux x86_64 musl | `x86_64-linux.2.6.4-musl` |
+| Linux ARM32 GNU | `arm-linux.2.6.4-gnueabihf.2.16` |
+| Linux ARM64 GNU | `aarch64-linux.3.7-gnu.2.17` |
+| Linux ARM32 musl | `arm-linux.2.6.4-musleabihf` |
+| Linux ARM64 musl | `aarch64-linux.3.7-musl` |
 | macOS Apple Silicon | `aarch64-macos.14.0` |
 | macOS Intel | `x86_64-macos.14.0` |
 | iOS 真机 | `aarch64-ios.15.0` |
 | iOS Apple Silicon 模拟器 | `aarch64-ios.15.0-simulator` |
 | iOS Intel 模拟器 | `x86_64-ios.15.0-simulator` |
-| Android ARM64 | `aarch64-linux-android.26` |
 | Android ARMv7 | `arm-linux-androideabi.26` |
 | Android x86 | `x86-linux-android.26` |
+| Android ARM64 | `aarch64-linux-android.26` |
 | Android x86_64 | `x86_64-linux-android.26` |
+| Web Wasm32 | `wasm32-emscripten` |
 
 其他 Android 架构同样使用 API 26。APK 的 `minSdkVersion` 从编译目标的 API
 版本取得；`targetSdkVersion` 由 APK 打包选项的 `targetSdk` 指定，默认是 36。
@@ -97,7 +107,6 @@ zig build
 zig build run
 ```
 
-交叉编译时向 `zig build` 传入上表中的目标，仅编译和链接，不运行产物。
 Web 目标需先执行 `zig build install-emsdk` 安装 Emscripten。
 
 ### 运行测试
