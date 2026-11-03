@@ -9,7 +9,8 @@ pub const font = struct {
     var alpha: []u8 = &.{}; // 复用单通道覆盖率缓冲区。
 
     // 通用名称映射到系统字体，自定义名称交给 CoreText 解析。
-    pub fn open(option: dynamic.Option) void {
+    // 返回完整名称的字节数，缓冲不足时返回零。
+    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
         if (std.mem.eql(u8, option.family, "sans-serif")) {
             const language = string("zh-Hans");
             defer CFRelease(language);
@@ -34,6 +35,16 @@ pub const font = struct {
             CFRelease(base);
             base = bold;
         }
+        // 从选中的 CoreText 字体读取名称，不使用请求名称。
+        const name = CTFontCopyFamilyName(base);
+        defer CFRelease(name);
+        if (!CFStringGetCString(
+            name,
+            nameBuffer.ptr,
+            @intCast(nameBuffer.len),
+            0x08000100,
+        )) return 0;
+        return std.mem.sliceTo(nameBuffer, 0).len;
     }
 
     // 字号变化只替换当前字体，原始字体保留到关闭。
@@ -202,3 +213,6 @@ extern fn CGContextRelease(*anyopaque) void;
 extern fn CGContextSetShouldAntialias(*anyopaque, bool) void;
 extern fn CGContextSetShouldSmoothFonts(*anyopaque, bool) void;
 extern fn CGContextSetTextPosition(*anyopaque, f64, f64) void;
+
+extern fn CTFontCopyFamilyName(*const anyopaque) *anyopaque;
+extern fn CFStringGetCString(*const anyopaque, [*]u8, isize, u32) bool;

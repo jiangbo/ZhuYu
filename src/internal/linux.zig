@@ -1,6 +1,7 @@
 //! Linux 平台字体实现，构建和运行都不依赖 C 头文件。
 //! FreeType 对象由库分配；这里只声明读取字段所需的结构体前缀。
 
+const std = @import("std");
 const dynamic = @import("../text.zig").dynamic;
 const memory = @import("memory.zig");
 
@@ -10,7 +11,8 @@ pub const font = struct {
     var face: FT_Face = null; // 只打开匹配到的一个字体，不做缺字回退。
 
     // 按字体名称、字重和中文偏好匹配一个字体，找不到或打不开就终止。
-    pub fn open(option: dynamic.Option) void {
+    // 返回写入的名称字节数；查询不到名称时返回零。
+    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
         const config = FcInitLoadConfigAndFonts() orelse
             @panic("font config unavailable");
         defer FcConfigDestroy(config);
@@ -48,6 +50,13 @@ pub const font = struct {
         // FT_ENCODING_UNICODE 使用四字节标签 'unic'。
         if (FT_Select_Charmap(face, 0x756e6963) != 0)
             @panic("font unicode unavailable");
+        // 匹配结果的名称必须在释放 Fontconfig 对象前复制。
+        var name: [*c]u8 = null;
+        if (FcPatternGetString(matched, "family", 0, &name) != 0) return 0;
+        const selected = std.mem.span(name);
+        if (selected.len > nameBuffer.len) return 0;
+        @memcpy(nameBuffer[0..selected.len], selected);
+        return selected.len;
     }
 
     // 关闭唯一的字体及其 FreeType 实例。

@@ -34,7 +34,8 @@ pub const font = struct {
     var fontSize: f32 = undefined; // 当前像素字号。
 
     // 按名称和字重选择字体，并创建可复用的灰度位图目标。
-    pub fn open(option: dynamic.Option) void {
+    // 返回完整名称的字节数，缓冲不足时返回零。
+    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
         init();
 
         // 通用名称映射到 Windows 的中文字体，最后才选择西文字体。
@@ -47,10 +48,12 @@ pub const font = struct {
                 "Segoe UI",
                 "Arial",
             }) |name| {
-                if (findFont(name, option.weight == .bold)) return;
+                if (findFont(name, option.weight == .bold, nameBuffer)) |len|
+                    return len;
             }
             @panic("default font unavailable");
-        } else if (!findFont(option.family, option.weight == .bold))
+        }
+        return findFont(option.family, option.weight == .bold, nameBuffer) orelse
             std.debug.panic("font unavailable: {s}", .{option.family});
     }
 
@@ -132,22 +135,22 @@ pub const font = struct {
         releaseObject(factory);
     }
 
-    // 一次完成名称查询、字重匹配和字体面创建，未找到字体时返回 false。
-    fn findFont(name: []const u8, bold: bool) bool {
+    // 完成字体面创建并写入名称；未找到字体时返回 null。
+    fn findFont(name: []const u8, bold: bool, nameBuffer: []u8) ?usize {
         // 栈上转换字体名，先检查编码和长度，为结尾零预留一个单元。
-        var wide: [256]u16 = undefined;
+        var wide: [1024]u16 = undefined;
         if (!std.unicode.utf8ValidateSlice(name))
             @panic("font name is not valid UTF-8");
         const len = std.unicode.calcUtf16LeLen(name) catch unreachable;
         if (len >= wide.len)
-            @panic("font name exceeds 255 UTF-16 units");
+            @panic("font name exceeds 1023 UTF-16 units");
         _ = std.unicode.utf8ToUtf16Le(wide[0..len], name) catch unreachable;
         wide[len] = 0;
         var index: u32 = undefined;
         var exists: i32 = 0;
         assert(fonts.lpVtbl.FindFamilyName(fonts, wide[0..len :0].ptr, //
             &index, &exists) >= 0);
-        if (exists == 0) return false;
+        if (exists == 0) return null;
 
         var family: *IDWriteFontFamily = undefined;
         assert(fonts.lpVtbl.GetFontFamily(fonts, index, &family) >= 0);
@@ -158,7 +161,19 @@ pub const font = struct {
         defer releaseObject(matched);
         assert(matched.lpVtbl.CreateFontFace(matched, &face) >= 0);
         face.lpVtbl.GetMetrics(face, &metrics);
-        return true;
+        // 从匹配到的字体族读取正式名称，不保留请求别名。
+        var names: *IDWriteLocalizedStrings = undefined;
+        assert(family.lpVtbl.GetFamilyNames(family, &names) >= 0);
+        defer releaseObject(names);
+        var length: u32 = undefined;
+        assert(names.lpVtbl.GetStringLength(names, 0, &length) >= 0);
+        // 复用查找时的 UTF-16 栈缓冲，接口要求能装下名称及结尾零。
+        if (length >= wide.len) return 0;
+        assert(names.lpVtbl.GetString(names, 0, &wide, wide.len) >= 0);
+        const selected = wide[0..length];
+        if (std.unicode.calcWtf8Len(selected) > nameBuffer.len) return 0;
+        return std.unicode.utf16LeToUtf8(nameBuffer, selected) catch
+            @panic("invalid font name");
     }
 
     // 一次查询字形编号、步进和像素范围，临时分析对象在内部释放。
@@ -348,7 +363,11 @@ const IDWriteFontCollection = extern struct {
 const IDWriteFontFamily = extern struct {
     lpVtbl: *const extern struct {
         unknown: Unknown,
-        beforeMatch: [4]*const anyopaque,
+        beforeNames: [3]*const anyopaque,
+        GetFamilyNames: *const fn (
+            *IDWriteFontFamily,
+            **IDWriteLocalizedStrings,
+        ) callconv(.winapi) HRESULT,
         GetFirstMatchingFont: *const fn (
             *IDWriteFontFamily,
             u32,
@@ -498,4 +517,23 @@ const DIBSECTION = extern struct {
     dsBitfields: [3]u32,
     dshSection: ?*anyopaque,
     dsOffset: u32,
+};
+
+// DirectWrite 本地化名称列表，索引零提供字体自身记录的名称。
+const IDWriteLocalizedStrings = extern struct {
+    lpVtbl: *const extern struct {
+        unknown: Unknown,
+        beforeLength: [4]*const anyopaque,
+        GetStringLength: *const fn (
+            *IDWriteLocalizedStrings,
+            u32,
+            *u32,
+        ) callconv(.winapi) HRESULT,
+        GetString: *const fn (
+            *IDWriteLocalizedStrings,
+            u32,
+            [*]u16,
+            u32,
+        ) callconv(.winapi) HRESULT,
+    },
 };

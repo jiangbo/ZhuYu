@@ -4,13 +4,16 @@ const dynamic = @import("../text.zig").dynamic;
 // 浏览器系统字体接口，画布状态由嵌入的 JavaScript 持有。
 pub const font = struct {
     // 打开浏览器字体，宿主创建失败时直接终止。
-    pub fn open(option: dynamic.Option) void {
+    // 浏览器无法查询实际名称，返回零，由公共层使用 family。
+    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+        _ = nameBuffer;
         const weight: u32 = switch (option.weight) {
             .normal => 400,
             .bold => 700,
         };
         if (zhu_font_open(option.family, weight) != 0)
             @panic("font unavailable");
+        return 0;
     }
 
     // 释放浏览器保存的字体和画布引用。

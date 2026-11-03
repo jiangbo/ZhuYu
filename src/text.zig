@@ -23,6 +23,17 @@ const font = switch (options.font) {
 var fontScale: f32 = undefined;
 var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
 
+// 调试面板使用的字体和字库统计。
+pub const Stats = struct {
+    name: []const u8 = "",
+    size: f32 = 0,
+    count: usize = 0,
+    capacity: usize = 0,
+};
+
+// 字体变化时更新，调试面板直接读取，不在每帧查询时计算。
+pub var stats: Stats = .{};
+
 pub const Option = struct {
     offset: Vector2 = .zero, // 文字位置偏移
     scale: Vector2 = .one, // 基于默认字号的缩放
@@ -237,6 +248,7 @@ pub const static = struct {
     pub const MsdfOption = struct { size: ?f32 = null };
 
     pub const Font = struct {
+        name: []const u8, // 生成源记录的字体名称。
         size: f32,
         lineHeight: f32,
         imageSize: Vector2,
@@ -276,6 +288,14 @@ pub const static = struct {
         }
         invalidGlyph = searchGlyph('?').?;
         fontScale = (option.size orelse zon.size) / zon.size;
+        var count: usize = 0; // 静态字库的字形数量和容量相同。
+        for (zon.pages) |page| count += page.chars.len;
+        stats = .{
+            .name = zon.name,
+            .size = fontSize * fontScale,
+            .count = count,
+            .capacity = count,
+        };
     }
 
     // 加载 MSDF 字体，指定默认显示字号并使用线性采样。
@@ -328,6 +348,8 @@ pub const dynamic = struct {
         resizeDelay: f32 = 0.4, // 窗口停止变化后等待多少秒再刷新字形。
     };
 
+    var nameBuffer: [1024]u8 = undefined; // 持有平台查询到的 UTF-8 名称。
+
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
     pub const Metrics = extern struct { ascent: f32, descent: f32, height: f32 };
     // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
@@ -363,7 +385,9 @@ pub const dynamic = struct {
         std.debug.assert(option.resizeDelay >= 0);
         glyphs = .empty;
         pixels = &.{};
-        backend.open(option);
+        // 名称由平台填入；没有取得名称时显示请求的字体族。
+        const len = backend.open(option, &nameBuffer);
+        stats.name = if (len > 0) nameBuffer[0..len] else option.family;
         opened = true;
         fontSize = option.size;
         fontOption = option;
@@ -413,6 +437,16 @@ pub const dynamic = struct {
         std.log.info("font size: {d} px", .{pixelSize});
         metrics = backend.resize(pixelSize);
         dynamic.lineHeight = metrics.height * fontSize / pixelSize;
+        // 按字号加两像素边框估算方格容量，只在缓存重建时计算。
+        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
+        const width: usize = @intCast(sk.gfx.queryImageWidth(texture));
+        const height: usize = @intCast(sk.gfx.queryImageHeight(texture));
+        const layers: usize = @intCast(sk.gfx.queryImageNumSlices(texture) -
+            fontOption.atlas.layer);
+        const cell: usize = @intFromFloat(side);
+        stats.size = pixelSize;
+        stats.count = 0;
+        stats.capacity = (width / cell) * (height / cell) * layers;
     }
 
     // 释放字形上传缓冲、字形索引和系统字体。
@@ -422,6 +456,7 @@ pub const dynamic = struct {
         glyphs.deinit(memory.allocator.raw);
         memory.allocator.free(pixels);
         backend.close();
+        stats = .{};
         opened = false;
     }
 
@@ -466,6 +501,7 @@ pub const dynamic = struct {
             .advance = char.advance * factor,
         };
         glyphs.put(memory.allocator.raw, code, glyph) catch memory.oom();
+        stats.count = glyphs.count();
         return glyph;
     }
 

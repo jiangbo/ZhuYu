@@ -99,7 +99,18 @@ const Jni = extern struct {
     ) callconv(.c) ?*anyopaque,
     beforeNewString: [17]?*anyopaque,
     NewString: *const fn (*Env, [*]const u16, c_int) callconv(.c) ?*anyopaque,
-    beforeExceptionCheck: [64]?*anyopaque,
+    GetStringLength: *const fn (*Env, ?*anyopaque) callconv(.c) c_int,
+    GetStringChars: *const fn (
+        *Env,
+        ?*anyopaque,
+        ?*u8,
+    ) callconv(.c) ?[*]const u16,
+    ReleaseStringChars: *const fn (
+        *Env,
+        ?*anyopaque,
+        [*]const u16,
+    ) callconv(.c) void,
+    beforeExceptionCheck: [61]?*anyopaque,
     ExceptionCheck: *const fn (*Env) callconv(.c) u8,
     NewDirectByteBuffer: *const fn (*Env, [*]u8, i64) callconv(.c) ?*anyopaque,
 };
@@ -354,7 +365,8 @@ pub const font = struct {
     var metricFields: [3]*anyopaque = undefined; // ascent、descent、leading。
 
     // 打开系统字体，在游戏线程取得 JNI 环境，所有持久对象使用全局引用。
-    pub fn open(option: dynamic.Option) void {
+    // 返回写入的名称字节数，旧系统无法查询时返回零。
+    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
         const activity: *const Activity =
             @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
         vm = @ptrCast(@alignCast(activity.vm.?));
@@ -395,10 +407,10 @@ pub const font = struct {
         // 字体名称使用标准 UTF-8 转 UTF-16，避免 JNI 修改版 UTF-8 的限制。
         const len = std.unicode.calcUtf16LeLen(option.family) catch
             @panic("font name is not valid UTF-8");
-        const name = memory.allocator.alloc(u16, len);
-        defer memory.allocator.free(name);
-        _ = std.unicode.utf8ToUtf16Le(name, option.family) catch unreachable;
-        const family = object(e, jni.NewString(e, name.ptr, @intCast(name.len)));
+        var name: [1024]u16 = undefined; // JNI 按长度读取，不需要结尾零。
+        if (len > name.len) @panic("font name exceeds 1024 UTF-16 units");
+        _ = std.unicode.utf8ToUtf16Le(name[0..len], option.family) catch unreachable;
+        const family = object(e, jni.NewString(e, &name, @intCast(len)));
         const create = object(e, jni.GetStaticMethodID(e, typefaceClass, "create", //
             "(Ljava/lang/String;I)Landroid/graphics/Typeface;"));
         const face = object(e, jni.CallStaticObjectMethodA(e, typefaceClass, //
@@ -406,6 +418,33 @@ pub const font = struct {
                 .{ .object = family },
                 .{ .int = if (option.weight == .bold) 1 else 0 },
             }));
+        var nameLen: usize = 0; // 未取得名称时由公共层使用 family。
+        // API 34 才公开系统字体族查询；旧系统清除方法查找异常。
+        const getName = jni.GetMethodID(
+            e,
+            typefaceClass,
+            "getSystemFontFamilyName",
+            "()Ljava/lang/String;",
+        );
+        if (getName) |get| {
+            if (jni.CallObjectMethodA(e, face, get, null)) |selected| {
+                const count = jni.GetStringLength(e, selected);
+                const chars = jni.GetStringChars(e, selected, null) orelse
+                    memory.oom();
+                defer jni.ReleaseStringChars(e, selected, chars);
+                // 直接从 JNI 借用的 UTF-16 写入名称缓冲，不分配中间字符串。
+                const selectedName = chars[0..@intCast(count)];
+                if (std.unicode.calcWtf8Len(selectedName) <= nameBuffer.len) {
+                    nameLen = std.unicode.utf16LeToUtf8(
+                        nameBuffer,
+                        selectedName,
+                    ) catch @panic("invalid font name");
+                }
+            }
+            check(e);
+        } else {
+            jni.ExceptionClear(e);
+        }
         const setTypeface = method(e, paintClass, "setTypeface", //
             "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
         _ = jni.CallObjectMethodA(e, paint, setTypeface, &.{.{ .object = face }});
@@ -438,6 +477,7 @@ pub const font = struct {
         for ([_][*:0]const u8{ "ascent", "descent", "leading" }, 0..) |key, i| {
             metricFields[i] = object(e, jni.GetFieldID(e, metricsClass, key, "F"));
         }
+        return nameLen;
     }
 
     // Android 的 ascent 为负，公共层统一使用正的基线上方距离。

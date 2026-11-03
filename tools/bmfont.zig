@@ -218,6 +218,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const result = text.Font{
+        .name = source.info.name,
         .size = @floatFromInt(size),
         .lineHeight = @floatFromInt(source.common.lineHeight),
         .imageSize = .{
@@ -286,8 +287,10 @@ fn parseInfo(reader: *std.Io.Reader, _: usize) !void {
         .spacingHoriz = try reader.takeByte(),
         .spacingVert = try reader.takeByte(),
         .outline = try reader.takeByte(),
+        .name = try readString(reader),
     };
-    rawFont.info.name = try readString(reader);
+    // 字库名称是必填信息，禁止生成缺少名称的资源。
+    if (rawFont.info.name.len == 0) return error.MissingFontName;
 }
 
 // 读取所有页面共用的行高、图片尺寸和通道描述。
@@ -400,7 +403,7 @@ pub const Info = struct {
     spacingHoriz: u8,
     spacingVert: u8,
     outline: u8,
-    name: []const u8 = &.{},
+    name: []const u8,
 };
 
 pub const Common = struct {

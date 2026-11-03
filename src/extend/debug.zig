@@ -209,6 +209,19 @@ pub fn draw(rows: []const Row) void {
     writeFormatLine(&columns, "资源",
         "文件 {}", .{assetStats.file},
         "图片 {}", .{assetStats.image});
+    // 字号按字体类型显示，字库容量包含已经缓存的字形。
+    const fontStats = text.stats;
+    // 字体名最多显示 40 字节，截断时避开 UTF-8 后续字节。
+    var nameLen = @min(fontStats.name.len, 40);
+    if (nameLen < fontStats.name.len) {
+        while (nameLen > 0 and fontStats.name[nameLen] & 0xc0 == 0x80)
+            nameLen -= 1;
+    }
+    writeFormatLine(&columns, "字体", "{s}", .{fontStats.name[0..nameLen]},
+        "字号 {d:.1} px", .{fontStats.size});
+    writeFormatLine(&columns, "字库",
+        "字形 {}", .{fontStats.count},
+        "容量 ≈{}", .{fontStats.capacity});
     writeFormatLine(&columns, "音频",
         "音乐 {}", .{assetStats.music},
         "音效 {}", .{assetStats.sound});

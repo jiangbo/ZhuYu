@@ -350,6 +350,7 @@ fn convert(ctx: *const Context, pages: []const Page) !text.Font {
         };
     }
     return .{
+        .name = try readFontName(ctx),
         .size = pages[0].font.atlas.size,
         .lineHeight = pages[0].font.metrics.lineHeight * pages[0].font.atlas.size,
         .imageSize = .{
@@ -434,3 +435,57 @@ const Rect = struct {
     right: f32 = 0,
     bottom: f32 = 0,
 };
+
+// MSDF 输出不含字体名，直接读取所选字体文件的 OpenType 名称表。
+fn readFontName(ctx: *const Context) ![]const u8 {
+    const bytes = try ctx.cwd.readFileAlloc(
+        ctx.io,
+        ctx.options.font,
+        ctx.gpa,
+        .unlimited,
+    );
+    defer ctx.gpa.free(bytes);
+    // 字体集合默认选取第一个字体，与生成工具的默认索引一致。
+    const base = if (bytes.len >= 16 and std.mem.eql(u8, bytes[0..4], "ttcf"))
+        try fontInt(bytes, 12, 4)
+    else
+        0;
+    const count = try fontInt(bytes, base + 4, 2);
+    for (0..count) |i| {
+        const record = base + 12 + i * 16;
+        if (record + 16 > bytes.len) return error.InvalidFont;
+        if (!std.mem.eql(u8, bytes[record..][0..4], "name")) continue;
+        const table = try fontInt(bytes, record + 8, 4);
+        const names = try fontInt(bytes, table + 2, 2);
+        const strings = table + try fontInt(bytes, table + 4, 2);
+        // 优先使用排印字体族，旧字体退回普通字体族。
+        for ([_]usize{ 16, 1 }) |id| {
+            for (0..names) |j| {
+                const entry = table + 6 + j * 12;
+                const platform = try fontInt(bytes, entry, 2);
+                if (try fontInt(bytes, entry + 6, 2) != id) continue;
+                if (platform != 0 and platform != 3) continue;
+                const len = try fontInt(bytes, entry + 8, 2);
+                if (len == 0) continue;
+                const start = strings + try fontInt(bytes, entry + 10, 2);
+                if (start + len > bytes.len or len % 2 != 0)
+                    return error.InvalidFont;
+                const wide = try ctx.gpa.alloc(u16, len / 2);
+                defer ctx.gpa.free(wide);
+                for (wide, 0..) |*char, k|
+                    char.* = @intCast(try fontInt(bytes, start + k * 2, 2));
+                return std.unicode.utf16LeToUtf8Alloc(ctx.gpa, wide);
+            }
+        }
+    }
+    return error.MissingFontName;
+}
+
+// OpenType 表中的整数按大端读取，并检查文件边界。
+fn fontInt(bytes: []const u8, offset: usize, len: usize) !usize {
+    if (offset > bytes.len or len > bytes.len - offset)
+        return error.InvalidFont;
+    var value: usize = 0;
+    for (bytes[offset..][0..len]) |byte| value = value * 256 + byte;
+    return value;
+}
