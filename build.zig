@@ -4,6 +4,7 @@ const macosSdk = @import("sdk/macos.zig");
 const iosSdk = @import("sdk/ios.zig");
 const androidSdk = @import("sdk/android.zig");
 const webSdk = @import("sdk/web.zig");
+const windowsSdk = @import("sdk/windows.zig");
 
 // 应用直接使用同一版本的 Sokol 构建工具。
 pub const sokol = @import("sokol");
@@ -68,9 +69,8 @@ pub fn build(b: *std.Build) !void {
         sokolDep.artifact("sokol_clib").root_module.pic = true;
     }
 
-    // 非 native 交给独立流程，本机构建直接继续向下执行。
-    const native = target.query.isNative();
-    if (!native) return buildCross(b, zhu, sokolDep);
+    // 仅交叉构建接入包内 SDK，本机构建使用本机开发环境。
+    if (!target.query.isNative()) return buildCross(b, zhu, sokolDep);
 
     const tests = b.addTest(.{ .root_module = zhu });
     const runTests = b.addRunArtifact(tests);
@@ -101,7 +101,7 @@ fn linkSystemFont(zhu: *std.Build.Module) void {
     }
 }
 
-// 非 native 的 SDK、Web 接入和测试产物配置集中在此处。
+// 需要 SDK 的平台接入和测试产物配置集中在此处。
 fn buildCross(
     b: *std.Build,
     zhu: *std.Build.Module,
@@ -120,6 +120,9 @@ fn buildCross(
         },
         .macos => libc = try macosSdk.add(b, zhu, library),
         .ios => libc = try iosSdk.add(b, zhu, library),
+        .windows => if (target.abi == .msvc) {
+            libc = try windowsSdk.add(b, zhu, library);
+        },
         else => {},
     }
     const tests = b.addTest(.{ .root_module = zhu });

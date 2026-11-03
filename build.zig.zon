@@ -4,28 +4,33 @@
     .fingerprint = 0x77a3d2846158853,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
+        .sdk_windows = .{
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/windows.tar.gz",
+            .hash = "N-V-__8AADzviQIk34ONwM9sQ7izPKoLd3RMKLsvXNE4FTDu",
+            .lazy = true,
+        },
         .sdk_linux = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.1.0/linux.tar.gz",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/linux.tar.gz",
             .hash = "N-V-__8AAKWfcgAylGM5rkEjav7ui-upUIdQR7HcIqZhrJei",
             .lazy = true,
         },
         .sdk_android = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.1.0/android.tar.gz",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/android.tar.gz",
             .hash = "N-V-__8AAM4iHAEV4myRQpq1IlebCxnKN0sUjiXMdL1l6dqs",
             .lazy = true,
         },
         .sdk_macos = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.1.0/macos.tar.gz",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/macos.tar.gz",
             .hash = "N-V-__8AAJz_DgEDtk79Zq2SefZyI0kDTyGwNDou7VSRIPtr",
             .lazy = true,
         },
         .sdk_ios = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.1.0/ios.tar.gz",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/ios.tar.gz",
             .hash = "N-V-__8AAOgYqgEGdZVaw5kVrqvXMOVhvQfFt9cjaz-0GTMn",
             .lazy = true,
         },
         .sdk_apk = .{
-            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.1.0/apk.tar.gz",
+            .url = "https://github.com/jiangbo/ZhuYu-sdk/releases/download/v0.2.0/apk.tar.gz",
             .hash = "N-V-__8AAFi8bgDrstDyBv8GhpM6Q9OGwWK37E0cnmcxdGrm",
             .lazy = true,
         },
