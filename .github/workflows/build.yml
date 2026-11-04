@@ -67,14 +67,14 @@ jobs:
       - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
       # 按平台分别缓存下载包，避免不同 SDK 共用一个不能更新的缓存。
       - uses: actions/cache@v5
         with:
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
-          key: zon-0.17.0-${{ matrix.platform }}-${{ hashFiles('**/build.zig.zon') }}
-          restore-keys: zon-0.17.0-${{ matrix.platform }}-
+          key: zon-0.17.1-${{ matrix.platform }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: zon-0.17.1-${{ matrix.platform }}-
       - name: Install Linux libraries
         if: matrix.platform == 'linux'
         run: |
