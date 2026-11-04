@@ -43,8 +43,11 @@ pub fn setup(fileIo: std.Io, gpa: std.mem.Allocator) void {
     allocator = gpa;
 }
 
-// 打开可执行文件旁边的 assets 目录。
+// 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
 fn openAssetDir() !std.Io.Dir {
+    const curDir = std.Io.Dir.cwd().openDir(io, "assets", .{});
+    if (curDir) |dir| return dir else |_| {}
+
     var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const len = try std.process.executableDirPath(io, &path);
     const exeDir = try std.Io.Dir.openDirAbsolute(io, path[0..len], .{});
