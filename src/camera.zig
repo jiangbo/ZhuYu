@@ -13,7 +13,7 @@ pub const Camera = struct {
 
     // 将平台界面尺寸转换为渲染像素，供触摸控件布局和绘制共用。
     pub fn windowDpi() Camera {
-        return .{ .scale = .square(@import("window.zig").dpi()) };
+        return .{ .scale = .all(@import("window.zig").dpi()) };
     }
 
     pub fn windowAt(origin: Vector2) Camera {

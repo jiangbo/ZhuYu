@@ -152,14 +152,14 @@ pub const Vector2 = extern struct {
     pub const zero = Vector2{ .x = 0, .y = 0 };
     pub const center = Vector2{ .x = 0.5, .y = 0.5 };
     pub const one = Vector2{ .x = 1, .y = 1 };
-    pub const inf = Vector2.square(std.math.inf(f32));
+    pub const inf = Vector2.all(std.math.inf(f32));
 
     pub fn xy(x: f32, y: f32) Vector2 {
         return .{ .x = x, .y = y };
     }
 
-    pub fn square(size: f32) Vector2 {
-        return .{ .x = size, .y = size };
+    pub fn all(value: f32) Vector2 {
+        return .{ .x = value, .y = value };
     }
 
     pub fn toVector3(self: Vector2, z: f32) Vector3 {
@@ -429,8 +429,8 @@ pub const Circle = struct {
     }
 
     pub fn toRect(self: Circle) Rect {
-        const size = Vector2.square(self.radius * 2);
-        return .init(self.center.sub(.square(self.radius)), size);
+        const size = Vector2.all(self.radius * 2);
+        return .init(self.center.sub(.all(self.radius)), size);
     }
 
     pub fn contains(self: Circle, point: Vector2) bool {

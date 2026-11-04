@@ -176,19 +176,19 @@ pub fn drawShape(shape: math.Shape, down: bool) void {
     switch (shape) {
         .circle => |circle| {
             batch.drawCircle(circle.center, .{
-                .size = .square(circle.radius * 2),
+                .size = .all(circle.radius * 2),
                 .anchor = .center,
                 .color = border,
             });
             batch.drawCircle(circle.center, .{
-                .size = .square(circle.radius * 2 - 3),
+                .size = .all(circle.radius * 2 - 3),
                 .anchor = .center,
                 .color = fill,
             });
         },
         .rect => |rect| {
             batch.drawRect(rect, .{ .color = border });
-            batch.drawRect(rect.pad(.square(1.5)), .{ .color = fill });
+            batch.drawRect(rect.pad(.all(1.5)), .{ .color = fill });
         },
     }
 }

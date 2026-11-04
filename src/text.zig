@@ -202,7 +202,7 @@ pub fn lineHeight(option: Option) f32 {
 }
 
 pub fn sizeToScale(size: f32) Vector2 {
-    return .square(size / (fontSize * fontScale));
+    return .all(size / (fontSize * fontScale));
 }
 
 pub fn computeTextCount(text: String) usize {

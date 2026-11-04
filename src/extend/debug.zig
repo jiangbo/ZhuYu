@@ -281,7 +281,7 @@ fn debugTextScale(contentHeight: f32) Vector2 {
 
     // 按半档缩放，避免调试面板盖住主要画面。
     const stepped = @round(std.math.clamp(rawScale, 0.5, 1.5) * 2) / 2;
-    return .square(stepped);
+    return .all(stepped);
 }
 
 fn writeFormatLine(

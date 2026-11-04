@@ -31,7 +31,7 @@ pub const Grid = struct {
     }
 
     pub fn cellSize(self: Grid) Vector2 {
-        return .square(@floatFromInt(self.cell));
+        return .all(@floatFromInt(self.cell));
     }
 
     pub fn halfCell(self: Grid) Vector2 {
@@ -94,7 +94,7 @@ pub const Grid = struct {
         std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
 
         const rawMin = self.worldToCell(rect.min);
-        const max = rect.max().sub(.square(math.epsilon));
+        const max = rect.max().sub(.all(math.epsilon));
         const rawMax = self.worldToCell(max);
 
         const min = Cell.xy(@max(rawMin.x, 0), @max(rawMin.y, 0));
