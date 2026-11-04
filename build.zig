@@ -53,10 +53,6 @@ pub fn build(b: *std.Build) !void {
     zhu.addImport("shader", shader);
     zhu.addOptions("options", options);
 
-    // 本机与交叉构建共用 GLES 库名修正。
-    if (linuxGles) {
-        fixLinuxGles(sokolDep.artifact("sokol_clib").root_module);
-    }
     if (target.result.os.tag == .ios) {
         // iOS 单独链接色彩空间接口；macOS 通过 AppKit 重导出提供。
         zhu.linkFramework("CoreGraphics", .{});
@@ -132,20 +128,6 @@ fn buildCross(
     if (libc) |file| tests.setLibCFile(file);
     const runTests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&runTests.step);
-}
-
-// native 与非 native 的 GLES 构建共用此库名修正。
-fn fixLinuxGles(module: *std.Build.Module) void {
-    // TODO: 升级到包含上游修复的 sokol-zig 后，移除此库名替换。
-    for (module.link_objects.items) |*object| {
-        switch (object.*) {
-            .system_lib => |*library| {
-                if (std.mem.eql(u8, library.name, "GL"))
-                    library.name = "GLESv2";
-            },
-            else => {},
-        }
-    }
 }
 
 // 生成目标平台的着色器模块。

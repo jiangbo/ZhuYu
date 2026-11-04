@@ -39,25 +39,6 @@ pub fn add(
     const file = b.addWriteFiles().add("android-libc.conf", config);
     sokol.setLibCFile(file);
 
-    // 系统库改为引擎模块的文件输入，传递到测试和应用的最终链接。
-    // Sokol 静态库不会传递文件输入，因此统一加到引擎模块。
-    // TODO: Zig 修复库路径参数后移除转换。
-    // https://codeberg.org/ziglang/zig/issues/37257
-    for ([_]*std.Build.Module{ zhu, sokol.root_module }) |module| {
-        var index: usize = 0;
-        while (index < module.link_objects.items.len) {
-            switch (module.link_objects.items[index]) {
-                .system_lib => |system| {
-                    const path = b.pathJoin(&.{
-                        libraries, b.fmt("lib{s}.so", .{system.name}),
-                    });
-                    _ = module.link_objects.orderedRemove(index);
-                    zhu.addObjectFile(.{ .cwd_relative = path });
-                },
-                else => index += 1,
-            }
-        }
-    }
     return file;
 }
 
