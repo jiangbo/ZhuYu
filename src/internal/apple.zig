@@ -117,7 +117,8 @@ pub const font = struct {
         const stride = width + 2;
         const len = stride * (height + 2);
         if (buffer.len < len * 4) return char;
-        if (alpha.len < len) alpha = memory.allocator.realloc(alpha, len);
+        if (alpha.len < len)
+            alpha = memory.allocator.realloc(alpha, len) catch memory.oom();
         @memset(alpha[0..len], 0);
         // 7 是仅含 Alpha 的位图，不涉及预乘 RGB 或通道顺序。
         const context = CGBitmapContextCreate(alpha.ptr, //

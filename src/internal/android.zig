@@ -577,7 +577,8 @@ pub const font = struct {
         check(e);
         rowBytes = @intCast(stride);
         const len = rowBytes * @as(usize, @intCast(bitmapHeight));
-        if (alpha.len < len) alpha = memory.allocator.realloc(alpha, len);
+        if (alpha.len < len)
+            alpha = memory.allocator.realloc(alpha, len) catch memory.oom();
     }
 
     // 释放所有全局引用及缓冲区，再按需解除线程关联。

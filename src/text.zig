@@ -427,7 +427,8 @@ pub const dynamic = struct {
         // 按字号预留常用容量，实际字形超出时再按需扩容。
         const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
         const len: usize = @intFromFloat(side * side * 4);
-        if (pixels.len < len) pixels = memory.allocator.realloc(pixels, len);
+        if (pixels.len < len)
+            pixels = memory.allocator.realloc(pixels, len) catch memory.oom();
         // 重置装箱位置，保留上传缓冲及本帧已使用的上传区域。
         glyphState.layer = fontOption.atlas.layer;
         glyphState.x, glyphState.y = .{ 1, 1 };
@@ -453,7 +454,7 @@ pub const dynamic = struct {
     pub fn deinit() void {
         if (!opened) return;
         assets.gpu.destroyBuffer(glyphState.upload);
-        glyphs.deinit(memory.allocator.raw);
+        glyphs.deinit(memory.allocator);
         memory.allocator.free(pixels);
         backend.close();
         stats = .{};
@@ -484,7 +485,7 @@ pub const dynamic = struct {
         const size = char.rect.size;
         const len: usize = @intFromFloat((size.x + 2) * (size.y + 2) * 4);
         if (len > pixels.len) {
-            pixels = memory.allocator.realloc(pixels, len);
+            pixels = memory.allocator.realloc(pixels, len) catch memory.oom();
             char = backend.pixels(code, pixels);
             // 按重试返回的尺寸确认缓冲区已经足够。
             const next = char.rect.size;
@@ -500,7 +501,7 @@ pub const dynamic = struct {
             },
             .advance = char.advance * factor,
         };
-        glyphs.put(memory.allocator.raw, code, glyph) catch memory.oom();
+        glyphs.put(memory.allocator, code, glyph) catch memory.oom();
         stats.count = glyphs.count();
         return glyph;
     }

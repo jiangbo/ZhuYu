@@ -36,7 +36,7 @@ pub const Rect = math.Rect;
 pub const Color = graphics.Color;
 pub const Animation = graphics.Animation;
 pub const EnumAnimation = graphics.EnumAnimation;
-pub const Allocator = memory.OomAllocator;
+pub const Allocator = std.mem.Allocator;
 
 pub const clamp = std.math.clamp;
 pub const format = memory.format;
@@ -62,7 +62,7 @@ pub const android = struct {
 };
 
 pub const testing = struct {
-    pub const allocator: Allocator = .{ .raw = std.testing.allocator };
+    pub const allocator: Allocator = std.testing.allocator;
 };
 
 test "compile zhu modules" {

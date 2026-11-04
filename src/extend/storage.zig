@@ -97,7 +97,7 @@ pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
 
 /// 读取 JSON 存档；调用者通过 deinit 释放结果及其字符串和数组。
 pub fn readJson(comptime T: type, path: [:0]const u8) !Parsed(T) {
-    const gpa = memory.allocator.raw;
+    const gpa = memory.allocator;
     const content = try readAll(gpa, path);
     defer gpa.free(content);
     // 解析结果拥有自己的数据，读取缓冲区在返回前即可释放。
@@ -106,7 +106,7 @@ pub fn readJson(comptime T: type, path: [:0]const u8) !Parsed(T) {
 
 /// 将数据序列化为 JSON 后保存，临时缓冲区在写入结束后释放。
 pub fn writeJson(path: [:0]const u8, value: anytype) !void {
-    const gpa = memory.allocator.raw;
+    const gpa = memory.allocator;
     const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
     defer gpa.free(content);
     try writeAll(path, content);
@@ -115,7 +115,7 @@ pub fn writeJson(path: [:0]const u8, value: anytype) !void {
 /// 使用 XChaCha20-Poly1305 校验并解密 JSON。
 /// 返回结果拥有自己的数据，调用者通过 deinit 释放。
 pub fn readXChaCha(comptime T: type, path: [:0]const u8, key: [32]u8) !Parsed(T) {
-    const gpa = memory.allocator.raw;
+    const gpa = memory.allocator;
     const source = try readAll(gpa, path);
     defer gpa.free(source);
     if (source.len < 40) return error.InvalidData;
@@ -129,7 +129,7 @@ pub fn readXChaCha(comptime T: type, path: [:0]const u8, key: [32]u8) !Parsed(T)
 /// 将对象序列化为 JSON，使用 XChaCha20-Poly1305 加密后保存。
 /// 每次写入生成新的安全随机 nonce，密钥由应用提供。
 pub fn writeXChaCha(path: [:0]const u8, value: anytype, key: [32]u8) !void {
-    const gpa = memory.allocator.raw;
+    const gpa = memory.allocator;
     const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
     defer gpa.free(content);
 

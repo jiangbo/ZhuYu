@@ -1,11 +1,11 @@
 const std = @import("std");
 
 pub var counter: Counter = undefined;
-pub var allocator: OomAllocator = undefined;
+pub var allocator: std.mem.Allocator = undefined;
 
 pub fn init(gpa: std.mem.Allocator) void {
     counter = Counter.init(gpa);
-    allocator = .{ .raw = counter.allocator() };
+    allocator = counter.allocator();
 }
 
 // 根据 Sokol 分配器类型创建实例，共用引擎的分配和释放回调。
@@ -39,38 +39,6 @@ pub fn formatZ(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]u8 {
     return std.mem.printSentinel(buf, fmt, args, 0) catch
         @panic("buffer too small");
 }
-
-pub const OomAllocator = struct {
-    raw: std.mem.Allocator,
-
-    pub fn create(self: OomAllocator, comptime T: type) *T {
-        return self.raw.create(T) catch oom();
-    }
-
-    pub fn destroy(self: OomAllocator, ptr: anytype) void {
-        return self.raw.destroy(ptr);
-    }
-
-    pub fn alloc(self: OomAllocator, T: type, count: usize) []T {
-        return self.raw.alloc(T, count) catch oom();
-    }
-
-    pub fn realloc(self: OomAllocator, data: anytype, count: usize) @TypeOf(data) {
-        return self.raw.realloc(data, count) catch oom();
-    }
-
-    pub fn dupe(self: OomAllocator, T: type, data: []const T) []T {
-        return self.raw.dupe(T, data) catch oom();
-    }
-
-    pub fn dupeZ(self: OomAllocator, T: type, data: []const T) [:0]T {
-        return self.raw.dupeSentinel(T, data, 0) catch oom();
-    }
-
-    pub fn free(self: OomAllocator, data: anytype) void {
-        self.raw.free(data);
-    }
-};
 
 pub fn oom() noreturn {
     @panic("out of memory");
@@ -172,7 +140,7 @@ fn cSlice(ptr: *anyopaque) []align(@alignOf(std.c.max_align_t)) u8 {
 
 pub fn alloc(len: usize) ?*anyopaque {
     if (len == 0) return null;
-    const base = allocator.raw.rawAlloc(cHeaderSize + len, //
+    const base = allocator.rawAlloc(cHeaderSize + len, //
         cAlign, @returnAddress()) orelse return null;
     @as(*usize, @ptrCast(@alignCast(base))).* = len;
     return @ptrCast(base + cHeaderSize);
@@ -180,5 +148,5 @@ pub fn alloc(len: usize) ?*anyopaque {
 
 pub fn free(ptr: ?*anyopaque) void {
     const p = ptr orelse return;
-    allocator.raw.rawFree(cSlice(p), cAlign, @returnAddress());
+    allocator.rawFree(cSlice(p), cAlign, @returnAddress());
 }

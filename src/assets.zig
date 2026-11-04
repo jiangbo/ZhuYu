@@ -21,7 +21,7 @@ var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
 pub fn init(io_: std.Io) void {
     io = io_;
-    allocator = memory.allocator.raw;
+    allocator = memory.allocator;
     // 开启 append 时只读取程序尾部的资源包，否则启动外部资源加载器。
     if (options.append) {
         file.init() catch |err| {

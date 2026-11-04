@@ -38,7 +38,7 @@ pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
     if (file.parsed == null and !file.reload()) {
         std.debug.panic("zon load failed: {s}", .{path});
     }
-    const result = zonMap.getOrPut(memory.allocator.raw, path) //
+    const result = zonMap.getOrPut(memory.allocator, path) //
         catch memory.oom();
     if (!result.found_existing) {
         result.value_ptr.* = .{
@@ -69,7 +69,7 @@ pub fn reloadZon() void {
 pub fn deinit() void {
     var iterator = zonMap.valueIterator();
     while (iterator.next()) |entry| entry.deinit();
-    zonMap.deinit(memory.allocator.raw);
+    zonMap.deinit(memory.allocator);
 }
 
 const ZonEntry = struct {
@@ -95,7 +95,7 @@ fn ZonFile(comptime T: type, comptime path: [:0]const u8) type {
         var parsed: ?struct { value: T, arena: std.heap.ArenaAllocator } = null;
 
         fn reload() bool {
-            const gpa = memory.allocator.raw;
+            const gpa = memory.allocator;
             const source = std.Io.Dir.cwd().readFileAllocOptions(
                 window.io,
                 path,
