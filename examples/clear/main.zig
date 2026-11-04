@@ -18,8 +18,5 @@ pub fn frame(_: f32) void {
 // 初始化引擎并创建窗口，平台回调由引擎管理。
 pub fn main(info: std.process.Init) void {
     zhu.init(info);
-    zhu.window.run(.{
-        .title = "ZhuYu clear",
-        .size = .xy(640, 480),
-    });
+    zhu.window.run("ZhuYu clear", .xy(640, 480), .{});
 }

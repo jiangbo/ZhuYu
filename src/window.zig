@@ -22,9 +22,7 @@ pub const ScaleEnum = enum {
     integer, // 整数缩放，整数倍数（无滤镜失真）
 };
 
-pub const Info = struct {
-    title: [:0]const u8, // 窗口标题
-    size: math.Vector, // 请求的窗口尺寸，高 DPI 下不等于实际渲染像素。
+pub const Option = struct {
     logicSize: ?math.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
@@ -35,7 +33,7 @@ pub var size: math.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑
 // 默认游戏画面在窗口中的像素区域，由缩放模式计算，不随绘制切换而改变。
 pub var viewRect: math.Rect = undefined;
 pub var scale: math.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
-var info: Info = undefined; // 当前窗口配置，由 run 设置。
+var info: Option = undefined; // 当前窗口配置，由 run 设置。
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
 // 根据编译目标选择窗口及字体共用的平台实现。
@@ -56,26 +54,26 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 
 const root = @import("root");
 
-pub fn run(info_: Info) void {
-    const desc = createDesc(info_);
+// 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
+pub fn run(title: [:0]const u8, size_: math.Vector, option: Option) void {
+    const desc = createDesc(title, size_, option);
+    if (builtin.os.tag == .windows) {
+        if (info.disableIME) _ = platform.ImmDisableIME(-1);
+    }
     if (!builtin.abi.isAndroid()) return sk.app.run(desc);
     platform.desc = desc;
 }
 
-fn createDesc(info_: Info) sk.app.Desc {
+fn createDesc(title: [:0]const u8, s: math.Vector, o: Option) sk.app.Desc {
     sk.time.setup();
-    info = info_;
-    camera.init(info.logicSize orelse info.size);
+    info = o;
+    camera.init(info.logicSize orelse s);
     viewRect = .init(.zero, camera.size);
 
-    if (builtin.os.tag == .windows) {
-        if (info.disableIME) _ = platform.ImmDisableIME(-1);
-    }
-
     return .{
-        .window_title = info.title,
-        .width = @intFromFloat(info.size.x),
-        .height = @intFromFloat(info.size.y),
+        .window_title = title,
+        .width = @intFromFloat(s.x),
+        .height = @intFromFloat(s.y),
         .depth_format = .NONE,
         .init_cb = windowInit,
         .event_cb = windowEvent,
