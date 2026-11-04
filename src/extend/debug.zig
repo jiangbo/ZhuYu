@@ -20,6 +20,11 @@ const basePadding = Vector2.xy(10, 9);
 // 是否启用调试面板绘制，ZON 热重载独立运行。
 pub var enabled: bool = false;
 
+// 每帧调用，松开指定按键时切换调试面板。
+pub fn toggle(key: input.key.Code) void {
+    if (input.key.released(key)) enabled = !enabled;
+}
+
 pub const Row = struct {
     label: []const u8,
     left: []const u8,
@@ -140,7 +145,13 @@ var start: u64 = 0;
 var frameTime: f64 = 0;
 var usedTime: f64 = 0;
 
-pub fn draw(rows: []const Row) void {
+pub const Option = struct {
+    camera: ?camera.Camera = .window, // null 表示使用调用方当前的相机。
+    position: Vector2 = .xy(10, 10),
+    extra: []const Row = &.{},
+};
+
+pub fn draw(option: Option) void {
     if (!enabled) return;
     const time = sk.time.now();
     const frame = window.frameCount();
@@ -229,21 +240,21 @@ pub fn draw(rows: []const Row) void {
         "音乐 {d:.0}%", .{audio.musicVolume.load(.acquire) * 100},
         "音效 {d:.0}%", .{audio.soundVolume.load(.acquire) * 100});
     // zig fmt: on
-    for (rows) |row| writeRow(&columns, row);
+    for (option.extra) |row| writeRow(&columns, row);
     const labels = labelBuffer[0 .. columns.label.end - 1];
     const left = leftBuffer[0 .. columns.left.end - 1];
     const right = rightBuffer[0 .. columns.right.end - 1];
 
-    // 调试面板固定在窗口坐标，绘制后还原当前相机。
-    camera.push(.window);
-    defer camera.pop();
+    // 使用指定相机绘制，结束后还原调用方的相机。
+    if (option.camera) |view| camera.push(view);
+    defer if (option.camera != null) camera.pop();
 
     const baseOption = text.Option{};
     const labelSize = text.measure(labels, baseOption);
     const gap = text.measure("    ", baseOption).x;
     const scale = debugTextScale(labelSize.y);
     const padding = basePadding.scale(scale.x);
-    const position = Vector2.xy(10, 10).scale(scale.x);
+    const position = option.position;
     const panelWidth = camera.size.x * 0.70;
     const contentWidth = (panelWidth - padding.x * 2) / scale.x;
     const valueWidth = (contentWidth - labelSize.x - gap * 2) / 2;
