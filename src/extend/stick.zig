@@ -1,6 +1,6 @@
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
-const math = @import("../math.zig");
+const zhu = @import("../zhu.zig");
 const batch = @import("../batch.zig");
 const pad = @import("pad.zig");
 
@@ -10,12 +10,12 @@ pub const patch = pad.patch;
 pub const drawText = pad.drawText;
 
 // 摇杆启动区域，使用 DPI 坐标，布局默认设置为屏幕最左侧四分之一。
-pub var area: math.Rect = undefined;
+pub var area: zhu.Rect = undefined;
 var stickCamera: camera.Camera = .window; // 摇杆输入和绘制共用 DPI 变换。
 // 摇杆只跟踪一个触点，中心在本次操作中保持不变。
 var touchIndex: ?usize = null;
-var center: math.Vector2 = .zero;
-var offset: ?math.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
+var center: zhu.Vector2 = .zero;
+var offset: ?zhu.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
 // 记录摇杆产生的上、下、左、右按键，只在状态变化时发送事件。
 var held: [4]bool = @splat(false);
 
@@ -36,7 +36,7 @@ fn layout() void {
 }
 
 // 更新功能按钮并返回摇杆原始位移，每帧与 update 二选一调用。
-pub fn updateOffset() ?math.Vector2 {
+pub fn updateOffset() ?zhu.Vector2 {
     pad.update();
     if (window.resized) layout();
     offset = updateStick();
@@ -46,7 +46,7 @@ pub fn updateOffset() ?math.Vector2 {
 // 更新摇杆和功能按钮，将位移转换为四方向按键，下一帧生效。
 // 每帧与 updateOffset 二选一调用，位移未超过 12 个界面单位时不触发方向键。
 pub fn update() void {
-    const value = updateOffset() orelse math.Vector2.zero;
+    const value = updateOffset() orelse zhu.Vector2.zero;
     const deadZone = 12; // 摇杆中心不触发方向键的范围，使用界面单位。
     // 只取偏移较大的轴，一次仅产生一个方向。
     const horizontal = @abs(value.x) > @abs(value.y);
@@ -65,7 +65,7 @@ pub fn update() void {
 }
 
 // 空闲时捕获区域内新按下的触点，之后持续跟踪同一槽位。
-fn updateStick() ?math.Vector2 {
+fn updateStick() ?zhu.Vector2 {
     if (touchIndex) |index| {
         if (window.touch.points[index]) |point| {
             if (point.state == .held) {

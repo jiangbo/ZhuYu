@@ -1,7 +1,7 @@
 const std = @import("std");
 const sk = @import("sokol");
 
-const math = @import("../math.zig");
+const zhu = @import("../zhu.zig");
 const assets = @import("../assets.zig");
 const audio = @import("../audio.zig");
 const batch = @import("../batch.zig");
@@ -12,8 +12,8 @@ const text = @import("../text.zig");
 const window = @import("../window.zig");
 
 const Color = graphics.Color;
-const Vector2 = math.Vector2;
-const Rect = math.Rect;
+const Vector2 = zhu.Vector2;
+const Rect = zhu.Rect;
 
 // 是否启用调试面板绘制，ZON 热重载独立运行。
 pub var enabled: bool = false;

@@ -1,16 +1,17 @@
 const std = @import("std");
-
 const sk = @import("sokol");
+const options = @import("options");
+
+const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
 const memory = @import("internal/memory.zig");
 const fetch = @import("internal/fetch.zig");
-const options = @import("options");
 
 const oom = memory.oom;
 const Image = graphics.Image;
-const Vector2 = graphics.Vector2;
+const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
 const Path = [:0]const u8;
 

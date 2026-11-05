@@ -3,15 +3,15 @@ const options = @import("options");
 const sk = @import("sokol");
 
 const assets = @import("assets.zig");
-const math = @import("math.zig");
+const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const batch = @import("batch.zig");
 const memory = @import("internal/memory.zig");
 const window = @import("window.zig");
 
 const Image = graphics.Image;
-const Vector2 = math.Vector2;
-const Rect = math.Rect;
+const Vector2 = zhu.Vector2;
+const Rect = zhu.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
 // 编译时选定查找实现，排版与绘制共用同一个检索入口。
@@ -257,7 +257,7 @@ pub const static = struct {
     };
 
     pub const Page = struct { min: u32, max: u32, chars: []const Char };
-    pub const Char = struct { id: u32, rect: math.Rect, offset: Vector2, advance: f32 };
+    pub const Char = struct { id: u32, rect: zhu.Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
     var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
@@ -353,7 +353,7 @@ pub const dynamic = struct {
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
     pub const Metrics = extern struct { ascent: f32, descent: f32, height: f32 };
     // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
-    pub const Char = extern struct { rect: math.Rect, advance: f32 };
+    pub const Char = extern struct { rect: zhu.Rect, advance: f32 };
 
     // 直接使用当前平台的字体接口。
     const backend = window.platform.font;
@@ -501,7 +501,7 @@ pub const dynamic = struct {
     }
 
     // 每个字形包含一像素透明边框，当前层装满后使用下一层。
-    fn addImage(size: math.Vector2) graphics.Image {
+    fn addImage(size: zhu.Vector2) graphics.Image {
         // 空字形只参与排版，不占用图集和上传缓冲。
         if (size.x == 0 or size.y == 0) return .{};
 

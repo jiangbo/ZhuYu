@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) !void {
     const shader = try createShader(b, sokolDep, target.result, samplers);
 
     const zhu = b.addModule("zhu", .{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("src/zhu.zig"),
         .target = target,
         .optimize = optimize,
     });

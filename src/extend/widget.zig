@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const math = @import("../math.zig");
+const zhu = @import("../zhu.zig");
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
 const batch = @import("../batch.zig");
@@ -9,7 +9,7 @@ const text = @import("../text.zig");
 const audio = @import("../audio.zig");
 const assets = @import("../assets.zig");
 
-const Vector2 = math.Vector2;
+const Vector2 = zhu.Vector2;
 
 // 默认按钮使用 usize 事件编号。
 pub const Button = ButtonT(usize);
@@ -23,11 +23,11 @@ pub fn ButtonT(comptime T: type) type {
         pub const Style = struct {
             color: ?graphics.Color = null,
             image: ?graphics.ImageId = null,
-            source: ?math.Rect = null,
+            source: ?zhu.Rect = null,
             text: text.Option = .{},
         };
 
-        shape: math.Shape, // 命中和绘制共用的矩形或圆形区域。
+        shape: zhu.Shape, // 命中和绘制共用的矩形或圆形区域。
         event: T,
         label: []const u8 = "",
         patch: ?graphics.NineImage.Patch = null,
@@ -85,7 +85,7 @@ pub const Click = struct {
 
     // 每帧调用一次，区域内按下并释放才算点击。
     // 移出或取消即失效，再移回也不恢复。
-    pub fn update(self: *Click, rect: math.Rect) bool {
+    pub fn update(self: *Click, rect: zhu.Rect) bool {
         const state = window.touch.query(rect);
         if (state.pressed) self.pressed = true;
 
@@ -178,17 +178,17 @@ pub fn MenuT(comptime T: type) type {
             wrap: bool = true,
         };
 
-        position: math.Vector2 = .zero,
+        position: zhu.Vector2 = .zero,
         overlay: ?graphics.Color = null,
         panel: struct {
-            size: math.Vector2 = .zero,
+            size: zhu.Vector2 = .zero,
             color: ?graphics.Color = null,
             image: ?graphics.ImageId = null,
-            source: ?math.Rect = null,
+            source: ?zhu.Rect = null,
         } = .{},
         title: struct {
             text: []const u8 = "",
-            position: math.Vector2 = .zero,
+            position: zhu.Vector2 = .zero,
             option: text.Option = .{ .anchor = .center },
         } = .{},
         buttons: []const ButtonT(T) = &.{},
@@ -202,7 +202,7 @@ pub fn MenuT(comptime T: type) type {
         selected: ?usize = 0,
         pressed: ?usize = null, // 菜单内按下的按钮编号。
 
-        pub fn init(position: math.Vector2, menu: Self) Self {
+        pub fn init(position: zhu.Vector2, menu: Self) Self {
             var result = menu;
             result.position = position;
             result.reset();
@@ -288,7 +288,7 @@ pub fn MenuT(comptime T: type) type {
         pub fn updateEnum(self: *Self, E: type, option: Option) ?E {
             const event = self.update(option) orelse return null;
             const Tag = @typeInfo(E).@"enum".tag_type;
-            return @fromBackingInt(math.toIndex(Tag, event));
+            return @fromBackingInt(zhu.toIndex(Tag, event));
         }
 
         fn defaultNav(self: Self) Nav {
@@ -317,7 +317,7 @@ pub fn MenuT(comptime T: type) type {
         // 绘制遮罩、面板和按钮等非文字内容。
         pub fn drawImage(self: Self) void {
             if (self.overlay) |overlay| {
-                const rect: math.Rect = .init(.zero, camera.size);
+                const rect: zhu.Rect = .init(.zero, camera.size);
                 batch.drawRect(rect, .{ .color = overlay });
             }
             self.drawPanel();
@@ -347,7 +347,7 @@ pub fn MenuT(comptime T: type) type {
         }
 
         fn drawPanel(self: Self) void {
-            const rect = math.Rect.init(self.position, self.panel.size);
+            const rect = zhu.Rect.init(self.position, self.panel.size);
             if (self.panel.color) |color| {
                 batch.drawRect(rect, .{ .color = color });
             }

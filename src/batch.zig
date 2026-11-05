@@ -1,26 +1,26 @@
 const std = @import("std");
-
 const sk = @import("sokol");
-const math = @import("math.zig");
 const shader = @import("shader");
+const options = @import("options");
+
+const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
-const options = @import("options");
 
 const Image = graphics.Image;
 const ImageId = graphics.ImageId;
 const Color = graphics.Color;
 const RenderPass = graphics.RenderPass;
-const Vector2 = math.Vector2;
+const Vector2 = zhu.Vector2;
 const Vertex = graphics.Vertex;
 
 pub const Option = graphics.DrawOption;
 
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
-    viewport: math.Rect, // 目标像素区域。
-    scissor: math.Rect, // 目标像素裁剪，离屏翻转在提交时处理。
+    viewport: zhu.Rect, // 目标像素区域。
+    scissor: zhu.Rect, // 目标像素裁剪，离屏翻转在提交时处理。
     draw: DrawCommand, // 绘制命令
 };
 
@@ -52,7 +52,7 @@ pub fn init(cmds: []Command) void {
     // 基础图形使用预先加载的 circle.png，其中心区域必须为白色。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
     circleImage = assets.getImageByPath("circle.png") orelse return;
-    const rect = math.Rect.init(.zero, circleImage.size);
+    const rect = zhu.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
 
@@ -75,7 +75,7 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
 }
 
 // 设置目标像素区域和对应的逻辑尺寸，同时重置裁剪区域。
-pub fn useViewport(rect: math.Rect, size: Vector2) void {
+pub fn useViewport(rect: zhu.Rect, size: Vector2) void {
     endDrawCommand();
     camera.state.viewRect = rect;
     camera.state.size = size;
@@ -83,7 +83,7 @@ pub fn useViewport(rect: math.Rect, size: Vector2) void {
 }
 
 // 裁剪使用当前视口的逻辑坐标，不受相机影响；null 恢复完整视口。
-pub fn useScissor(rect: ?math.Rect) void {
+pub fn useScissor(rect: ?zhu.Rect) void {
     endDrawCommand();
     var clip = camera.state.viewRect;
     if (rect) |area| {
@@ -127,7 +127,7 @@ pub fn drawVertices(items: []const Vertex, image: ?Image) void {
     assets.gpu.addVertices(items);
 }
 
-pub fn drawDebug(rect: math.Rect) void {
+pub fn drawDebug(rect: zhu.Rect) void {
     drawRect(rect, .{ .color = .rgba(255, 0, 255, 102) });
 }
 
@@ -158,7 +158,7 @@ pub fn drawLine(start: Vector2, end: Vector2, option: LineOption) void {
     });
 }
 
-pub fn drawRectBorder(rect: math.Rect, width: f32, c: Color) void {
+pub fn drawRectBorder(rect: zhu.Rect, width: f32, c: Color) void {
     const color = RectOption{ .color = c };
     drawRect(.init(rect.min, .xy(rect.size.x, width)), color); // 上
     var start = rect.min.addY(rect.size.y - width);
@@ -170,7 +170,7 @@ pub fn drawRectBorder(rect: math.Rect, width: f32, c: Color) void {
 }
 
 pub const RectOption = struct { color: Color = .white, radian: f32 = 0 };
-pub fn drawRect(rect: math.Rect, option: RectOption) void {
+pub fn drawRect(rect: zhu.Rect, option: RectOption) void {
     drawImage(whiteImage, rect.min, .{
         .size = rect.size,
         .color = option.color,
@@ -182,7 +182,7 @@ pub fn drawCircle(position: Vector2, option: Option) void {
     drawImage(circleImage, position, option);
 }
 
-pub fn drawAxisCapsule(rect: math.Rect, color: Color) void {
+pub fn drawAxisCapsule(rect: zhu.Rect, color: Color) void {
     if (rect.size.x <= 0 or rect.size.y <= 0) return;
 
     if (rect.size.x >= rect.size.y) {
@@ -193,7 +193,7 @@ pub fn drawAxisCapsule(rect: math.Rect, color: Color) void {
         var image = circleImage.sub(.init(.zero, half));
         drawImage(image, rect.min, .{ .size = size, .color = color });
 
-        const middleRect = math.Rect.init(
+        const middleRect = zhu.Rect.init(
             rect.min.addX(radius),
             .xy(rect.size.x - rect.size.y, rect.size.y),
         );
@@ -214,7 +214,7 @@ pub fn drawAxisCapsule(rect: math.Rect, color: Color) void {
     var image = circleImage.sub(.init(.zero, half));
     drawImage(image, rect.min, .{ .size = size, .color = color });
 
-    const middleRect = math.Rect.init(
+    const middleRect = zhu.Rect.init(
         rect.min.addY(radius),
         .xy(rect.size.x, rect.size.y - rect.size.x),
     );
@@ -227,7 +227,7 @@ pub fn drawAxisCapsule(rect: math.Rect, color: Color) void {
     drawImage(image, pos, .{ .size = size, .color = color });
 }
 
-pub fn drawNine(nine: graphics.NineImage, rect: math.Rect) void {
+pub fn drawNine(nine: graphics.NineImage, rect: zhu.Rect) void {
     const left = nine.patch.min.x;
     const top = nine.patch.min.y;
     const right = nine.patch.max.x;
@@ -309,7 +309,7 @@ pub fn flush() void {
 
     var pipeline: sk.gfx.Pipeline = .{}; // 当前渲染通道已绑定的流水线。
     var activePass, var flipY = .{ false, false };
-    var viewport: math.Rect = undefined;
+    var viewport: zhu.Rect = undefined;
     for (commands.items) |cmd| {
         switch (cmd) {
             .target => |target| {

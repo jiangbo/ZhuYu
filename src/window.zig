@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const sk = @import("sokol");
 const options = @import("options");
 
-const math = @import("math.zig");
+const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
 const audio = @import("audio.zig");
 const camera = @import("camera.zig");
@@ -22,16 +22,16 @@ pub const ScaleEnum = enum {
 };
 
 pub const Option = struct {
-    logicSize: ?math.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
+    logicSize: ?zhu.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
-    alignment: math.Vector = .center, // 对齐方式
+    alignment: zhu.Vector = .center, // 对齐方式
 };
 
-pub var size: math.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
+pub var size: zhu.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
 // 默认游戏画面在窗口中的像素区域，由缩放模式计算，不随绘制切换而改变。
-pub var viewRect: math.Rect = undefined;
-pub var scale: math.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
+pub var viewRect: zhu.Rect = undefined;
+pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
 var info: Option = undefined; // 当前窗口配置，由 run 设置。
 pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
@@ -54,7 +54,7 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 const root = @import("root");
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
-pub fn run(title: [:0]const u8, size_: math.Vector, option: Option) void {
+pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
     const desc = createDesc(title, size_, option);
     if (builtin.os.tag == .windows) {
         if (info.disableIME) _ = platform.ImmDisableIME(-1);
@@ -63,7 +63,7 @@ pub fn run(title: [:0]const u8, size_: math.Vector, option: Option) void {
     platform.desc = desc;
 }
 
-fn createDesc(title: [:0]const u8, s: math.Vector, o: Option) sk.app.Desc {
+fn createDesc(title: [:0]const u8, s: zhu.Vector, o: Option) sk.app.Desc {
     sk.time.setup();
     info = o;
     camera.init(info.logicSize orelse s);
@@ -92,7 +92,7 @@ export fn windowInit() void {
         .allocator = memory.sokolAllocator(sk.gfx.Allocator),
     });
     assets.init(io);
-    math.random.init(sk.time.now());
+    zhu.random.init(sk.time.now());
     call(root, "init", .{memory.allocator});
 }
 
@@ -147,7 +147,7 @@ export fn windowEvent(event: ?*const Event) void {
             for (ev.touches[0..@intCast(ev.num_touches)]) |point| {
                 if (!point.changed) continue;
                 touch.moved = true;
-                const raw: math.Vector = .xy(point.pos_x, point.pos_y);
+                const raw: zhu.Vector = .xy(point.pos_x, point.pos_y);
                 if (ev.type == .TOUCHES_BEGAN) {
                     press.pressed = true;
                     // 真实触点不使用鼠标槽位，ID 不作为数组索引。
@@ -464,9 +464,9 @@ pub const key = struct {
 pub const mouse = struct {
     // 当前帧收到移动事件，或逻辑位置因视口变化而改变。
     pub var moved: bool = false;
-    pub var raw: math.Vector = math.Vector.inf.neg(); // 原始像素坐标。
+    pub var raw: zhu.Vector = zhu.Vector.inf.neg(); // 原始像素坐标。
     // 帧开始时更新的游戏逻辑坐标；事件回调中仍为上一帧的值。
-    pub var pos: math.Vector = math.Vector.inf.neg();
+    pub var pos: zhu.Vector = zhu.Vector.inf.neg();
     pub var scrollY: f32 = 0;
 
     // 判断鼠标逻辑坐标是否位于指定区域内。
@@ -481,10 +481,10 @@ pub const touch = struct {
 
     pub const Point = struct {
         id: usize, // 真实触点使用系统标识，鼠标固定为 0。
-        start: math.Vector, // 按下时的原始像素坐标，后续保持不变。
-        raw: math.Vector, // 原始像素坐标。
+        start: zhu.Vector, // 按下时的原始像素坐标，后续保持不变。
+        raw: zhu.Vector, // 原始像素坐标。
         // 帧开始时更新的游戏逻辑坐标，新触点在换算前不命中 UI。
-        pos: math.Vector = math.Vector.inf.neg(),
+        pos: zhu.Vector = zhu.Vector.inf.neg(),
         state: enum { held, ended, cancelled } = .held, // 当前触点状态。
         began: bool = true, // 本帧是否按下。
     };
@@ -536,7 +536,7 @@ pub const touch = struct {
 pub const Bind = struct { action: []const u8, keys: []const key.Code };
 pub fn bind(comptime binds: []const Bind) type {
     return struct {
-        pub const Action = math.enums.fromField(binds, "action");
+        pub const Action = zhu.enums.fromField(binds, "action");
 
         pub fn held(action: Action) bool {
             return key.anyHeld(binds[@backingInt(action)].keys);

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const assets = @import("../assets.zig");
 const graphics = @import("../graphics.zig");
-const math = @import("../math.zig");
+const zhu = @import("../zhu.zig");
 
 pub const Cell = struct {
     x: i32,
@@ -12,8 +12,8 @@ pub const Cell = struct {
         return .{ .x = x, .y = y };
     }
 };
-const Vector2 = math.Vector2;
-const Rect = math.Rect;
+const Vector2 = zhu.Vector2;
+const Rect = zhu.Rect;
 
 pub const Grid = struct {
     width: i32,
@@ -94,7 +94,7 @@ pub const Grid = struct {
         std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
 
         const rawMin = self.worldToCell(rect.min);
-        const max = rect.max().sub(.all(math.epsilon));
+        const max = rect.max().sub(.all(zhu.epsilon));
         const rawMax = self.worldToCell(max);
 
         const min = Cell.xy(@max(rawMin.x, 0), @max(rawMin.y, 0));
@@ -233,12 +233,12 @@ pub fn Field(comptime T: type) type {
 
             const size: f32 = @floatFromInt(self.grid.cell);
             const r0: i32 = @intFromFloat(@floor(rect.min.y / size));
-            const bottom = rect.min.y + rect.size.y - math.epsilon;
+            const bottom = rect.min.y + rect.size.y - zhu.epsilon;
             const r1: i32 = @intFromFloat(@floor(bottom / size));
             const rows = clipRange(r0, r1, self.grid.height);
 
             var front = dest;
-            if (dx > 0) front += rect.size.x - math.epsilon;
+            if (dx > 0) front += rect.size.x - zhu.epsilon;
 
             const col: i32 = @intFromFloat(@floor(front / size));
             const cellX: f32 = @floatFromInt(col);
@@ -265,12 +265,12 @@ pub fn Field(comptime T: type) type {
 
             const size: f32 = @floatFromInt(self.grid.cell);
             const c0: i32 = @intFromFloat(@floor(rect.min.x / size));
-            const right = rect.min.x + rect.size.x - math.epsilon;
+            const right = rect.min.x + rect.size.x - zhu.epsilon;
             const c1: i32 = @intFromFloat(@floor(right / size));
             const cols = clipRange(c0, c1, self.grid.width);
 
             var front = dest;
-            if (dy > 0) front += rect.size.y - math.epsilon;
+            if (dy > 0) front += rect.size.y - zhu.epsilon;
 
             const row: i32 = @intFromFloat(@floor(front / size));
             const cellY: f32 = @floatFromInt(row);
@@ -399,7 +399,7 @@ pub const TileSet = struct {
     columns: u32,
     tileCount: i32,
     image: u32,
-    tileSize: graphics.Vector2,
+    tileSize: zhu.Vector2,
     tiles: []const Tile,
 
     pub fn getTileByLocalId(self: TileSet, localId: u32) ?*const Tile {

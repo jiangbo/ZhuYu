@@ -1,9 +1,10 @@
 const std = @import("std");
 const sk = @import("sokol");
+const options = @import("options");
+
 const assets = @import("assets.zig");
 const memory = @import("internal/memory.zig");
 const vorbis = @import("internal/vorbis.zig");
-const options = @import("options");
 
 const Allocator = std.mem.Allocator;
 

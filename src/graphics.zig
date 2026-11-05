@@ -1,7 +1,7 @@
 const std = @import("std");
-
 const sk = @import("sokol");
-const math = @import("math.zig");
+
+const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
 const window = @import("window.zig");
@@ -10,7 +10,7 @@ pub const View = sk.gfx.View;
 
 pub const queryBackend = sk.gfx.queryBackend;
 
-pub const Vector2 = math.Vector2;
+const Vector2 = zhu.Vector2;
 pub const ImageId = assets.Id;
 
 pub const DrawOption = struct {
@@ -20,7 +20,7 @@ pub const DrawOption = struct {
     pivot: Vector2 = .center, // 缩放、斜切和旋转共用的固定中心。
     radian: f32 = 0, // 旋转弧度
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
-    uvRect: ?math.Vector4 = null, // 纹理 UV 区域
+    uvRect: ?zhu.Vector4 = null, // 纹理 UV 区域
     color: Color = .white, // 乘色
     addColor: Color = .all(0), // 加色
     filter: ?Filter = null, // null 使用图片自身的采样方式。
@@ -29,15 +29,15 @@ pub const DrawOption = struct {
 
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
 pub const Vertex = extern struct {
-    position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
+    position: zhu.Vector2 = .zero, // 世界坐标中的固定变换中心。
     layer: u8 = 0, // 纹理数组层号，与保留字节共用一个 UBYTE4 属性。
     filter: Filter = .nearest, // 本实例的采样方式。
     pixelAlign: bool = false, // 是否对齐顶点到像素边界。
     reservedAfter: u8 = 0, // 保留字节，暂不分配用途。
     radian: f32 = 0, // 旋转弧度
-    size: math.Vector2, // 缩放后的绘制尺寸。
-    pivot: math.Vector2 = .zero, // 固定中心在图片中的归一化位置。
-    uvRect: math.Vector4, // 纹理 UV 区域
+    size: zhu.Vector2, // 缩放后的绘制尺寸。
+    pivot: zhu.Vector2 = .zero, // 固定中心在图片中的归一化位置。
+    uvRect: zhu.Vector4, // 纹理 UV 区域
     color: Color = .white, // 乘色，按通道乘纹理。
     addColor: Color = .all(0), // 加色，乘色后按通道相加。
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
@@ -50,7 +50,7 @@ comptime {
     std.debug.assert(@offsetOf(Vertex, "pixelAlign") == 10);
 }
 
-pub fn queryViewSize(view: View) math.Vector {
+pub fn queryViewSize(view: View) zhu.Vector {
     const image = sk.gfx.queryViewImage(view);
     return .{
         .x = @floatFromInt(sk.gfx.queryImageWidth(image)),
@@ -77,7 +77,7 @@ pub const Animation = struct {
         loop: bool = true, // 是否循环播放
     };
 
-    elapsed: f32 = -math.epsilon,
+    elapsed: f32 = -zhu.epsilon,
     index: u8 = 0,
     row: u8 = 0,
     source: Source,
@@ -127,12 +127,12 @@ pub const Animation = struct {
     }
 
     pub fn play(self: *Animation, index: anytype, row: anytype) void {
-        self.row = math.toIndex(u8, row);
+        self.row = zhu.toIndex(u8, row);
         self.playIndex(index);
     }
 
     pub fn playIndex(self: *Animation, index: anytype) void {
-        const sourceIndex = math.toIndex(u8, index);
+        const sourceIndex = zhu.toIndex(u8, index);
         self.source = self.sources[sourceIndex];
         self.sourceIndex = sourceIndex;
 
@@ -142,7 +142,7 @@ pub const Animation = struct {
     }
 
     pub fn playRow(self: *Animation, row: anytype) void {
-        self.row = math.toIndex(u8, row);
+        self.row = zhu.toIndex(u8, row);
         self.reset();
     }
 
@@ -184,7 +184,7 @@ pub const Animation = struct {
     }
 
     pub fn reset(self: *Animation) void {
-        self.index, self.elapsed = .{ 0, -math.epsilon };
+        self.index, self.elapsed = .{ 0, -zhu.epsilon };
     }
 };
 
@@ -213,43 +213,43 @@ pub fn loopFramesX(comptime count: u8, size: Vector2, d: f32) //
 pub const Filter = enum(u8) { nearest, linear };
 
 // 图集取样使用纹理像素，绘制区域使用相对排版起点的逻辑单位。
-pub const Glyph = struct { image: Image, rect: math.Rect, advance: f32 };
+pub const Glyph = struct { image: Image, rect: zhu.Rect, advance: f32 };
 
 pub const Image = struct {
     view: sk.gfx.View = .{},
     layer: u8 = 0, // 纹理数组层号，范围 0～255。
     filter: Filter = .nearest, // 图片默认的采样方式。
-    offset: math.Vector2 = .zero,
-    size: math.Vector2 = .zero,
+    offset: zhu.Vector2 = .zero,
+    size: zhu.Vector2 = .zero,
 
     pub const empty: Image = .{};
 
-    pub fn sub(self: *const Image, subRect: math.Rect) Image {
+    pub fn sub(self: *const Image, subRect: zhu.Rect) Image {
         var image = self.*;
         image.offset = self.offset.add(subRect.min);
         image.size = subRect.size;
         return image;
     }
 
-    pub fn rect(self: *const Image) math.Rect {
+    pub fn rect(self: *const Image) zhu.Rect {
         return .init(self.offset, self.size);
     }
 
-    pub fn uvFlip(self: Image, x: bool, y: bool) math.Vector4 {
+    pub fn uvFlip(self: Image, x: bool, y: bool) zhu.Vector4 {
         var uv = self.uvRect();
         if (x) uv.x, uv.z = .{ uv.x + uv.z, -uv.z };
         if (y) uv.y, uv.w = .{ uv.y + uv.w, -uv.w };
         return uv;
     }
 
-    pub fn uvRect(self: Image) math.Vector4 {
+    pub fn uvRect(self: Image) zhu.Vector4 {
         return .initSize(self.offset, self.size);
     }
 };
 
 pub const NineImage = struct {
     pub const Patch = struct { min: Vector2, max: Vector2 };
-    pub const Source = struct { rect: math.Rect, patch: Patch };
+    pub const Source = struct { rect: zhu.Rect, patch: Patch };
 
     image: Image,
     patch: Patch,
@@ -258,7 +258,7 @@ pub const NineImage = struct {
         return .{ .image = image, .patch = patch };
     }
 
-    pub fn rectAt(self: NineImage, pos: Vector2) math.Rect {
+    pub fn rectAt(self: NineImage, pos: Vector2) zhu.Rect {
         return .init(pos, self.image.size);
     }
 
@@ -269,7 +269,7 @@ pub const NineImage = struct {
 
 pub const Atlas = struct {
     imagePaths: []const [:0]const u8,
-    size: math.Vector2,
+    size: zhu.Vector2,
     images: []const Image,
 };
 
@@ -286,7 +286,7 @@ pub const RenderTarget = struct {
     }
 };
 
-pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
+pub fn createRenderTarget(size: zhu.Vector2, filter: Filter) RenderTarget {
     const colorImage = sk.gfx.makeImage(.{
         .usage = .{ .color_attachment = true },
         .width = @intFromFloat(size.x),
@@ -312,10 +312,10 @@ pub fn createRenderTarget(size: math.Vector2, filter: Filter) RenderTarget {
 
 pub const RenderPass = struct {
     target: ?*const RenderTarget = null,
-    viewport: ?math.Rect = null,
+    viewport: ?zhu.Rect = null,
 
     // 返回实际像素视口；离屏默认覆盖纹理，窗口默认使用游戏视口。
-    pub fn queryViewport(self: RenderPass) math.Rect {
+    pub fn queryViewport(self: RenderPass) zhu.Rect {
         if (self.viewport) |view| return view;
         if (self.target) |target| return target.image.rect();
         return window.viewRect;
@@ -333,7 +333,7 @@ pub const RenderPass = struct {
 // 包含交换链查询、开始渲染通道、清屏和设置视口，以及这些调用中的驱动等待。
 // 不包含后续绘制、endPass 和 commit，也不是 GPU 的执行时间。
 pub var beginPassTicks: u64 = 0;
-pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
+pub fn beginPass(color: Color, renderPass: RenderPass) zhu.Rect {
     const start = sk.time.now();
     defer if (renderPass.target == null) {
         beginPassTicks = sk.time.since(start);
@@ -398,14 +398,6 @@ pub const Color = extern struct {
         return .{ .r = r, .g = g, .b = b, .a = a };
     }
 
-    // 按比例调整现有透明度，RGB 保持不变。
-    pub fn scaleAlpha(self: Color, scale: f32) Color {
-        var color = self;
-        const alpha: f32 = @floatFromInt(self.a);
-        color.a = @intFromFloat(@round(alpha * std.math.clamp(scale, 0, 1)));
-        return color;
-    }
-
     // 将 RGBA 四个通道设为同一个值。
     pub fn all(value: u8) Color {
         return .{ .r = value, .g = value, .b = value, .a = value };
@@ -421,6 +413,14 @@ pub const Color = extern struct {
         const opacity = std.math.clamp(percent, 0, 1);
         var color = self;
         color.a = @intFromFloat(@round(opacity * 255));
+        return color;
+    }
+
+    // 按比例调整现有透明度，RGB 保持不变。
+    pub fn scaleAlpha(self: Color, scale: f32) Color {
+        var color = self;
+        const alpha: f32 = @floatFromInt(self.a);
+        color.a = @intFromFloat(@round(alpha * std.math.clamp(scale, 0, 1)));
         return color;
     }
 

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
-const math = @import("../math.zig");
+const zhu = @import("../zhu.zig");
 const batch = @import("../batch.zig");
 const text = @import("../text.zig");
 const Color = @import("../graphics.zig").Color;
@@ -15,7 +15,7 @@ pub const Option = struct {
     button: Button,
     key: ?window.key.Code = null,
     label: ?[]const u8 = null, // 空切片表示不显示文字。
-    shape: ?math.Shape = null, // 未指定时沿用默认布局。
+    shape: ?zhu.Shape = null, // 未指定时沿用默认布局。
     hidden: bool = false, // 同时控制输入和绘制，不修改形状。
 
     // 将菜单按钮改为返回键。
@@ -56,13 +56,13 @@ pub fn init() void {
 fn layout() void {
     buttonCamera = .windowDpi();
     const size = buttonCamera.toWorld(window.size);
-    const confirm: math.Circle = .init(size.addXY(-100, -84), 44);
+    const confirm: zhu.Circle = .init(size.addXY(-100, -84), 44);
     // 菜单贴齐确定键的底边，功能键贴齐确定键的右边。
     const bottom = confirm.center.y + confirm.radius;
     const right = confirm.center.x + confirm.radius;
     const menuY = bottom - 32;
     const extraX = right - 32;
-    const circles: std.EnumArray(Button, math.Circle) = .init(.{
+    const circles: std.EnumArray(Button, zhu.Circle) = .init(.{
         .enter = confirm,
         // 与确定键的圆形边缘间距约 10。
         .menu = .init(.xy(size.x - 185.2, menuY), 32),
@@ -165,7 +165,7 @@ pub fn drawImage() void {
 }
 
 // 根据按住状态选择颜色，绘制单个按钮的形状。
-pub fn drawShape(shape: math.Shape, down: bool) void {
+pub fn drawShape(shape: zhu.Shape, down: bool) void {
     // 黑白配色：普通状态为半透明黑底，按住时使用深灰底和明亮白边。
     const normalBorder = Color.gray(255, 102);
     const pressedBorder = Color.gray(255, 242);
