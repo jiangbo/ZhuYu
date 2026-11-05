@@ -53,14 +53,14 @@ var drawState: DrawState = undefined; // 当前相机、逻辑尺寸和实际像
 var flushed = false;
 
 // 命令缓冲区由调用方持有，必须保持有效且容量足够。
-pub fn init(cmds: []Command, image: ?Image) void {
+pub fn init(cmds: []Command) void {
     commands = .initBuffer(cmds);
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
     defaultPipeline = createPipeline(shaderDesc);
 
-    // 仅绘制图片时可传 null，绘制基础图形时需传入中心为白色的圆形图片。
+    // 基础图形使用预先加载的 circle.png，其中心区域必须为白色。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
-    circleImage = image orelse return;
+    circleImage = assets.getImageByPath("circle.png") orelse return;
     const rect = math.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
