@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) !void {
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     // 默认按纹理绑定一个采样器，开启后允许实例分别选择过滤方式。
     const samplers = b.option(bool, "samplers", "Use two samplers") orelse false;
+    const imgui = b.option(bool, "imgui", "Enable ImGui") orelse false;
     const options = b.addOptions();
     options.addOption(FontMode, "font", font);
     options.addOption(bool, "append", append);
@@ -40,7 +41,9 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .gles3 = linuxGles,
         .egl = linuxGles,
+        .with_sokol_imgui = imgui,
     });
+    b.installArtifact(sokolDep.artifact("sokol_clib"));
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result, samplers);
 
