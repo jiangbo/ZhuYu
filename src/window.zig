@@ -216,6 +216,9 @@ pub fn computeViewRect() void {
             break :blk .init(position, intSize);
         },
     };
+    // 先对齐尺寸，再按最终尺寸计算整数像素位置。
+    viewRect.size = viewRect.size.round();
+    viewRect.min = size.sub(viewRect.size).mul(info.alignment).round();
     scale = viewRect.size.div(logicSize);
 }
 

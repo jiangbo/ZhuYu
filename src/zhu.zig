@@ -398,6 +398,10 @@ pub const Rect = extern struct {
         return Rect{ .min = minV, .size = maxV.sub(minV) };
     }
 
+    pub fn round(self: Rect) Rect {
+        return .init(self.min.round(), self.size.round());
+    }
+
     pub fn max(self: Rect) Vector2 {
         return self.min.add(self.size);
     }
