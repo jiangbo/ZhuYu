@@ -7,12 +7,12 @@ pub const Options = struct {
     output: []const u8 = "assets.pack", // 独立资源包的输出名称。
 };
 
-// 注册 pack 命令，通过 append 选项控制是否自动追加资源包。
+// 注册 pack 命令，返回原始或追加资源包后的程序，由应用安装和运行。
 pub fn addStep(
     b: *std.Build,
     dep: *std.Build.Dependency,
     options: Options,
-) void {
+) std.Build.LazyPath {
     const tool = b.addExecutable(.{
         .name = "zhuyu-pack",
         .root_module = b.createModule(.{
@@ -31,13 +31,15 @@ pub fn addStep(
         .dependOn(&install.step);
 
     // 依赖的布尔参数保存为字符串，未传入时保持关闭。
-    const opt = dep.builder.user_input_options.get("append") orelse return;
-    if (!std.mem.eql(u8, opt.scalar, "true")) return;
+    const opt = dep.builder.user_input_options.get("append") orelse
+        return options.exe.getEmittedBin();
+    if (!std.mem.eql(u8, opt.scalar, "true")) return options.exe.getEmittedBin();
 
     // pack 不限制目标平台，append 面向三个桌面系统。
     const target = options.exe.rootModuleTarget();
     if (target.os.tag != .windows and target.os.tag != .macos and
-        (target.os.tag != .linux or target.abi.isAndroid())) return;
+        (target.os.tag != .linux or target.abi.isAndroid()))
+        return options.exe.getEmittedBin();
 
     const appendTool = b.addExecutable(.{
         .name = "zhuyu-append",
@@ -54,9 +56,7 @@ pub fn addStep(
     const name = b.fmt("{s}-packed{s}", .{
         options.exe.name, target.exeFileExt(),
     });
-    const program = append.addOutputFileArg(name);
-    const installProgram = b.addInstallBinFile(program, name);
-    b.getInstallStep().dependOn(&installProgram.step);
+    return append.addOutputFileArg(name);
 }
 
 // 路径仅供打包时读取和计算哈希，偏移指向资源包内的文件内容。
