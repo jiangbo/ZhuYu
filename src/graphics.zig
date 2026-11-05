@@ -79,6 +79,7 @@ pub const Animation = struct {
 
     elapsed: f32 = -math.epsilon,
     index: u8 = 0,
+    row: u8 = 0,
     source: Source,
     image: Image,
     extend: u32 = 0,
@@ -120,17 +121,28 @@ pub const Animation = struct {
 
     pub fn subImageAt(self: *const Animation, index: usize) Image {
         const frames = self.source.frames;
-        const offset = frames[@min(frames.len - 1, index)].offset;
+        var offset = frames[@min(frames.len - 1, index)].offset;
+        offset.y += @as(f32, @floatFromInt(self.row)) * self.source.size.y;
         return self.image.sub(.init(offset, self.image.size));
     }
 
-    pub fn play(self: *Animation, index: anytype) void {
+    pub fn play(self: *Animation, index: anytype, row: anytype) void {
+        self.row = math.toIndex(u8, row);
+        self.playIndex(index);
+    }
+
+    pub fn playIndex(self: *Animation, index: anytype) void {
         const sourceIndex = math.toIndex(u8, index);
         self.source = self.sources[sourceIndex];
         self.sourceIndex = sourceIndex;
 
         const image = assets.getImage(self.source.imageId).?;
         self.image = image.sub(.init(.zero, self.source.size));
+        self.reset();
+    }
+
+    pub fn playRow(self: *Animation, row: anytype) void {
+        self.row = math.toIndex(u8, row);
         self.reset();
     }
 
