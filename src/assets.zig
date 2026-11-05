@@ -57,11 +57,10 @@ pub fn deinit() void {
 }
 
 pub const ImageOption = struct {
-    size: Vector2, // 图片尺寸，加载完成后验证
     filter: Filter = .nearest, // 纹理过滤方式
 };
 
-pub fn loadImage(path: Path, option: ImageOption) Image {
+pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
     if (entry.found_existing) {
         std.debug.assert(entry.value_ptr.filter == option.filter);
@@ -71,7 +70,7 @@ pub fn loadImage(path: Path, option: ImageOption) Image {
     const imageView = sk.gfx.allocView();
     entry.value_ptr.* = .{
         .view = imageView,
-        .size = option.size,
+        .size = size,
         .filter = option.filter,
     };
     view.put(imageView, .{ .sampler = sampler.get(option.filter) });
