@@ -6,7 +6,7 @@ const Dir = std.Io.Dir;
 const Allocator = std.mem.Allocator;
 
 pub const Options = struct {
-    input: []const u8, // 相对于游戏项目的原始音频目录，递归扫描。
+    input: []const u8 = "raw-assets/audio", // 相对于游戏项目，递归扫描。
     output: []const u8 = "assets/audio", // 工具独占的输出目录，每次清空重建。
     rate: u32 = 44100, // MP3/WAV/OGG 的目标采样率，需与游戏输出一致。
     exe: []const u8 = "ffmpeg",

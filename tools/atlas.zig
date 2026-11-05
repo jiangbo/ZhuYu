@@ -7,7 +7,7 @@ const zigimg = @import("zigimg");
 
 // 输入目录用于计算图片 ID，生成的图片资源与源目录分开。
 pub const Options = struct {
-    input: []const u8,
+    input: []const u8 = "raw-assets/atlas",
     images: []const u8 = "atlas", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/atlas.zon",
     maxSize: u32 = 1024,
