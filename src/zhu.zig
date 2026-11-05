@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 pub const sokol = @import("sokol");
+pub const imgui = sokol.imgui;
 
 pub const window = @import("window.zig");
 pub const assets = @import("assets.zig");

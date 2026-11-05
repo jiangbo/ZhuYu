@@ -99,8 +99,14 @@ export fn windowInit() void {
 // 本帧窗口尺寸是否变化，供游戏读取，帧末清除。
 pub var resized: bool = false;
 
-export fn windowEvent(event: ?*const Event) void {
-    const ev = event orelse return;
+export fn windowEvent(raw: ?*const Event) void {
+    const ev = raw orelse return;
+    if (@hasDecl(root, "event")) return root.event(ev);
+    handleEvent(ev);
+}
+
+// 默认窗口和输入处理；应用覆盖 event 后可按需转发。
+pub fn handleEvent(ev: *const Event) void {
     switch (ev.type) {
         .RESIZED => {
             resized = true;
@@ -182,8 +188,6 @@ export fn windowEvent(event: ?*const Event) void {
         .ICONIFIED, .UNFOCUSED => resetInput(),
         else => {},
     }
-
-    call(root, "event", .{ev});
 }
 
 // 按实际窗口像素和默认逻辑尺寸计算画面区域及输入、字体共用的缩放比例。
