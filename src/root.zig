@@ -29,6 +29,7 @@ const memory = @import("internal/memory.zig");
 
 pub const Timer = math.Timer;
 pub const Image = graphics.Image;
+pub const Vertex = graphics.Vertex;
 pub const NineImage = graphics.NineImage;
 pub const Atlas = graphics.Atlas;
 pub const Vector2 = math.Vector2;

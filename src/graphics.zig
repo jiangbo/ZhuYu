@@ -13,6 +13,20 @@ pub const queryBackend = sk.gfx.queryBackend;
 pub const Vector2 = math.Vector2;
 pub const ImageId = assets.Id;
 
+pub const DrawOption = struct {
+    size: ?Vector2 = null, // 大小
+    scale: Vector2 = .one, // 围绕 pivot 缩放。
+    anchor: Vector2 = .zero, // 变换前的定位锚点，归一化坐标。
+    pivot: Vector2 = .center, // 缩放、斜切和旋转共用的固定中心。
+    radian: f32 = 0, // 旋转弧度
+    skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
+    uvRect: ?math.Vector4 = null, // 纹理 UV 区域
+    color: Color = .white, // 乘色
+    addColor: Color = .all(0), // 加色
+    filter: ?Filter = null, // null 使用图片自身的采样方式。
+    pixelAlign: bool = false, // 是否对齐顶点到像素边界。
+};
+
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
 pub const Vertex = extern struct {
     position: math.Vector2 = .zero, // 世界坐标中的固定变换中心。
