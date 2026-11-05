@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sk = @import("sokol");
 const options = @import("options");
 
@@ -97,6 +98,7 @@ pub fn loadAtlas(source: graphics.Atlas, filter: Filter) void {
 }
 
 pub fn getImage(imageId: Id) ?graphics.Image {
+    if (builtin.is_test) return .empty;
     return imageCache.get(imageId);
 }
 

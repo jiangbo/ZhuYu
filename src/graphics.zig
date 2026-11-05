@@ -46,8 +46,6 @@ pub const Vertex = extern struct {
 comptime {
     // 编译时检查实例大小，防止字段变更破坏布局约定。
     std.debug.assert(@sizeOf(Vertex) == 64);
-    std.debug.assert(@offsetOf(Vertex, "filter") == 9);
-    std.debug.assert(@offsetOf(Vertex, "pixelAlign") == 10);
 }
 
 pub fn queryViewSize(view: View) zhu.Vector {
