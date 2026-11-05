@@ -398,6 +398,14 @@ pub const Color = extern struct {
         return .{ .r = r, .g = g, .b = b, .a = a };
     }
 
+    // 按比例调整现有透明度，RGB 保持不变。
+    pub fn scaleAlpha(self: Color, scale: f32) Color {
+        var color = self;
+        const alpha: f32 = @floatFromInt(self.a);
+        color.a = @intFromFloat(@round(alpha * std.math.clamp(scale, 0, 1)));
+        return color;
+    }
+
     // 将 RGBA 四个通道设为同一个值。
     pub fn all(value: u8) Color {
         return .{ .r = value, .g = value, .b = value, .a = value };
