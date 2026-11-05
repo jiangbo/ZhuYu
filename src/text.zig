@@ -362,7 +362,6 @@ pub const dynamic = struct {
     const GlyphState = struct {
         upload: sk.gfx.Buffer, // 通过 GPU 模块创建和释放的上传缓冲。
         offset: usize = 0, // 本帧下一个字形的上传偏移。
-        frame: u64, // 上传缓冲当前所属的帧。
         layer: i32 = 0,
         x: i32 = 1,
         y: i32 = 1,
@@ -394,7 +393,6 @@ pub const dynamic = struct {
         glyphState = .{
             .upload = .{},
             .layer = fontOption.atlas.layer,
-            .frame = window.frameCount(),
         };
         resizeWait = null;
         fontScale = 1;
@@ -405,6 +403,7 @@ pub const dynamic = struct {
     // 每帧在游戏绘制前更新，连续缩放时重新开始等待。
     pub fn update(delta: f32) void {
         if (!opened) return;
+        glyphState.offset = 0;
         if (window.resized) resizeWait = fontOption.resizeDelay;
         if (resizeWait) |wait| {
             if (wait <= 0 or (!window.resized and wait <= delta)) {
@@ -469,11 +468,6 @@ pub const dynamic = struct {
         const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
         if (sk.gfx.queryImageState(texture) != .VALID) {
             return .{ .image = .{}, .rect = .init(.zero, .zero), .advance = 0 };
-        }
-        const frame = window.frameCount();
-        if (glyphState.frame != frame) {
-            glyphState.frame = frame;
-            glyphState.offset = 0;
         }
         return createGlyph(code);
     }

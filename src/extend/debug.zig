@@ -144,11 +144,11 @@ var frameTime: f64 = 0;
 var usedTime: f64 = 0;
 
 pub const Option = struct {
-    position: Vector2 = .xy(10, 10), // 游戏画面左上角起算的界面单位。
+    position: Vector2 = .xy(10, 10), // 游戏画面左上角起算的逻辑坐标。
     extra: []const Row = &.{},
 };
 
-// 在游戏画面中绘制，保留当前视口，使用固定界面尺寸。
+// 在当前游戏视口内横向铺满并留边，高度按文字内容计算。
 pub fn draw(option: Option) void {
     if (!enabled) return;
     const time = sk.time.now();
@@ -243,33 +243,31 @@ pub fn draw(option: Option) void {
     const left = leftBuffer[0 .. columns.left.end - 1];
     const right = rightBuffer[0 .. columns.right.end - 1];
 
-    // 保留游戏视口，将界面单位换算到当前绘制坐标。
-    camera.push(.viewDpi());
+    camera.push(.window);
     defer camera.pop();
 
     const textOption = text.Option{
         .color = .rgba(219, 227, 230, 245),
-        .scale = text.sizeToScale(16),
     };
-    // 列宽固定，实时数值的位数变化不会移动列位置或改变字号。
-    const widths = Vector2.xy(48, 144);
-    const rows: f32 = @floatFromInt(std.mem.count(u8, labels, "\n") + 1);
     const padding = Vector2.xy(10, 9);
     const gap = 12;
-    const panelSize = Vector2.xy(
-        widths.x + widths.y * 2 + gap * 2,
-        text.lineHeight(textOption) * rows,
-    ).add(padding.scale(2));
     const position = option.position;
+    const labelSize = text.measure(labels, textOption);
+    const panelSize = Vector2.xy(
+        camera.state.size.x - position.x * 2,
+        labelSize.y + padding.y * 2,
+    );
+    const labelWidth = labelSize.x;
+    const columnWidth = (panelSize.x - padding.x * 2 - labelWidth - gap * 2) / 2;
     batch.drawRect(Rect.init(position, panelSize), .{
-        .color = .rgba(18, 23, 28, 189),
+        .color = .rgba(18, 23, 28, 140),
     });
 
     const contentPosition = position.add(padding);
     text.draw(labels, contentPosition, textOption);
-    const leftPosition = contentPosition.addX(widths.x + gap);
+    const leftPosition = contentPosition.addX(labelWidth + gap);
     text.draw(left, leftPosition, textOption);
-    const rightPosition = leftPosition.addX(widths.y + gap);
+    const rightPosition = leftPosition.addX(columnWidth + gap);
     text.draw(right, rightPosition, textOption);
 }
 
