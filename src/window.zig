@@ -348,7 +348,7 @@ pub fn inputChanged() bool {
 }
 
 // 帧末清除本帧变化，并回放虚拟按键供下一帧读取。
-fn endInput() void {
+pub fn endInput() void {
     key.pressedState = .empty;
     key.releasedState = .empty;
     mouse.scrollY = 0;
