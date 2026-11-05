@@ -15,8 +15,6 @@ const Color = graphics.Color;
 const Vector2 = @import("../math.zig").Vector2;
 const Rect = @import("../math.zig").Rect;
 
-const basePadding = Vector2.xy(10, 9);
-
 // 是否启用调试面板绘制，ZON 热重载独立运行。
 pub var enabled: bool = false;
 
@@ -146,11 +144,11 @@ var frameTime: f64 = 0;
 var usedTime: f64 = 0;
 
 pub const Option = struct {
-    camera: ?camera.Camera = .window, // null 表示使用调用方当前的相机。
-    position: Vector2 = .xy(10, 10),
+    position: Vector2 = .xy(10, 10), // 游戏画面左上角起算的界面单位。
     extra: []const Row = &.{},
 };
 
+// 在游戏画面中绘制，保留当前视口，使用固定界面尺寸。
 pub fn draw(option: Option) void {
     if (!enabled) return;
     const time = sk.time.now();
@@ -222,8 +220,8 @@ pub fn draw(option: Option) void {
         "图片 {}", .{assetStats.image});
     // 字号按字体类型显示，字库容量包含已经缓存的字形。
     const fontStats = text.stats;
-    // 字体名最多显示 40 字节，截断时避开 UTF-8 后续字节。
-    var nameLen = @min(fontStats.name.len, 40);
+    // 字体名最多显示 18 字节，截断时避开 UTF-8 后续字节。
+    var nameLen = @min(fontStats.name.len, 18);
     if (nameLen < fontStats.name.len) {
         while (nameLen > 0 and fontStats.name[nameLen] & 0xc0 == 0x80)
             nameLen -= 1;
@@ -245,36 +243,36 @@ pub fn draw(option: Option) void {
     const left = leftBuffer[0 .. columns.left.end - 1];
     const right = rightBuffer[0 .. columns.right.end - 1];
 
-    // 使用指定相机绘制，结束后还原调用方的相机。
-    if (option.camera) |view| camera.push(view);
-    defer if (option.camera != null) camera.pop();
+    // 保留游戏视口，将界面单位换算到当前绘制坐标。
+    camera.push(.window);
+    const scale = Vector2.all(window.dpi()).div(batch.queryPixelScale());
+    camera.pop();
+    camera.push(.{ .scale = scale });
+    defer camera.pop();
 
-    const baseOption = text.Option{};
-    const labelSize = text.measure(labels, baseOption);
-    const gap = text.measure("    ", baseOption).x;
-    const scale = debugTextScale(labelSize.y);
-    const padding = basePadding.scale(scale.x);
-    const position = option.position;
-    const panelWidth = camera.size.x * 0.70;
-    const contentWidth = (panelWidth - padding.x * 2) / scale.x;
-    const valueWidth = (contentWidth - labelSize.x - gap * 2) / 2;
     const textOption = text.Option{
         .color = .rgba(219, 227, 230, 245),
-        .scale = scale,
+        .scale = text.sizeToScale(16),
     };
+    // 列宽固定，实时数值的位数变化不会移动列位置或改变字号。
+    const widths = Vector2.xy(48, 144);
+    const rows: f32 = @floatFromInt(std.mem.count(u8, labels, "\n") + 1);
+    const padding = Vector2.xy(10, 9);
+    const gap = 12;
     const panelSize = Vector2.xy(
-        panelWidth,
-        labelSize.y * scale.y + padding.y * 2,
-    );
-    const panel = Rect.init(position, panelSize);
-
-    batch.drawRect(panel, .{ .color = .rgba(18, 23, 28, 189) });
+        widths.x + widths.y * 2 + gap * 2,
+        text.lineHeight(textOption) * rows,
+    ).add(padding.scale(2));
+    const position = option.position;
+    batch.drawRect(Rect.init(position, panelSize), .{
+        .color = .rgba(18, 23, 28, 189),
+    });
 
     const contentPosition = position.add(padding);
     text.draw(labels, contentPosition, textOption);
-    const leftPosition = contentPosition.addX((labelSize.x + gap) * scale.x);
+    const leftPosition = contentPosition.addX(widths.x + gap);
     text.draw(left, leftPosition, textOption);
-    const rightPosition = leftPosition.addX((valueWidth + gap) * scale.x);
+    const rightPosition = leftPosition.addX(widths.y + gap);
     text.draw(right, rightPosition, textOption);
 }
 
@@ -282,17 +280,6 @@ fn writeRow(columns: *Columns, row: Row) void {
     writeLine(&columns.label, row.label);
     writeLine(&columns.left, row.left);
     writeLine(&columns.right, row.right);
-}
-
-fn debugTextScale(contentHeight: f32) Vector2 {
-    const baseHeight = contentHeight + basePadding.y * 2;
-    const maxHeight = camera.size.y * 0.75;
-
-    const rawScale = maxHeight / baseHeight;
-
-    // 按半档缩放，避免调试面板盖住主要画面。
-    const stepped = @round(std.math.clamp(rawScale, 0.5, 1.5) * 2) / 2;
-    return .all(stepped);
 }
 
 fn writeFormatLine(
