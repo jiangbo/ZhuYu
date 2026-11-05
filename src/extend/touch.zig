@@ -1,5 +1,4 @@
-const input = @import("../input.zig");
-
+const window = @import("../window.zig");
 pub const pad = @import("pad.zig");
 pub const stick = @import("stick.zig");
 
@@ -14,7 +13,7 @@ var enabled: bool = false; // 统一控制当前模式的输入和绘制。
 
 // 初始化指定模式，根据输入环境决定是否启用控件。
 pub fn init(value: Mode) void {
-    enabled = input.key.mayNotHave;
+    enabled = window.key.mayNotHave;
     initMode(value);
 }
 

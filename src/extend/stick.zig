@@ -1,4 +1,3 @@
-const input = @import("../input.zig");
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
 const math = @import("../math.zig");
@@ -57,10 +56,10 @@ pub fn update() void {
         horizontal and value.x < -deadZone,
         horizontal and value.x > deadZone,
     };
-    const keys = [_]input.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
+    const keys = [_]window.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
     for (keys, down, &held) |key, pressed, *previous| {
         if (pressed == previous.*) continue;
-        input.key.queue(key, pressed);
+        window.key.queue(key, pressed);
         previous.* = pressed;
     }
 }
@@ -68,7 +67,7 @@ pub fn update() void {
 // 空闲时捕获区域内新按下的触点，之后持续跟踪同一槽位。
 fn updateStick() ?math.Vector2 {
     if (touchIndex) |index| {
-        if (input.touch.points[index]) |point| {
+        if (window.touch.points[index]) |point| {
             if (point.state == .held) {
                 return stickCamera.toWorld(point.raw).sub(center);
             }
@@ -77,7 +76,7 @@ fn updateStick() ?math.Vector2 {
         return null;
     }
 
-    for (input.touch.points, 0..) |slot, index| {
+    for (window.touch.points, 0..) |slot, index| {
         const point = slot orelse continue;
         if (!point.began or point.state != .held) continue;
         const start = stickCamera.toWorld(point.start);
@@ -93,8 +92,8 @@ fn updateStick() ?math.Vector2 {
 // 场景切换前释放功能按键和摇杆产生的方向键，并结束摇杆操作。
 pub fn reset() void {
     pad.reset();
-    const keys = [_]input.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
-    for (keys, held) |key, down| if (down) input.key.queue(key, false);
+    const keys = [_]window.key.Code{ .UP, .DOWN, .LEFT, .RIGHT };
+    for (keys, held) |key, down| if (down) window.key.queue(key, false);
 
     held = @splat(false);
     touchIndex = null;

@@ -9,12 +9,11 @@ pub const graphics = @import("graphics.zig");
 pub const batch = @import("batch.zig");
 pub const camera = @import("camera.zig");
 pub const math = @import("math.zig");
-pub const input = @import("input.zig");
 pub const text = @import("text.zig");
 pub const enums = math.enums;
 pub const random = math.random;
-pub const key = input.key;
-pub const mouse = input.mouse;
+pub const key = window.key;
+pub const mouse = window.mouse;
 
 pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
@@ -79,7 +78,6 @@ test "compile zhu modules" {
     std.testing.refAllDecls(batch);
     std.testing.refAllDecls(camera);
     std.testing.refAllDecls(math);
-    std.testing.refAllDecls(input);
     std.testing.refAllDecls(text);
     std.testing.refAllDecls(extend.debug);
     std.testing.refAllDecls(extend.widget);

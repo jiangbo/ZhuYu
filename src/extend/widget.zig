@@ -1,8 +1,8 @@
 const std = @import("std");
-const window = @import("../window.zig");
-const input = @import("../input.zig");
-const camera = @import("../camera.zig");
+
 const math = @import("../math.zig");
+const window = @import("../window.zig");
+const camera = @import("../camera.zig");
 const batch = @import("../batch.zig");
 const graphics = @import("../graphics.zig");
 const text = @import("../text.zig");
@@ -86,7 +86,7 @@ pub const Click = struct {
     // 每帧调用一次，区域内按下并释放才算点击。
     // 移出或取消即失效，再移回也不恢复。
     pub fn update(self: *Click, rect: math.Rect) bool {
-        const state = input.touch.query(rect);
+        const state = window.touch.query(rect);
         if (state.pressed) self.pressed = true;
 
         const clicked = self.pressed and state.released;
@@ -113,9 +113,9 @@ pub fn ClickT(comptime T: type) type {
             self.captured = hover != null or self.pressed != null;
 
             if (hover) |value| {
-                if (input.key.pressed(.MOUSE_LEFT)) self.pressed = value;
+                if (window.key.pressed(.MOUSE_LEFT)) self.pressed = value;
             }
-            if (!input.key.released(.MOUSE_LEFT)) return null;
+            if (!window.key.released(.MOUSE_LEFT)) return null;
             defer self.pressed = null;
             if (!std.meta.eql(self.pressed, hover)) return null;
             return hover;
@@ -167,10 +167,10 @@ pub fn MenuT(comptime T: type) type {
         };
 
         pub const NavKeys = struct {
-            up: []const input.key.Code = &.{ .UP, .W },
-            down: []const input.key.Code = &.{ .DOWN, .S },
-            confirm: []const input.key.Code = &.{ .ENTER, .SPACE, .F },
-            cancel: []const input.key.Code = &.{.ESCAPE},
+            up: []const window.key.Code = &.{ .UP, .W },
+            down: []const window.key.Code = &.{ .DOWN, .S },
+            confirm: []const window.key.Code = &.{ .ENTER, .SPACE, .F },
+            cancel: []const window.key.Code = &.{.ESCAPE},
         };
 
         pub const Option = struct {
@@ -250,19 +250,19 @@ pub fn MenuT(comptime T: type) type {
 
         // 更新鼠标和触摸操作，返回本帧点击的按钮编号。
         fn updateTouch(self: *Self) ?usize {
-            const moved = input.mouse.moved or input.touch.moved;
+            const moved = window.mouse.moved or window.touch.moved;
 
             var hover: ?usize = null; // 鼠标悬停的按钮。
             var touched: ?usize = null; // 触摸或鼠标左键当前所在的按钮。
             var newPressed: ?usize = null; // 本帧按下的按钮，取第一个。
             // 保存按下按钮的查询结果，禁用的按钮保持空状态。
-            var state: input.touch.State = .{};
+            var state: window.touch.State = .{};
             for (self.buttons, 0..) |button, index| {
                 if (self.isDisabled(index)) continue;
                 const shape = button.shape.move(self.position);
-                const press = input.touch.query(shape);
+                const press = window.touch.query(shape);
                 // 当前按钮内正按住或刚释放。
-                if (hover == null and input.mouse.hover(shape)) hover = index;
+                if (hover == null and window.mouse.hover(shape)) hover = index;
                 const active = press.held or press.released;
                 if (touched == null and active) touched = index;
 
@@ -295,16 +295,16 @@ pub fn MenuT(comptime T: type) type {
             const keys = self.navKeys;
             return switch (self.trigger) {
                 .press => .{
-                    .up = input.key.anyPressed(keys.up),
-                    .down = input.key.anyPressed(keys.down),
-                    .confirm = input.key.anyPressed(keys.confirm),
-                    .cancel = input.key.anyPressed(keys.cancel),
+                    .up = window.key.anyPressed(keys.up),
+                    .down = window.key.anyPressed(keys.down),
+                    .confirm = window.key.anyPressed(keys.confirm),
+                    .cancel = window.key.anyPressed(keys.cancel),
                 },
                 .release => .{
-                    .up = input.key.anyReleased(keys.up),
-                    .down = input.key.anyReleased(keys.down),
-                    .confirm = input.key.anyReleased(keys.confirm),
-                    .cancel = input.key.anyReleased(keys.cancel),
+                    .up = window.key.anyReleased(keys.up),
+                    .down = window.key.anyReleased(keys.down),
+                    .confirm = window.key.anyReleased(keys.confirm),
+                    .cancel = window.key.anyReleased(keys.cancel),
                 },
             };
         }

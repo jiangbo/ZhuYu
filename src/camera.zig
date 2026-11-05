@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const math = @import("math.zig");
-const key = @import("input.zig").key;
+const key = @import("window.zig").key;
 
 const Vector2 = math.Vector2;
 

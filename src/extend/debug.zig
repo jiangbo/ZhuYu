@@ -1,26 +1,26 @@
 const std = @import("std");
-
 const sk = @import("sokol");
+
+const math = @import("../math.zig");
 const assets = @import("../assets.zig");
 const audio = @import("../audio.zig");
 const batch = @import("../batch.zig");
 const camera = @import("../camera.zig");
 const graphics = @import("../graphics.zig");
-const input = @import("../input.zig");
 const memory = @import("../internal/memory.zig");
 const text = @import("../text.zig");
 const window = @import("../window.zig");
 
 const Color = graphics.Color;
-const Vector2 = @import("../math.zig").Vector2;
-const Rect = @import("../math.zig").Rect;
+const Vector2 = math.Vector2;
+const Rect = math.Rect;
 
 // 是否启用调试面板绘制，ZON 热重载独立运行。
 pub var enabled: bool = false;
 
 // 每帧调用，松开指定按键时切换调试面板。
-pub fn toggle(key: input.key.Code) void {
-    if (input.key.released(key)) enabled = !enabled;
+pub fn toggle(key: window.key.Code) void {
+    if (window.key.released(key)) enabled = !enabled;
 }
 
 pub const Row = struct {
@@ -176,7 +176,7 @@ pub fn draw(option: Option) void {
     const gfxStats = sk.gfx.queryStats();
     const frameStats = gfxStats.prev_frame;
     const totalStats = gfxStats.total;
-    // 获取当前持有的资源总量和顶点暂存区容量。
+    // 获取当前持有的资源总量。
     const assetStats = assets.queryTotalStats();
     // 左右列的格式串与参数成对排列，便于对应面板内容。
     // zig fmt: off
@@ -198,11 +198,9 @@ pub fn draw(option: Option) void {
     writeFormatLine(&columns, "图形",
         "纹理 {}", .{totalStats.images.alive},
         "顶点 {} KB", .{vertexBytes / 1024});
-    const batchUsed: f32 = @floatFromInt(assets.frameStats.vertex);
-    const batchCap: f32 = @floatFromInt(@max(assetStats.vertexCapacity, 1));
     writeFormatLine(&columns, "绘制",
         "批次 {}", .{frameStats.num_draw},
-        "容量 {d:.0}%", .{batchUsed / batchCap * 100});
+        "命令 {}", .{batch.commands.items.len});
     writeFormatLine(&columns, "对象",
         "精灵 {}", .{assets.frameStats.vertex},
         "文字 {}", .{assets.frameStats.text});
@@ -210,8 +208,8 @@ pub fn draw(option: Option) void {
         "使用 {} KB", .{memory.counter.used.load(.monotonic) / 1024},
         "最高 {} KB", .{memory.counter.max.load(.monotonic) / 1024});
     writeFormatLine(&columns, "鼠标",
-        "{d:.1}, {d:.1}", .{ input.mouse.raw.x, input.mouse.raw.y },
-        "{d:.1}, {d:.1}", .{ input.mouse.pos.x, input.mouse.pos.y });
+        "{d:.1}, {d:.1}", .{ window.mouse.raw.x, window.mouse.raw.y },
+        "{d:.1}, {d:.1}", .{ window.mouse.pos.x, window.mouse.pos.y });
     writeFormatLine(&columns, "相机",
         "{d:.1}, {d:.1}", .{ camera.main.position.x, camera.main.position.y },
         "缩放 {d:.2}, {d:.2}", .{ camera.main.scale.x, camera.main.scale.y });

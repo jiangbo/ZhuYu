@@ -1,5 +1,5 @@
 const std = @import("std");
-const input = @import("../input.zig");
+
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
 const math = @import("../math.zig");
@@ -13,7 +13,7 @@ pub const Button = enum { enter, menu, extra, spare, up, left, right, down };
 // 单个按钮配置，未指定按键、文字和形状时沿用默认值。
 pub const Option = struct {
     button: Button,
-    key: ?input.key.Code = null,
+    key: ?window.key.Code = null,
     label: ?[]const u8 = null, // 空切片表示不显示文字。
     shape: ?math.Shape = null, // 未指定时沿用默认布局。
     hidden: bool = false, // 同时控制输入和绘制，不修改形状。
@@ -22,7 +22,7 @@ pub const Option = struct {
     pub const back: Option = .init(.menu, .ESCAPE, "返回");
 
     // 创建按钮、按键和文字配置，其余字段采用默认值。
-    pub fn init(b: Button, key: input.key.Code, label: []const u8) Option {
+    pub fn init(b: Button, key: window.key.Code, label: []const u8) Option {
         return .{ .button = b, .key = key, .label = label };
     }
 };
@@ -42,7 +42,7 @@ pub var defaults: std.EnumArray(Button, Option) = .init(.{
 var current: std.EnumArray(Button, Option) = undefined;
 var hasPatch: bool = false; // 本轮更新前是否已经合入补丁。
 // 每个按钮本次按住的键，null 表示未按住。
-var pressedKeys: std.EnumArray(Button, ?input.key.Code) = .initFill(null);
+var pressedKeys: std.EnumArray(Button, ?window.key.Code) = .initFill(null);
 var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换。
 
 // 设置按钮的初始布局和当前配置。
@@ -101,7 +101,7 @@ pub fn update() void {
 
     // 每个按住的触点只转换一次，汇总各按钮是否按住。
     var held: std.EnumArray(Button, bool) = .initFill(false);
-    for (input.touch.points) |slot| {
+    for (window.touch.points) |slot| {
         const point = slot orelse continue;
         if (point.state != .held) continue;
         const pos = buttonCamera.toWorld(point.raw);
@@ -119,10 +119,10 @@ pub fn update() void {
             if (code.* != null) continue;
 
             const key = option.key.?;
-            input.key.queue(key, true);
+            window.key.queue(key, true);
             code.* = key;
         } else if (code.*) |key| {
-            input.key.queue(key, false);
+            window.key.queue(key, false);
             code.* = null;
         }
     }
@@ -131,7 +131,7 @@ pub fn update() void {
 // 淡出或停止更新界面前，暂存虚拟按键的释放。
 pub fn reset() void {
     for (pressedKeys.values) |code| {
-        if (code) |key| input.key.queue(key, false);
+        if (code) |key| window.key.queue(key, false);
     }
     pressedKeys = .initFill(null);
 }
