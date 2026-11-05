@@ -244,10 +244,7 @@ pub fn draw(option: Option) void {
     const right = rightBuffer[0 .. columns.right.end - 1];
 
     // 保留游戏视口，将界面单位换算到当前绘制坐标。
-    camera.push(.window);
-    const scale = Vector2.all(window.dpi()).div(batch.queryPixelScale());
-    camera.pop();
-    camera.push(.{ .scale = scale });
+    camera.push(.viewDpi());
     defer camera.pop();
 
     const textOption = text.Option{

@@ -6,7 +6,6 @@ const shader = @import("shader");
 const graphics = @import("graphics.zig");
 const assets = @import("assets.zig");
 const camera = @import("camera.zig");
-const window = @import("window.zig");
 const options = @import("options");
 
 const Image = graphics.Image;
@@ -34,13 +33,6 @@ pub const DrawCommand = struct {
     size: Vector2, // 本批次绘制的逻辑尺寸。
 };
 
-// 当前绘制设置；创建命令时只复制本批次需要的状态。
-const DrawState = struct {
-    camera: camera.Camera, // 当前渲染相机。
-    size: Vector2, // 当前绘制的逻辑尺寸。
-    viewRect: math.Rect, // 当前绘制使用的实际像素视口。
-};
-
 pub var whiteImage: graphics.Image = undefined;
 pub var circleImage: graphics.Image = undefined;
 
@@ -49,7 +41,6 @@ pub var commands: std.ArrayList(Command) = .empty;
 
 var vertexBuffer: sk.gfx.Buffer = .{}; // 上传后用于绘制的顶点缓冲。
 var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
-var drawState: DrawState = undefined; // 当前相机、逻辑尺寸和实际像素视口。
 var flushed = false;
 
 // 命令缓冲区由调用方持有，必须保持有效且容量足够。
@@ -65,16 +56,13 @@ pub fn init(cmds: []Command) void {
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }
 
-// 开始记录本帧绘制，保留已分配的顶点和命令容量。
-pub fn beginDraw() void {
+// 开始记录本帧绘制和首个目标，GPU pass 在 flush 时开启。
+pub fn beginDraw(color: Color, pass: RenderPass) void {
     assets.beginDraw();
     commands.clearRetainingCapacity();
     flushed = false;
-    drawState = .{
-        .camera = camera.main,
-        .size = camera.size,
-        .viewRect = window.viewRect,
-    };
+    camera.state.camera = camera.main;
+    useTarget(color, pass);
 }
 
 pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
@@ -82,34 +70,28 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     commands.appendAssumeCapacity(.{
         .target = .{ .color = color, .pass = pass },
     });
-    drawState.viewRect = pass.queryViewport();
-    drawState.size = pass.querySize();
+    camera.state.viewRect = pass.queryViewport();
+    camera.state.size = pass.querySize();
 }
 
 // 设置目标像素区域和对应的逻辑尺寸，同时重置裁剪区域。
 pub fn useViewport(rect: math.Rect, size: Vector2) void {
     endDrawCommand();
-    drawState.viewRect = rect;
-    drawState.size = size;
+    camera.state.viewRect = rect;
+    camera.state.size = size;
     commands.appendAssumeCapacity(.{ .viewport = rect });
 }
 
 // 裁剪使用当前视口的逻辑坐标，不受相机影响；null 恢复完整视口。
 pub fn useScissor(rect: ?math.Rect) void {
     endDrawCommand();
-    var clip = drawState.viewRect;
+    var clip = camera.state.viewRect;
     if (rect) |area| {
-        const scale = clip.size.div(drawState.size);
+        const scale = clip.size.div(camera.state.size);
         clip.min = clip.min.add(area.min.mul(scale));
         clip.size = area.size.mul(scale);
     }
     commands.appendAssumeCapacity(.{ .scissor = clip });
-}
-
-// 当前相机每个坐标单位对应的目标像素数。
-pub fn queryPixelScale() Vector2 {
-    const source = camera.stack.getLastOrNull() orelse drawState.camera;
-    return drawState.viewRect.size.div(drawState.size).mul(source.scale);
 }
 
 // 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
@@ -130,8 +112,8 @@ fn addCommand(image: Image) *DrawCommand {
     commands.appendAssumeCapacity(.{ .draw = .{
         .start = @intCast(assets.frameStats.vertex),
         .view = image.view,
-        .camera = drawState.camera,
-        .size = drawState.size,
+        .camera = camera.state.camera,
+        .size = camera.state.size,
     } });
     return currentDraw().?;
 }

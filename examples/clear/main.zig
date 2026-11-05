@@ -10,8 +10,7 @@ pub fn init(_: zhu.Allocator) void {
 
 // 每帧清屏并提交绘制。
 pub fn frame(_: f32) void {
-    zhu.batch.beginDraw();
-    zhu.batch.useTarget(.rgba(32, 64, 96, 255), .{});
+    zhu.batch.beginDraw(.rgba(32, 64, 96, 255), .{});
     zhu.batch.endDraw();
 }
 

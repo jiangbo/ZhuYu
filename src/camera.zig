@@ -16,12 +16,24 @@ pub const Camera = struct {
         return .{ .scale = .all(@import("window.zig").dpi()) };
     }
 
+    // 在当前绘制视口内使用界面单位，抵消视口缩放并应用 DPI。
+    pub fn viewDpi() Camera {
+        const pixels = window.pixelScale();
+        return .{ .scale = windowDpi().scale.div(pixels) };
+    }
+
     pub fn windowAt(origin: Vector2) Camera {
         return .{ .position = origin.neg() };
     }
 
     pub fn windowScale(origin: Vector2, scale: Vector2) Camera {
         return .{ .position = origin.div(scale).neg(), .scale = scale };
+    }
+
+    // 此相机每个坐标单位对应的当前目标像素数。
+    pub fn pixelScale(self: Camera) Vector2 {
+        const scale = state.viewRect.size.div(state.size);
+        return scale.mul(self.scale);
     }
 
     pub fn toWindow(self: Camera, point: Vector2) Vector2 {
@@ -32,6 +44,21 @@ pub const Camera = struct {
         return point.div(self.scale).add(self.position);
     }
 };
+
+// 当前绘制坐标状态，由 batch 在开始绘制、切换目标和视口时更新。
+pub const State = struct {
+    camera: Camera, // 本帧的基准相机，批次记录时保存快照。
+    size: Vector2, // 当前绘制的逻辑尺寸。
+    viewRect: math.Rect, // 当前绘制使用的实际像素视口。
+};
+
+pub var state: State = undefined;
+
+// 当前绘制相机每个坐标单位对应的目标像素数。
+pub fn queryPixelScale() Vector2 {
+    const current = stack.getLastOrNull() orelse state.camera;
+    return current.pixelScale();
+}
 
 var buffer: [8]Camera = undefined;
 pub var stack: std.ArrayList(Camera) = .initBuffer(&buffer);

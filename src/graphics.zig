@@ -329,12 +329,7 @@ pub fn beginPass(color: Color, renderPass: RenderPass) math.Rect {
     var action = sk.gfx.PassAction{};
     action.colors[0] = .{
         .load_action = .CLEAR,
-        .clear_value = .{
-            .r = @as(f32, @floatFromInt(color.r)) / 255,
-            .g = @as(f32, @floatFromInt(color.g)) / 255,
-            .b = @as(f32, @floatFromInt(color.b)) / 255,
-            .a = @as(f32, @floatFromInt(color.a)) / 255,
-        },
+        .clear_value = color.toFloat(),
     };
 
     if (renderPass.target) |target| {
@@ -407,6 +402,16 @@ pub const Color = extern struct {
         var color = self;
         color.a = @intFromFloat(@round(opacity * 255));
         return color;
+    }
+
+    // 将 RGBA 通道归一化为 0～1，复用 Sokol 的浮点颜色类型。
+    pub fn toFloat(self: Color) sk.gfx.Color {
+        return .{
+            .r = @as(f32, @floatFromInt(self.r)) / 255,
+            .g = @as(f32, @floatFromInt(self.g)) / 255,
+            .b = @as(f32, @floatFromInt(self.b)) / 255,
+            .a = @as(f32, @floatFromInt(self.a)) / 255,
+        };
     }
 
     // 将线性 RGB 转为 sRGB，保持透明度。
