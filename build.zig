@@ -169,59 +169,30 @@ fn createShader(
 pub const setLibC = androidSdk.setLibC;
 
 // BMFont 的参数和生成流程由工具自身管理。
-pub const bmfont = struct {
-    pub const Options = @import("tools/bmfont.zig").Options;
-    pub const addStep = @import("tools/bmfont.zig").addStep;
-};
+pub const bmfont = @import("tools/bmfont.zig");
 
 // fontbm 原生跨平台运行，输出普通位图字体。
-pub const fontbm = struct {
-    pub const Options = @import("tools/fontbm.zig").Options;
-    pub const addStep = @import("tools/fontbm.zig").addStep;
-};
+pub const fontbm = @import("tools/fontbm.zig");
 
 // MSDF 的参数和生成流程由工具自身管理。
-pub const msdf = struct {
-    pub const Options = @import("tools/msdf.zig").Options;
-    pub const addStep = @import("tools/msdf.zig").addStep;
-};
+pub const msdf = @import("tools/msdf.zig");
 
 // 音频转换工具在宿主上调用 FFmpeg，游戏不引入转码依赖。
-pub const audio = struct {
-    pub const Options = @import("tools/audio.zig").Options;
-    pub const addStep = @import("tools/audio.zig").addStep;
-};
+pub const audio = @import("tools/audio.zig");
 
 // 资源转换工具在宿主上运行，按需注册游戏项目的构建命令。
-pub const atlas = struct {
-    pub const Options = @import("tools/atlas.zig").Options;
-    pub const addStep = @import("tools/atlas.zig").addStep;
-};
+pub const atlas = @import("tools/atlas.zig");
 
-pub const tiled = struct {
-    pub const Options = @import("tools/tiled.zig").Options;
-    pub const addStep = @import("tools/tiled.zig").addStep;
-};
+pub const tiled = @import("tools/tiled.zig");
 
 // Android 应用属性与 APK 打包步骤。
-pub const apk = struct {
-    pub const AppConfig = @import("tools/apk.zig").AppConfig;
-    pub const Options = @import("tools/apk.zig").Options;
-    pub const addStep = @import("tools/apk.zig").addStep;
-};
+pub const apk = @import("tools/apk.zig");
 
 // 为 iOS 真机和模拟器生成 .app，提供应用属性和打包步骤。
-pub const ios = struct {
-    pub const AppConfig = @import("tools/ios.zig").AppConfig;
-    pub const Options = @import("tools/ios.zig").Options;
-    pub const addStep = @import("tools/ios.zig").addStep;
-};
+pub const ios = @import("tools/ios.zig");
 
 // 资源打包及桌面程序追加步骤。
-pub const pack = struct {
-    pub const Options = @import("tools/pack.zig").Options;
-    pub const addStep = @import("tools/pack.zig").addStep;
-};
+pub const pack = @import("tools/pack.zig");
 
 // 安卓构建的类型和实现统一放在平台模块中。
 pub const AndroidOptions = androidSdk.AndroidOptions;

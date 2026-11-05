@@ -23,7 +23,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     });
     // 只使用引擎的数据类型，宿主工具按需分析这些声明。
     tool.root_module.addAnonymousImport("zhu", .{
-        .root_source_file = dep.path("src/root.zig"),
+        .root_source_file = dep.path("src/zhu.zig"),
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
