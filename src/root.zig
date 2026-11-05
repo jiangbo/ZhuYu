@@ -25,6 +25,9 @@ pub const extend = struct {
     pub const tiled = @import("extend/tiled.zig");
 };
 
+// 常用扩展模块，保留 extend 下的完整分类。
+pub const widget = extend.widget;
+
 const memory = @import("internal/memory.zig");
 
 pub const Timer = math.Timer;

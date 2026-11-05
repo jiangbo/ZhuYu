@@ -1,3 +1,5 @@
+const std = @import("std");
+const window = @import("../window.zig");
 const input = @import("../input.zig");
 const camera = @import("../camera.zig");
 const math = @import("../math.zig");
@@ -92,6 +94,34 @@ pub const Click = struct {
         return clicked;
     }
 };
+
+// 根据调用方提供的命中项跟踪鼠标点击。
+pub fn ClickT(comptime T: type) type {
+    return struct {
+        hover: ?T = null,
+        pressed: ?T = null,
+        captured: bool = false,
+        frame: u64 = 0,
+
+        pub const empty: @This() = .{};
+
+        pub fn update(self: *@This(), hover: ?T) ?T {
+            const frame = window.frameCount();
+            if (self.frame + 1 < frame) self.* = .empty;
+            self.frame = frame;
+            self.hover = hover;
+            self.captured = hover != null or self.pressed != null;
+
+            if (hover) |value| {
+                if (input.key.pressed(.MOUSE_LEFT)) self.pressed = value;
+            }
+            if (!input.key.released(.MOUSE_LEFT)) return null;
+            defer self.pressed = null;
+            if (!std.meta.eql(self.pressed, hover)) return null;
+            return hover;
+        }
+    };
+}
 
 pub const Popup = struct {
     anchor: Vector2,
