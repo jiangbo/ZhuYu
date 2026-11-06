@@ -127,9 +127,11 @@ pub const Animation = struct {
 
     pub fn update(self: *Animation, delta: f32) ?Step {
         if (self.index == self.source.frames.len) return null; // 已经结束
-        const firstUpdate = self.elapsed < 0;
+        if (self.elapsed < 0) {
+            self.elapsed = delta;
+            return .next;
+        }
         self.elapsed += delta;
-        if (firstUpdate) return .next; //  第一次第一帧
         const current = self.source.frames[self.index];
         if (self.elapsed < current.duration) return null; // 还未到下一帧
 
@@ -176,15 +178,36 @@ pub fn framesX(comptime count: u8, size: Vector2, d: f32) [count]Frame {
     return result;
 }
 
-pub fn loopFramesX(comptime count: u8, size: Vector2, d: f32) //
-[count + count - 2]Frame {
-    var result: [count + count - 2]Frame = undefined;
-    for (&result, 0..) |*frame, i| {
-        var index: f32 = @floatFromInt(i);
-        if (i >= count) index = @floatFromInt(count + count - 2 - i);
-        frame.offset = .xy(index * size.x, 0);
-        frame.duration = d;
+/// 倒序复制完整帧；输入非空，输出容量至少为输入长度，不能重叠。
+pub fn reverseFrames(frames: []const Frame, buffer: []Frame) []Frame {
+    std.debug.assert(frames.len > 0 and buffer.len >= frames.len);
+    const result = buffer[0..frames.len];
+    @memcpy(result, frames);
+    std.mem.reverse(Frame, result);
+    return result;
+}
+
+/// 生成不重复端点的往返序列；输入非空，输出容量需足够，不能重叠。
+pub fn pingPongFrames(frames: []const Frame, buffer: []Frame) []Frame {
+    const len = pingPongLen(frames.len);
+    std.debug.assert(buffer.len >= len);
+    const result = buffer[0..len];
+    @memcpy(result[0..frames.len], frames);
+    if (frames.len > 2) {
+        _ = reverseFrames(frames[1 .. frames.len - 1], result[frames.len..]);
     }
+    return result;
+}
+
+fn pingPongLen(len: usize) usize {
+    std.debug.assert(len > 0);
+    return if (len == 1) 1 else len * 2 - 2;
+}
+
+pub fn pingPongFramesX(comptime n: u8, size: Vector2, d: f32) [pingPongLen(n)]Frame {
+    const frames = framesX(n, size, d);
+    var result: [pingPongLen(n)]Frame = undefined;
+    _ = pingPongFrames(&frames, &result);
     return result;
 }
 
