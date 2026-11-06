@@ -35,6 +35,8 @@ pub const DrawCommand = struct {
 
 pub var whiteImage: graphics.Image = undefined;
 pub var circleImage: graphics.Image = undefined;
+// 图片绘制是否默认对齐顶点到目标像素。
+pub var snap: bool = false;
 
 // 命令借用调用方提供的固定缓冲区。
 pub var commands: std.ArrayList(Command) = .empty;
@@ -118,6 +120,7 @@ fn addCommand(image: Image) *DrawCommand {
     return currentDraw().?;
 }
 
+// 直接提交调用方准备好的顶点，不修改其绘制设置。
 pub fn drawVertices(items: []const Vertex, image: ?Image) void {
     if (image) |img| {
         const cmd = currentDraw() orelse addCommand(img);
@@ -297,7 +300,7 @@ pub fn drawCamera(
         .color = option.color,
         .addColor = option.addColor,
         .skew = option.skew,
-        .pixelAlign = option.pixelAlign,
+        .snap = option.snap orelse snap,
     });
 }
 
@@ -373,7 +376,7 @@ fn doDraw(
     const size = graphics.queryViewSize(cmd.view);
     const scale = cmd.camera.scale.mul(.xy(2, -2)).div(cmd.size);
     var offset = cmd.camera.position.mul(scale).neg();
-    if (camera.roundPosition) {
+    if (camera.snap) {
         // 在实际视口像素中取整平移量，不修改相机的逻辑位置。
         const half = pixels.scale(0.5);
         offset = offset.mul(half).round().div(half);

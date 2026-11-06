@@ -65,7 +65,7 @@ pub var stack: std.ArrayList(Camera) = .initBuffer(&buffer);
 pub var main: Camera = .window;
 // 仅在渲染时将相机平移对齐到实际像素。
 // TODO：支持切换渲染相机时，重新考虑此设置的归属和实现。
-pub var roundPosition: bool = false;
+pub var snap: bool = false;
 pub var size: Vector2 = undefined; // 默认游戏逻辑尺寸，不随窗口像素尺寸变化。
 pub var bound: Vector2 = undefined;
 

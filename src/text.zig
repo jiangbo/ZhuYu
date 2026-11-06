@@ -33,12 +33,14 @@ pub const Stats = struct {
 
 // 字体变化时更新，调试面板直接读取，不在每帧查询时计算。
 pub var stats: Stats = .{};
+// 文字绘制是否默认对齐字形顶点到目标像素。
+pub var snap: bool = false;
 
 pub const Option = struct {
     offset: Vector2 = .zero, // 文字位置偏移
     scale: Vector2 = .one, // 基于默认字号的缩放
     color: Color = .white, // 文字的颜色
-    pixelAlign: bool = false, // 是否对齐每个字形的顶点到像素边界。
+    snap: ?bool = null, // null 使用 text 的默认设置。
     max: f32 = std.math.floatMax(f32), // 最大宽度，超过换行
     spacing: f32 = 0, // 文字间的间距
     anchor: ?Vector2 = null, // 锚点
@@ -164,7 +166,7 @@ fn layout(
             batch.drawImage(glyph.image, charPos, .{
                 .size = glyph.rect.size.mul(scale),
                 .color = option.color,
-                .pixelAlign = option.pixelAlign,
+                .snap = option.snap orelse snap,
             });
         }
         assets.frameStats.text += 1;

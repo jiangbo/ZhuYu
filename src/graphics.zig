@@ -24,7 +24,7 @@ pub const DrawOption = struct {
     color: Color = .white, // 乘色
     addColor: Color = .all(0), // 加色
     filter: ?Filter = null, // null 使用图片自身的采样方式。
-    pixelAlign: bool = false, // 是否对齐顶点到像素边界。
+    snap: ?bool = null, // null 使用 batch 的默认设置。
 };
 
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
@@ -32,7 +32,7 @@ pub const Vertex = extern struct {
     position: zhu.Vector2 = .zero, // 世界坐标中的固定变换中心。
     layer: u8 = 0, // 纹理数组层号，与保留字节共用一个 UBYTE4 属性。
     filter: Filter = .nearest, // 本实例的采样方式。
-    pixelAlign: bool = false, // 是否对齐顶点到像素边界。
+    snap: bool = false, // 是否对齐顶点到像素边界。
     reservedAfter: u8 = 0, // 保留字节，暂不分配用途。
     radian: f32 = 0, // 旋转弧度
     size: zhu.Vector2, // 缩放后的绘制尺寸。
