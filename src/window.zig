@@ -541,12 +541,50 @@ pub const touch = struct {
 };
 
 pub const Bind = struct { action: []const u8, keys: []const key.Code };
-pub fn bind(comptime binds: []const Bind) type {
+/// 接受动作枚举或默认配置列表；枚举方式初始不绑定任何按键。
+pub fn bind(comptime binds: anytype) type {
+    const isEnum = @TypeOf(binds) == type;
+    const defaults = if (isEnum) &.{} else binds;
+    const E = if (isEnum) binds else zhu.enums.fromField(defaults, "action");
+
     return struct {
-        pub const Action = zhu.enums.fromField(binds, "action");
+        pub const Action = E;
+
+        const Entry = struct {
+            keys: [4]key.Code = @splat(.INVALID),
+            len: u8 = 0,
+        };
+
+        var entries: std.EnumArray(Action, Entry) = init: {
+            var result: std.EnumArray(Action, Entry) = .initFill(.{});
+            for (defaults, 0..) |binding, index| {
+                const action: Action = @fromBackingInt(index);
+                const entry = result.getPtr(action);
+                if (binding.keys.len > entry.keys.len)
+                    @compileError("each action supports at most 4 keys");
+                for (binding.keys, 0..) |code, i| entry.keys[i] = code;
+                entry.len = @intCast(binding.keys.len);
+            }
+            break :init result;
+        };
+
+        /// 复制按键配置；空切片表示解绑，最多传入 4 个键。
+        pub fn set(action: Action, keys: []const key.Code) void {
+            const entry = entries.getPtr(action);
+            std.debug.assert(keys.len <= entry.keys.len);
+            std.mem.copyForwards(key.Code, entry.keys[0..keys.len], keys);
+            @memset(entry.keys[keys.len..], .INVALID);
+            entry.len = @intCast(keys.len);
+        }
+
+        /// 返回内部按键切片，内容会随 set 改变。
+        pub fn get(action: Action) []const key.Code {
+            const entry = entries.getPtrConst(action);
+            return entry.keys[0..entry.len];
+        }
 
         pub fn held(action: Action) bool {
-            return key.anyHeld(binds[@backingInt(action)].keys);
+            return key.anyHeld(get(action));
         }
 
         pub fn anyHeld(actions: []const Action) bool {
@@ -555,7 +593,7 @@ pub fn bind(comptime binds: []const Bind) type {
         }
 
         pub fn pressed(action: Action) bool {
-            return key.anyPressed(binds[@backingInt(action)].keys);
+            return key.anyPressed(get(action));
         }
 
         pub fn anyPressed(actions: []const Action) bool {
@@ -564,7 +602,7 @@ pub fn bind(comptime binds: []const Bind) type {
         }
 
         pub fn released(action: Action) bool {
-            return key.anyReleased(binds[@backingInt(action)].keys);
+            return key.anyReleased(get(action));
         }
 
         pub fn anyReleased(actions: []const Action) bool {
