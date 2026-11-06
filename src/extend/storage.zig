@@ -108,6 +108,7 @@ pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
 }
 
 /// 读取结果拥有所有切片数据，使用结束后调用 deinit，切片随之失效。
+/// 读取的 ArrayList 由 arena 管理，扩容时应使用 arena 的分配器。
 pub fn Loaded(comptime T: type) type {
     return struct {
         value: T,
@@ -140,6 +141,7 @@ pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
 
 /// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
 /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
+/// ArrayList 只保存元素，读取后容量等于元素数量。
 pub fn writeValue(path: [:0]const u8, value: anytype) !void {
     var output = Writer.Allocating.init(memory.allocator);
     defer output.deinit();
@@ -154,6 +156,7 @@ pub const Save = struct {
     arena: *ArenaAllocator,
 
     /// 每次从数据区开头读取，返回值中的切片在 deinit 后失效。
+    /// 读取的 ArrayList 由 arena 管理，扩容时应使用 arena 的分配器。
     pub fn read(self: *Save, comptime T: type) !T {
         var reader = Reader.fixed(self.content);
         const value = try decode(&reader, T, self.arena.allocator());
@@ -231,6 +234,7 @@ fn encode(writer: *Writer, value: anytype) Writer.Error!void {
             }
         },
         .@"struct" => |info| {
+            if (comptime isArrayList(T)) return encode(writer, value.items);
             inline for (info.field_names) |name| {
                 try encode(writer, @field(value, name));
             }
@@ -294,6 +298,10 @@ fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
             return error.InvalidData;
         },
         .@"struct" => |info| blk: {
+            if (comptime isArrayList(T)) {
+                const items = try decode(reader, T.Slice, gpa);
+                break :blk T.fromOwnedSlice(items);
+            }
             var result: T = undefined;
             inline for (info.field_names, info.field_types) |name, Field| {
                 @field(result, name) = try decode(reader, Field, gpa);
@@ -315,6 +323,18 @@ fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
     };
+}
+
+// 按标准库类型识别 ArrayList，避免将同名字段的普通结构体当作列表。
+fn isArrayList(comptime T: type) bool {
+    if (!@hasField(T, "items")) return false;
+    const info = switch (@typeInfo(@FieldType(T, "items"))) {
+        .pointer => |info| info,
+        else => return false,
+    };
+    if (info.size != .slice) return false;
+    const alignment = info.attrs.@"align" orelse @alignOf(info.child);
+    return T == std.array_list.Aligned(info.child, .fromByteUnits(alignment));
 }
 
 // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
