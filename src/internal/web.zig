@@ -36,6 +36,43 @@ pub const font = struct {
     }
 };
 
+// 浏览器存储桥接，调用方传入包含游戏名称的完整存储键。
+pub const storage = struct {
+    pub const Load = union(enum) { loaded: []u8, tooSmall: usize };
+
+    // 浏览器存档函数由 web.zig 的 JavaScript 描述静态接入。
+    extern fn zhu_file_exists(path: [*:0]const u8) c_int;
+    extern fn zhu_file_load(path: [*:0]const u8, out: [*]u8, len: c_int) c_int;
+    extern fn zhu_file_save(path: [*:0]const u8, data: [*]const u8, len: c_int) c_int;
+
+    /// 检查浏览器中是否存在存档。
+    pub fn exists(path: [:0]const u8) bool {
+        return zhu_file_exists(path.ptr) != 0;
+    }
+
+    /// 读取浏览器存档，将原始字节写入传入的缓冲区。
+    pub fn load(path: [:0]const u8, buffer: []u8) !Load {
+        const len = zhu_file_load(
+            path.ptr,
+            buffer.ptr,
+            @intCast(buffer.len),
+        );
+        if (len == 0 and !exists(path)) return error.FileNotFound;
+        if (len < 0) return .{ .tooSmall = @intCast(-len) };
+        return .{ .loaded = buffer[0..@intCast(len)] };
+    }
+
+    /// 将存档字节编码为 Base64，保存到浏览器。
+    pub fn save(path: [:0]const u8, data: []const u8) !void {
+        const err = zhu_file_save(
+            path.ptr,
+            data.ptr,
+            @intCast(data.len),
+        );
+        if (err != 0) return error.WriteFailed;
+    }
+};
+
 // 查询主要指针类型，用于推测是否缺少实体键盘。
 pub extern "env" fn zhu_coarse_pointer() c_int;
 
