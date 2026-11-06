@@ -139,7 +139,7 @@ pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
 }
 
 /// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
-/// 支持数值、布尔、枚举、可选值、数组、结构体和切片。
+/// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
 pub fn writeValue(path: [:0]const u8, value: anytype) !void {
     var output = Writer.Allocating.init(memory.allocator);
     defer output.deinit();
@@ -199,6 +199,7 @@ pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
 fn encode(writer: *Writer, value: anytype) Writer.Error!void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
+        .void => {},
         .bool => try writer.writeByte(@intFromBool(value)),
         .int => {
             const Int = switch (T) {
@@ -218,6 +219,17 @@ fn encode(writer: *Writer, value: anytype) Writer.Error!void {
             if (value) |item| try encode(writer, item);
         },
         .array => for (value) |item| try encode(writer, item),
+        .vector => |info| {
+            const array: [info.len]info.child = value;
+            try encode(writer, array);
+        },
+        .@"union" => |info| {
+            if (info.tag_type == null) @compileError("expected a tagged union");
+            try encode(writer, std.meta.activeTag(value));
+            switch (value) {
+                inline else => |item| try encode(writer, item),
+            }
+        },
         .@"struct" => |info| {
             inline for (info.field_names) |name| {
                 try encode(writer, @field(value, name));
@@ -235,6 +247,7 @@ fn encode(writer: *Writer, value: anytype) Writer.Error!void {
 fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
 (Reader.Error || Allocator.Error || error{InvalidData})!T {
     return switch (@typeInfo(T)) {
+        .void => {},
         .bool => (try reader.takeByte()) != 0,
         .int => blk: {
             const Int = switch (T) {
@@ -264,6 +277,21 @@ fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
                 result[info.len] = sentinel;
             }
             break :blk result;
+        },
+        .vector => |info| blk: {
+            const array = try decode(reader, [info.len]info.child, gpa);
+            break :blk array;
+        },
+        .@"union" => |info| blk: {
+            const Tag = info.tag_type orelse @compileError("expected a tagged union");
+            const tag = try decode(reader, Tag, gpa);
+            inline for (info.field_names, info.field_types) |name, Field| {
+                if (@field(Tag, name) == tag) {
+                    const value = try decode(reader, Field, gpa);
+                    break :blk @unionInit(T, name, value);
+                }
+            }
+            return error.InvalidData;
         },
         .@"struct" => |info| blk: {
             var result: T = undefined;
