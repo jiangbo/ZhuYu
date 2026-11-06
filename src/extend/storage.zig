@@ -199,7 +199,9 @@ pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
     try writeAll(path, output.writer.buffered());
 }
 
-fn encode(writer: *Writer, value: anytype) Writer.Error!void {
+/// 将值写入调用方提供的流，不添加文件头，也不刷新流。
+/// 调用方可在写入文件前对编码结果加密或压缩。
+pub fn encode(writer: *Writer, value: anytype) Writer.Error!void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .void => {},
@@ -248,7 +250,10 @@ fn encode(writer: *Writer, value: anytype) Writer.Error!void {
     }
 }
 
-fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
+/// 从调用方提供的流读取一个值，切片和 ArrayList 使用 gpa 分配。
+/// 建议传入 arena 的分配器，以便成功或失败后统一释放。
+/// 只读取该值所需的字节，剩余内容由调用方处理。
+pub fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
 (Reader.Error || Allocator.Error || error{InvalidData})!T {
     return switch (@typeInfo(T)) {
         .void => {},
