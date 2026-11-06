@@ -3,9 +3,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const memory = @import("../internal/memory.zig");
 const android = @import("../internal/android.zig");
+const web = @import("../internal/web.zig");
 
-const Parsed = std.json.Parsed;
-const XChaCha = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
+const Reader = std.Io.Reader;
+const Writer = std.Io.Writer;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 var io: std.Io = undefined;
 // 初始化时复制路径，避免保存启动环境变量中的借用切片。
@@ -47,7 +50,10 @@ pub fn init(info: std.process.Init, name: []const u8) void {
 
 /// 检查用户数据文件是否存在，路径相对于存储目录。
 pub fn exists(path: [:0]const u8) bool {
-    if (builtin.os.tag == .emscripten) return em.exists(path);
+    if (builtin.os.tag == .emscripten) {
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        return web.storage.exists(webKey(&keyBuffer, path));
+    }
     const dir = std.Io.Dir.openDirAbsolute(io, dataPath, .{}) catch return false;
     defer dir.close(io);
     dir.access(io, path, .{}) catch return false;
@@ -58,7 +64,8 @@ pub fn exists(path: [:0]const u8) bool {
 pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
     const buf = buffer[0 .. buffer.len - 1];
     if (builtin.os.tag == .emscripten) {
-        return switch (try em.load(path, buf)) {
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        return switch (try web.storage.load(webKey(&keyBuffer, path), buf)) {
             .loaded => |content| terminateBuffer(buffer, content.len),
             .tooSmall => error.BufferTooSmall,
         };
@@ -70,10 +77,12 @@ pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
 }
 
 /// 读取完整用户数据，由调用者释放返回的内存。
-pub fn readAll(gpa: std.mem.Allocator, path: [:0]const u8) ![:0]u8 {
+pub fn readAll(gpa: Allocator, path: [:0]const u8) ![:0]u8 {
     if (builtin.os.tag == .emscripten) {
-        var buffer: [1024]u8 = undefined;
-        return switch (try em.load(path, &buffer)) {
+        var buffer: [4096]u8 = undefined;
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const key = webKey(&keyBuffer, path);
+        return switch (try web.storage.load(key, &buffer)) {
             .loaded => |content| try gpa.dupeSentinel(u8, content, 0),
             .tooSmall => |len| readFromJs(gpa, path, len),
         };
@@ -85,7 +94,10 @@ pub fn readAll(gpa: std.mem.Allocator, path: [:0]const u8) ![:0]u8 {
 
 /// 保存用户数据，首次写入时创建存储目录和文件所在的子目录。
 pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
-    if (builtin.os.tag == .emscripten) return em.save(path, content);
+    if (builtin.os.tag == .emscripten) {
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        return web.storage.save(webKey(&keyBuffer, path), content);
+    }
     const dir = try std.Io.Dir.cwd().createDirPathOpen(io, dataPath, .{});
     defer dir.close(io);
     if (std.fs.path.dirname(path)) |sub| try dir.createDirPath(io, sub);
@@ -95,49 +107,186 @@ pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
     try file.writeStreamingAll(io, content);
 }
 
-/// 读取 JSON 存档；调用者通过 deinit 释放结果及其字符串和数组。
-pub fn readJson(comptime T: type, path: [:0]const u8) !Parsed(T) {
+/// 读取结果拥有所有切片数据，使用结束后调用 deinit，切片随之失效。
+pub fn Loaded(comptime T: type) type {
+    return struct {
+        value: T,
+        arena: *ArenaAllocator,
+
+        pub fn deinit(self: @This()) void {
+            const gpa = self.arena.child_allocator;
+            self.arena.deinit();
+            gpa.destroy(self.arena);
+        }
+    };
+}
+
+/// 按指定类型读取二进制存档，字段顺序和类型必须与写入时一致。
+pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
     const gpa = memory.allocator;
     const content = try readAll(gpa, path);
     defer gpa.free(content);
-    // 解析结果拥有自己的数据，读取缓冲区在返回前即可释放。
-    return std.json.parseFromSlice(T, gpa, content, .{ .allocate = .alloc_always });
+
+    const arena = try gpa.create(ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+
+    var reader = Reader.fixed(content);
+    const value = try decode(&reader, T, arena.allocator());
+    if (reader.seek != content.len) return error.InvalidData;
+    return .{ .value = value, .arena = arena };
 }
 
-/// 将数据序列化为 JSON 后保存，临时缓冲区在写入结束后释放。
-pub fn writeJson(path: [:0]const u8, value: anytype) !void {
-    const gpa = memory.allocator;
-    const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
-    defer gpa.free(content);
-    try writeAll(path, content);
+/// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
+/// 支持数值、布尔、枚举、可选值、数组、结构体和切片。
+pub fn writeValue(path: [:0]const u8, value: anytype) !void {
+    var output = Writer.Allocating.init(memory.allocator);
+    defer output.deinit();
+    try encode(&output.writer, value);
+    try writeAll(path, output.writer.buffered());
 }
 
-/// 使用 XChaCha20-Poly1305 校验并解密 JSON。
-/// 返回结果拥有自己的数据，调用者通过 deinit 释放。
-pub fn readXChaCha(comptime T: type, path: [:0]const u8, key: [32]u8) !Parsed(T) {
-    const gpa = memory.allocator;
-    const source = try readAll(gpa, path);
-    defer gpa.free(source);
-    if (source.len < 40) return error.InvalidData;
+/// 带版本的存档，持有文件内容和读取时分配的数据。
+pub const Save = struct {
+    version: u32,
+    content: []const u8,
+    arena: *ArenaAllocator,
 
-    // 文件依次存放 24 字节 nonce、16 字节校验标签和密文。
-    const content = source[40..];
-    try XChaCha.decrypt(content, content, source[24..40].*, "", source[0..24].*, key);
-    return std.json.parseFromSlice(T, gpa, content, .{ .allocate = .alloc_always });
+    /// 每次从数据区开头读取，返回值中的切片在 deinit 后失效。
+    pub fn read(self: *Save, comptime T: type) !T {
+        var reader = Reader.fixed(self.content);
+        const value = try decode(&reader, T, self.arena.allocator());
+        if (reader.seek != self.content.len) return error.InvalidData;
+        return value;
+    }
+
+    pub fn deinit(self: Save) void {
+        const gpa = self.arena.child_allocator;
+        self.arena.deinit();
+        gpa.destroy(self.arena);
+    }
+};
+
+/// 打开带版本的存档，只解析文件头，由游戏按版本选择读取类型。
+pub fn openSave(path: [:0]const u8) !Save {
+    const gpa = memory.allocator;
+    const arena = try gpa.create(ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+
+    const content = try readAll(arena.allocator(), path);
+    var reader = Reader.fixed(content);
+    if (!std.mem.eql(u8, try reader.take(4), "ZHYU")) return error.InvalidData;
+    return .{
+        .version = try reader.takeInt(u32, .little),
+        .content = content[reader.seek..],
+        .arena = arena,
+    };
 }
 
-/// 将对象序列化为 JSON，使用 XChaCha20-Poly1305 加密后保存。
-/// 每次写入生成新的安全随机 nonce，密钥由应用提供。
-pub fn writeXChaCha(path: [:0]const u8, value: anytype, key: [32]u8) !void {
-    const gpa = memory.allocator;
-    const content = try std.json.Stringify.valueAlloc(gpa, value, .{});
-    defer gpa.free(content);
+/// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
+pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
+    var output = Writer.Allocating.init(memory.allocator);
+    defer output.deinit();
+    try output.writer.writeAll("ZHYU");
+    try output.writer.writeInt(u32, version, .little);
+    try encode(&output.writer, value);
+    try writeAll(path, output.writer.buffered());
+}
 
-    const buffer = try gpa.alloc(u8, content.len + 40);
-    defer gpa.free(buffer);
-    try io.randomSecure(buffer[0..24]);
-    XChaCha.encrypt(buffer[40..], buffer[24..40], content, "", buffer[0..24].*, key);
-    try writeAll(path, buffer);
+fn encode(writer: *Writer, value: anytype) Writer.Error!void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .bool => try writer.writeByte(@intFromBool(value)),
+        .int => {
+            const Int = switch (T) {
+                usize => u64,
+                isize => i64,
+                else => std.math.ByteAlignedInt(T),
+            };
+            try writer.writeInt(Int, value, .little);
+        },
+        .float => {
+            const Int = @Int(.unsigned, @bitSizeOf(T));
+            try writer.writeInt(Int, @bitCast(value), .little);
+        },
+        .@"enum" => try encode(writer, @backingInt(value)),
+        .optional => {
+            try writer.writeByte(@intFromBool(value != null));
+            if (value) |item| try encode(writer, item);
+        },
+        .array => for (value) |item| try encode(writer, item),
+        .@"struct" => |info| {
+            inline for (info.field_names) |name| {
+                try encode(writer, @field(value, name));
+            }
+        },
+        .pointer => |info| {
+            if (info.size != .slice) @compileError("expected a slice");
+            try writer.writeInt(u64, value.len, .little);
+            for (value) |item| try encode(writer, item);
+        },
+        else => @compileError("unsupported type: " ++ @typeName(T)),
+    }
+}
+
+fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
+(Reader.Error || Allocator.Error || error{InvalidData})!T {
+    return switch (@typeInfo(T)) {
+        .bool => (try reader.takeByte()) != 0,
+        .int => blk: {
+            const Int = switch (T) {
+                usize => u64,
+                isize => i64,
+                else => std.math.ByteAlignedInt(T),
+            };
+            const value = try reader.takeInt(Int, .little);
+            break :blk std.math.cast(T, value) orelse return error.InvalidData;
+        },
+        .float => blk: {
+            const Int = @Int(.unsigned, @bitSizeOf(T));
+            break :blk @bitCast(try reader.takeInt(Int, .little));
+        },
+        .@"enum" => |info| blk: {
+            const value = try decode(reader, info.tag_type, gpa);
+            break :blk std.enums.fromInt(T, value) orelse return error.InvalidData;
+        },
+        .optional => |info| if (try reader.takeByte() == 0)
+            null
+        else
+            try decode(reader, info.child, gpa),
+        .array => |info| blk: {
+            var result: T = undefined;
+            for (&result) |*item| item.* = try decode(reader, info.child, gpa);
+            if (comptime info.sentinel()) |sentinel| {
+                result[info.len] = sentinel;
+            }
+            break :blk result;
+        },
+        .@"struct" => |info| blk: {
+            var result: T = undefined;
+            inline for (info.field_names, info.field_types) |name, Field| {
+                @field(result, name) = try decode(reader, Field, gpa);
+            }
+            break :blk result;
+        },
+        .pointer => |info| blk: {
+            if (info.size != .slice) @compileError("expected a slice");
+            const len = std.math.cast(usize, try reader.takeInt(u64, .little));
+            const alignment = info.attrs.@"align" orelse @alignOf(info.child);
+            const items = try gpa.allocWithOptions(
+                info.child,
+                len orelse return error.InvalidData,
+                std.mem.Alignment.fromByteUnits(alignment),
+                info.sentinel(),
+            );
+            for (items) |*item| item.* = try decode(reader, info.child, gpa);
+            break :blk items;
+        },
+        else => @compileError("unsupported type: " ++ @typeName(T)),
+    };
 }
 
 // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
@@ -147,55 +296,18 @@ fn terminateBuffer(buffer: []u8, len: usize) [:0]u8 {
 }
 
 // 浏览器数据超过初始缓冲区时，按实际长度分配后重新读取。
-fn readFromJs(gpa: std.mem.Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
+fn readFromJs(gpa: Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
     const large = try gpa.alloc(u8, len + 1);
     errdefer gpa.free(large);
-    return switch (try em.load(path, large[0..len])) {
+    var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const key = webKey(&keyBuffer, path);
+    return switch (try web.storage.load(key, large[0..len])) {
         .loaded => |content| terminateBuffer(large, content.len),
         .tooSmall => error.BufferTooSmall,
     };
 }
 
-const em = struct {
-    pub const Load = union(enum) { loaded: []u8, tooSmall: usize };
-
-    // 浏览器存档函数由 web.zig 的 JavaScript 描述静态接入。
-    extern fn zhu_file_exists(path: [*:0]const u8) c_int;
-    extern fn zhu_file_load(path: [*:0]const u8, out: [*]u8, len: c_int) c_int;
-    extern fn zhu_file_save(path: [*:0]const u8, data: [*]const u8, len: c_int) c_int;
-
-    /// 检查浏览器中是否存在存档。
-    pub fn exists(path: [:0]const u8) bool {
-        var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        return zhu_file_exists(key(&buffer, path).ptr) != 0;
-    }
-
-    /// 读取浏览器存档，将原始字节写入传入的缓冲区。
-    pub fn load(path: [:0]const u8, buffer: []u8) !Load {
-        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const len = zhu_file_load(
-            key(&keyBuffer, path).ptr,
-            buffer.ptr,
-            @intCast(buffer.len),
-        );
-        if (len == 0) return error.FileNotFound;
-        if (len < 0) return .{ .tooSmall = @intCast(-len) };
-        return .{ .loaded = buffer[0..@intCast(len)] };
-    }
-
-    /// 将存档字节编码为 Base64，保存到浏览器。
-    pub fn save(path: [:0]const u8, data: []const u8) !void {
-        var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const err = zhu_file_save(
-            key(&buffer, path).ptr,
-            data.ptr,
-            @intCast(data.len),
-        );
-        if (err != 0) return error.WriteFailed;
-    }
-
-    // 同一站点的不同游戏通过固定名称区分存档。
-    fn key(buffer: []u8, path: [:0]const u8) [:0]u8 {
-        return memory.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
-    }
-};
+// 同一站点的不同游戏通过固定名称区分存档。
+fn webKey(buffer: []u8, path: [:0]const u8) [:0]u8 {
+    return memory.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
+}
