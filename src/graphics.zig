@@ -69,7 +69,8 @@ pub const Animation = struct {
     pub const Frames = []const Frame;
     pub const Step = enum { next, loop, end };
     pub const Source = struct {
-        imageId: ImageId,
+        imageId: ImageId = 0,
+        image: Image = .empty,
         size: Vector2, // 单帧尺寸
         frames: Frames,
         loop: bool = true, // 是否循环播放
@@ -79,34 +80,23 @@ pub const Animation = struct {
     index: u8 = 0,
     row: u8 = 0,
     source: Source,
-    image: Image,
     extend: u32 = 0,
 
-    sourceIndex: u8 = 0,
-    sources: []const Source = &.{},
-
-    pub fn init(img: Image, size: Vector2, frames: Frames) Animation {
-        return .{ .image = img.sub(.init(.zero, size)), .source = .{
-            .imageId = 0,
-            .size = size,
-            .frames = frames,
-        } };
+    pub fn init(image: Image, size: Vector2, frames: Frames) Animation {
+        return .initSource(.{ .image = image, .size = size, .frames = frames });
     }
 
-    pub fn initFinished(img: Image, size: Vector2, frames: Frames) Animation {
-        var self = Animation.init(img, size, frames);
-        self.stop();
+    pub fn initSource(source: Source) Animation {
+        if (source.image.isValid()) return .{ .source = source };
+        var self: Animation = .{ .source = source };
+        self.source.image = assets.getImage(source.imageId).?;
         return self;
     }
 
-    pub fn initSource(sources: []const Source) Animation {
-        const source = sources[0];
-        const image = assets.getImage(source.imageId).?;
-        return .{
-            .source = source,
-            .image = image.sub(.init(.zero, source.size)),
-            .sources = sources,
-        };
+    pub fn initFinished(source: Source) Animation {
+        var self = Animation.initSource(source);
+        self.stop();
+        return self;
     }
 
     pub fn subImage(self: *const Animation) Image {
@@ -114,28 +104,19 @@ pub const Animation = struct {
     }
 
     pub fn frame(self: *const Animation) Frame {
-        return self.source.frames[self.index];
+        const frames = self.source.frames;
+        return frames[@min(frames.len - 1, self.index)];
     }
 
     pub fn subImageAt(self: *const Animation, index: usize) Image {
         const frames = self.source.frames;
         var offset = frames[@min(frames.len - 1, index)].offset;
         offset.y += @as(f32, @floatFromInt(self.row)) * self.source.size.y;
-        return self.image.sub(.init(offset, self.image.size));
+        return self.source.image.sub(.init(offset, self.source.size));
     }
 
-    pub fn play(self: *Animation, index: anytype, row: anytype) void {
-        self.row = zhu.toIndex(u8, row);
-        self.playIndex(index);
-    }
-
-    pub fn playIndex(self: *Animation, index: anytype) void {
-        const sourceIndex = zhu.toIndex(u8, index);
-        self.source = self.sources[sourceIndex];
-        self.sourceIndex = sourceIndex;
-
-        const image = assets.getImage(self.source.imageId).?;
-        self.image = image.sub(.init(.zero, self.source.size));
+    pub fn play(self: *Animation, source: Source) void {
+        self.source = Animation.initSource(source).source;
         self.reset();
     }
 
@@ -161,8 +142,7 @@ pub const Animation = struct {
     }
 
     pub fn getEnumFrame(self: *const Animation, T: type) T {
-        const extend = self.source.frames[self.index].extend;
-        return @fromBackingInt(@intCast(extend));
+        return @fromBackingInt(@intCast(self.frame().extend));
     }
 
     pub fn getEnumExtend(self: *const Animation, T: type) T {
@@ -221,6 +201,11 @@ pub const Image = struct {
     size: zhu.Vector2 = .zero,
 
     pub const empty: Image = .{};
+
+    /// 是否持有图片视图。
+    pub fn isValid(self: *const Image) bool {
+        return self.view.id != 0;
+    }
 
     pub fn sub(self: *const Image, subRect: zhu.Rect) Image {
         var image = self.*;

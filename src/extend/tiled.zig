@@ -151,11 +151,11 @@ pub const Map = struct {
         const localId = gid & 0x00FFFFFF;
         if (tileSet.getTileByLocalId(localId)) |tile| {
             if (tile.animation.len == 0) return null;
-            return graphics.Animation.init(
-                assets.getImage(tileSet.image).?,
-                tileSet.tileSize,
-                tile.animation,
-            );
+            return graphics.Animation.initSource(.{
+                .image = assets.getImage(tileSet.image).?,
+                .size = tileSet.tileSize,
+                .frames = tile.animation,
+            });
         } else return null;
     }
 };
