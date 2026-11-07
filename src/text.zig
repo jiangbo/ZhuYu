@@ -3,6 +3,7 @@ const options = @import("options");
 const sk = @import("sokol");
 
 const core = @import("internal/core.zig");
+const platform = @import("internal/platform.zig");
 const assets = @import("assets.zig");
 const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
@@ -358,7 +359,7 @@ pub const dynamic = struct {
     pub const Char = extern struct { rect: zhu.Rect, advance: f32 };
 
     // 直接使用当前平台的字体接口。
-    const backend = window.platform.font;
+    const backend = platform.backend.font;
 
     // 字形上传及装箱状态，不持有图片纹理。
     const GlyphState = struct {

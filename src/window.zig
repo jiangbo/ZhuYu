@@ -4,6 +4,7 @@ const sk = @import("sokol");
 const options = @import("options");
 const root = @import("root");
 
+const platform = @import("internal/platform.zig");
 const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
 const audio = @import("audio.zig");
@@ -34,18 +35,6 @@ pub var viewRect: zhu.Rect = undefined;
 pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
 var info: Option = undefined; // 当前窗口配置，由 run 设置。
 
-// 根据编译目标选择窗口及字体共用的平台实现。
-pub const platform = switch (builtin.os.tag) {
-    .windows => @import("internal/windows.zig"),
-    .macos, .ios => @import("internal/apple.zig"),
-    .linux => if (builtin.abi.isAndroid())
-        @import("internal/android.zig")
-    else
-        @import("internal/linux.zig"),
-    .emscripten => @import("internal/web.zig"),
-    else => struct {},
-};
-
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
     if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
 }
@@ -53,30 +42,22 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
 var allocator: std.mem.Allocator = undefined;
 
 pub fn setup(gpa: std.mem.Allocator) void {
-    platform.setup(gpa);
+    platform.backend.setup(gpa);
     allocator = gpa;
+    key.mayNotHave = platform.mayNotHaveKeyboard();
 }
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
 pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
-    const desc = createDesc(title, size_, option);
-    if (builtin.os.tag == .windows) {
-        if (info.disableIME) _ = platform.ImmDisableIME(-1);
-    }
-    if (!builtin.abi.isAndroid()) return sk.app.run(desc);
-    platform.desc = desc;
-}
-
-fn createDesc(title: [:0]const u8, s: zhu.Vector, o: Option) sk.app.Desc {
     sk.time.setup();
-    info = o;
-    camera.init(info.logicSize orelse s);
+    info = option;
+    camera.init(info.logicSize orelse size_);
     viewRect = .init(.zero, camera.size);
 
-    return .{
+    const desc: sk.app.Desc = .{
         .window_title = title,
-        .width = @intFromFloat(s.x),
-        .height = @intFromFloat(s.y),
+        .width = @intFromFloat(size_.x),
+        .height = @intFromFloat(size_.y),
         .depth_format = .NONE,
         .init_cb = windowInit,
         .event_cb = windowEvent,
@@ -86,6 +67,7 @@ fn createDesc(title: [:0]const u8, s: zhu.Vector, o: Option) sk.app.Desc {
         .high_dpi = true,
         .logger = .{ .func = sk.log.func },
     };
+    platform.run(desc, option.disableIME);
 }
 
 export fn windowInit() void {
@@ -252,14 +234,14 @@ export fn windowDeinit() void {
     audio.deinit();
     assets.deinit();
     sk.gfx.shutdown();
-    if (builtin.abi.isAndroid()) platform.threaded.deinit();
+    if (builtin.abi.isAndroid()) platform.backend.threaded.deinit();
 }
 
 // 返回界面单位到渲染像素的倍率，安卓额外应用系统界面密度。
 pub fn dpi() f32 {
     const bufferScale = sk.app.dpiScale();
     if (!builtin.abi.isAndroid()) return bufferScale;
-    return bufferScale * platform.density();
+    return bufferScale * platform.backend.density();
 }
 
 pub const showCursor = sk.app.showMouse;
@@ -409,9 +391,8 @@ pub const key = struct {
         break :code @Enum(i32, .exhaustive, &names, &values);
     };
 
-    // 根据平台推测可能没有实体键盘，浏览器初始化时查询主要指针类型。
-    pub var mayNotHave: bool = builtin.target.abi.isAndroid() or
-        builtin.os.tag == .ios;
+    // setup 时根据平台和主要指针类型推测可能没有实体键盘。
+    pub var mayNotHave: bool = false;
 
     // 键盘键和鼠标按钮共用按住状态，按下和释放分别保留到帧末。
     var state: std.StaticBitSet(512) = .empty;

@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 pub const sokol = @import("sokol");
 
 pub const imgui = sokol.imgui;
@@ -99,10 +98,6 @@ pub fn setup(info: std.process.Init, option: SetupOption) void {
     const gpa = assets.setup(info.io, info.gpa);
     window.setup(gpa);
     if (option.storage) |name| extend.storage.setup(info, gpa, name);
-    if (builtin.os.tag == .emscripten) {
-        // 主要指针为粗略指针时，推测可能没有实体键盘。
-        key.mayNotHave = window.platform.zhu_coarse_pointer() != 0;
-    }
 }
 
 pub fn percentInt(a: anytype, b: anytype) f32 {
