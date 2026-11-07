@@ -87,6 +87,7 @@ pub const Animation = struct {
     }
 
     pub fn initSource(source: Source) Animation {
+        std.debug.assert(source.frames.len <= 255);
         if (source.image.isValid()) return .{ .source = source };
         var self: Animation = .{ .source = source };
         self.source.image = assets.getImage(source.imageId).?;
