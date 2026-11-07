@@ -15,7 +15,7 @@ var io: std.Io = undefined;
 var gpa: Allocator = undefined;
 // 初始化时复制路径，避免保存启动环境变量中的借用切片。
 var pathBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-var dataPath: []const u8 = undefined;
+var dataPath: []const u8 = "";
 
 /// 由 zhu.setup 传入统计分配器；name 用于桌面目录和 Web 存储键。
 /// 安卓和 iOS 使用应用沙盒，Web 使用 name 作为浏览器存储键的前缀。
@@ -51,13 +51,19 @@ pub fn setup(info: std.process.Init, gpa_: Allocator, name: []const u8) void {
     };
 }
 
+fn openOrCreateDir(create: bool) !std.Io.Dir {
+    if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
+    if (create) return std.Io.Dir.cwd().createDirPathOpen(io, dataPath, .{});
+    return std.Io.Dir.openDirAbsolute(io, dataPath, .{});
+}
+
 /// 检查用户数据文件是否存在，路径相对于存储目录。
 pub fn exists(path: [:0]const u8) bool {
     if (builtin.os.tag == .emscripten) {
         var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         return web.storage.exists(webKey(&keyBuffer, path));
     }
-    const dir = std.Io.Dir.openDirAbsolute(io, dataPath, .{}) catch return false;
+    const dir = openOrCreateDir(false) catch return false;
     defer dir.close(io);
     dir.access(io, path, .{}) catch return false;
     return true;
@@ -73,7 +79,7 @@ pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
             .tooSmall => error.BufferTooSmall,
         };
     }
-    const dir = try std.Io.Dir.openDirAbsolute(io, dataPath, .{});
+    const dir = try openOrCreateDir(false);
     defer dir.close(io);
     const content = try dir.readFile(io, path, buf);
     return terminateBuffer(buffer, content.len);
@@ -90,7 +96,7 @@ pub fn readAll(gpa_: Allocator, path: [:0]const u8) ![:0]u8 {
             .tooSmall => |len| readFromJs(gpa_, path, len),
         };
     }
-    const dir = try std.Io.Dir.openDirAbsolute(io, dataPath, .{});
+    const dir = try openOrCreateDir(false);
     defer dir.close(io);
     return dir.readFileAllocOptions(io, path, gpa_, .unlimited, .of(u8), 0);
 }
@@ -101,7 +107,7 @@ pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
         var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         return web.storage.save(webKey(&keyBuffer, path), content);
     }
-    const dir = try std.Io.Dir.cwd().createDirPathOpen(io, dataPath, .{});
+    const dir = try openOrCreateDir(true);
     defer dir.close(io);
     if (std.fs.path.dirname(path)) |sub| try dir.createDirPath(io, sub);
 
@@ -145,6 +151,7 @@ pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
 /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
 /// ArrayList 只保存元素，读取后容量等于元素数量。
 pub fn writeValue(path: [:0]const u8, value: anytype) !void {
+    if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
     var output = Writer.Allocating.init(gpa);
     defer output.deinit();
     try encode(&output.writer, value);
@@ -175,6 +182,7 @@ pub const Save = struct {
 
 /// 打开带版本的存档，只解析文件头，由游戏按版本选择读取类型。
 pub fn openSave(path: [:0]const u8) !Save {
+    if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
     const arena = try gpa.create(ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = ArenaAllocator.init(gpa);
@@ -192,6 +200,7 @@ pub fn openSave(path: [:0]const u8) !Save {
 
 /// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
 pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
+    if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
     var output = Writer.Allocating.init(gpa);
     defer output.deinit();
     try output.writer.writeAll("ZHYU");
@@ -363,5 +372,6 @@ fn readFromJs(gpa_: Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
 
 // 同一站点的不同游戏通过固定名称区分存档。
 fn webKey(buffer: []u8, path: [:0]const u8) [:0]u8 {
+    if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
     return zhu.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
 }
