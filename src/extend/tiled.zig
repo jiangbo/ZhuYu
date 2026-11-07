@@ -89,13 +89,13 @@ pub const Grid = struct {
         }
     };
 
-    /// 返回矩形覆盖到的地图内格子，范围会按地图边界裁剪。
+    /// 返回矩形 [min, max) 覆盖到的地图内格子，并按地图边界裁剪。
     pub fn cellsInRect(self: Grid, rect: Rect) CellRectIter {
         std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
 
         const rawMin = self.worldToCell(rect.min);
-        const max = rect.max().sub(.all(zhu.epsilon));
-        const rawMax = self.worldToCell(max);
+        const last = rect.max().div(self.cellSize()).ceil().sub(.one);
+        const rawMax = Cell.xy(@intFromFloat(last.x), @intFromFloat(last.y));
 
         const min = Cell.xy(@max(rawMin.x, 0), @max(rawMin.y, 0));
         const maxX = @min(rawMax.x, self.width - 1);
@@ -233,15 +233,13 @@ pub fn Field(comptime T: type) type {
 
             const size: f32 = @floatFromInt(self.grid.cell);
             const r0: i32 = @intFromFloat(@floor(rect.min.y / size));
-            const bottom = rect.min.y + rect.size.y - zhu.epsilon;
-            const r1: i32 = @intFromFloat(@floor(bottom / size));
+            const bottom = rect.min.y + rect.size.y;
+            const r1: i32 = @intFromFloat(@ceil(bottom / size) - 1);
             const rows = clipRange(r0, r1, self.grid.height);
 
-            var front = dest;
-            if (dx > 0) front += rect.size.x - zhu.epsilon;
-
-            const col: i32 = @intFromFloat(@floor(front / size));
-            const cellX: f32 = @floatFromInt(col);
+            var cellX = @floor(dest / size);
+            if (dx > 0) cellX = @ceil((dest + rect.size.x) / size) - 1;
+            const col: i32 = @intFromFloat(cellX);
 
             var touch = (cellX + 1) * size;
             if (dx > 0) touch = cellX * size - rect.size.x;
@@ -265,15 +263,13 @@ pub fn Field(comptime T: type) type {
 
             const size: f32 = @floatFromInt(self.grid.cell);
             const c0: i32 = @intFromFloat(@floor(rect.min.x / size));
-            const right = rect.min.x + rect.size.x - zhu.epsilon;
-            const c1: i32 = @intFromFloat(@floor(right / size));
+            const right = rect.min.x + rect.size.x;
+            const c1: i32 = @intFromFloat(@ceil(right / size) - 1);
             const cols = clipRange(c0, c1, self.grid.width);
 
-            var front = dest;
-            if (dy > 0) front += rect.size.y - zhu.epsilon;
-
-            const row: i32 = @intFromFloat(@floor(front / size));
-            const cellY: f32 = @floatFromInt(row);
+            var cellY = @floor(dest / size);
+            if (dy > 0) cellY = @ceil((dest + rect.size.y) / size) - 1;
+            const row: i32 = @intFromFloat(cellY);
 
             var touch = (cellY + 1) * size;
             if (dy > 0) touch = cellY * size - rect.size.y;
