@@ -5,7 +5,9 @@
 //! 对应 sokol-zig 提交：3990b6629704f988041ac7e76ed010348eabd098。
 const std = @import("std");
 const builtin = @import("builtin");
+
 const android = @import("android.zig");
+const web = @import("web.zig");
 
 pub const Response = struct {
     path: [:0]const u8,
@@ -97,7 +99,7 @@ pub fn dowork() void {
         nextRequest += 1;
         slot.state.store(.queued, .release);
         if (builtin.os.tag == .emscripten) {
-            zhu_fetch_start(@intCast(lane), slot.request.path.ptr);
+            web.zhu_fetch_start(@intCast(lane), slot.request.path.ptr);
         } else {
             wake.set(io);
         }
@@ -112,7 +114,7 @@ pub fn dowork() void {
 pub fn shutdown() void {
     if (!started) return;
     if (builtin.os.tag == .emscripten) {
-        zhu_fetch_stop();
+        web.zhu_fetch_stop();
     } else {
         stop.store(true, .release);
         wake.set(io);
@@ -170,17 +172,14 @@ fn read(path: [:0]const u8) ![]u8 {
     return buffer;
 }
 
-extern fn zhu_fetch_start(lane: c_int, path: [*:0]const u8) void;
-extern fn zhu_fetch_stop() void;
-
-// 浏览器拿到响应后，按实际字节数在主线程分配 Wasm 内存。
+// 浏览器拿到响应后直接为请求槽位分配缓冲区。
 fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
     const slot = &slots[@intCast(lane)];
     slot.buffer = allocator.alloc(u8, size) catch @panic("out of memory");
     return slot.buffer.ptr;
 }
 
-// 由浏览器事件循环回传结果，资源回调仍由下一帧 dowork 执行。
+// 浏览器只登记完成结果，资源回调仍由下一帧 dowork 执行。
 fn webDone(lane: c_int, size: c_int, status: c_int) callconv(.c) void {
     const slot = &slots[@intCast(lane)];
     slot.result = switch (status) {

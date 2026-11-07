@@ -1,5 +1,6 @@
 //! 收集原文中的字符，供 BMFont 和 MSDF 的构建配置共用。
 const std = @import("std");
+
 const Build = std.Build;
 const Dir = std.Io.Dir;
 const Utf8View = std.unicode.Utf8View;

@@ -7,7 +7,6 @@ const audio = @import("../audio.zig");
 const batch = @import("../batch.zig");
 const camera = @import("../camera.zig");
 const graphics = @import("../graphics.zig");
-const memory = @import("../internal/memory.zig");
 const text = @import("../text.zig");
 const window = @import("../window.zig");
 
@@ -15,7 +14,7 @@ const Color = graphics.Color;
 const Vector2 = zhu.Vector2;
 const Rect = zhu.Rect;
 
-// 是否启用调试面板绘制，ZON 热重载独立运行。
+// 是否启用调试面板绘制。
 pub var enabled: bool = false;
 
 // 每帧调用，松开指定按键时切换调试面板。
@@ -35,107 +34,111 @@ const Columns = struct {
     right: std.Io.Writer,
 };
 
-// 返回可热重载的 ZON 数据指针。首次调用会从文件读取。
-pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
-    const file = ZonFile(T, path);
-    if (file.parsed == null and !file.reload()) {
-        std.debug.panic("zon load failed: {s}", .{path});
-    }
-    const result = zonMap.getOrPut(memory.allocator, path) //
-        catch memory.oom();
-    if (!result.found_existing) {
-        result.value_ptr.* = .{
-            .path = path,
-            .mtime = statFileTime(path),
-            .reload = file.reload,
-            .deinit = file.deinit,
-        };
-    }
-
-    return &file.parsed.?.value;
-}
-
-// 重新加载有变化的 ZON 文件。
-pub fn reloadZon() void {
-    var iterator = zonMap.valueIterator();
-    while (iterator.next()) |entry| {
-        const mtime = statFileTime(entry.path);
-        if (mtime == 0 or mtime == entry.mtime) continue;
-
-        const loaded = entry.reload();
-        entry.mtime = mtime;
-        if (loaded) std.log.info("zon reloaded: {s}", .{entry.path});
-    }
-}
-
-// 释放调试热重载保存的 ZON 数据。
-pub fn deinit() void {
-    var iterator = zonMap.valueIterator();
-    while (iterator.next()) |entry| entry.deinit();
-    zonMap.deinit(memory.allocator);
-}
-
-const ZonEntry = struct {
-    path: [:0]const u8,
-    mtime: i128,
-    reload: *const fn () bool,
-    deinit: *const fn () void,
-};
-
-var zonMap: std.StringHashMapUnmanaged(ZonEntry) = .empty;
-
-// 查询热重载文件的修改时间，路径相对于当前工作目录。
-fn statFileTime(path: [:0]const u8) i128 {
-    const file = std.Io.Dir.cwd().openFile(window.io, path, .{}) catch return 0;
-    defer file.close(window.io);
-    const stat = file.stat(window.io) catch return 0;
-    return @intCast(stat.mtime.toNanoseconds());
-}
-
-fn ZonFile(comptime T: type, comptime path: [:0]const u8) type {
-    return struct {
-        // 每次重载使用独立 arena，解析失败时保留上一次的数据。
-        var parsed: ?struct { value: T, arena: std.heap.ArenaAllocator } = null;
-
-        fn reload() bool {
-            const gpa = memory.allocator;
-            const source = std.Io.Dir.cwd().readFileAllocOptions(
-                window.io,
-                path,
-                gpa,
-                .unlimited,
-                .of(u8),
-                0,
-            ) catch |err| {
-                std.log.err("zon reload failed: {s}: {}", .{ path, err });
-                return false;
-            };
-            defer gpa.free(source);
-
-            var arena = std.heap.ArenaAllocator.init(gpa);
-            var diagnostics: std.zon.parse.Diagnostics = undefined;
-            const value = std.zon.parse.fromSlice(T, .{
-                .gpa = gpa,
-                .arena = arena.allocator(),
-                .source = source,
-                .diagnostics = &diagnostics,
-            }) catch |err| {
-                arena.deinit();
-                std.log.err("zon reload failed: {s}: {}", .{ path, err });
-                return false;
-            };
-
-            if (parsed) |*old| old.arena.deinit();
-            parsed = .{ .value = value, .arena = arena };
-            return true;
-        }
-
-        fn deinit() void {
-            if (parsed) |*old| old.arena.deinit();
-        }
-    };
-}
-
+// ZON 热重载暂时停用。
+// var allocator: std.mem.Allocator = undefined;
+// var io: std.Io = undefined;
+//
+// // 返回可热重载的 ZON 数据指针。首次调用会从文件读取。
+// pub fn zon(comptime T: type, comptime path: [:0]const u8) *T {
+//     const file = ZonFile(T, path);
+//     if (file.parsed == null and !file.reload()) {
+//         std.debug.panic("zon load failed: {s}", .{path});
+//     }
+//     const result = zonMap.getOrPut(allocator, path) //
+//         catch zhu.oom();
+//     if (!result.found_existing) {
+//         result.value_ptr.* = .{
+//             .path = path,
+//             .mtime = statFileTime(path),
+//             .reload = file.reload,
+//             .deinit = file.deinit,
+//         };
+//     }
+//
+//     return &file.parsed.?.value;
+// }
+//
+// // 重新加载有变化的 ZON 文件。
+// pub fn reloadZon() void {
+//     var iterator = zonMap.valueIterator();
+//     while (iterator.next()) |entry| {
+//         const mtime = statFileTime(entry.path);
+//         if (mtime == 0 or mtime == entry.mtime) continue;
+//
+//         const loaded = entry.reload();
+//         entry.mtime = mtime;
+//         if (loaded) std.log.info("zon reloaded: {s}", .{entry.path});
+//     }
+// }
+//
+// // 释放调试热重载保存的 ZON 数据。
+// pub fn deinit() void {
+//     var iterator = zonMap.valueIterator();
+//     while (iterator.next()) |entry| entry.deinit();
+//     zonMap.deinit(allocator);
+// }
+//
+// const ZonEntry = struct {
+//     path: [:0]const u8,
+//     mtime: i128,
+//     reload: *const fn () bool,
+//     deinit: *const fn () void,
+// };
+//
+// var zonMap: std.StringHashMapUnmanaged(ZonEntry) = .empty;
+//
+// // 查询热重载文件的修改时间，路径相对于当前工作目录。
+// fn statFileTime(path: [:0]const u8) i128 {
+//     const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return 0;
+//     defer file.close(io);
+//     const stat = file.stat(io) catch return 0;
+//     return @intCast(stat.mtime.toNanoseconds());
+// }
+//
+// fn ZonFile(comptime T: type, comptime path: [:0]const u8) type {
+//     return struct {
+//         // 每次重载使用独立 arena，解析失败时保留上一次的数据。
+//         var parsed: ?struct { value: T, arena: std.heap.ArenaAllocator } = null;
+//
+//         fn reload() bool {
+//             const gpa = allocator;
+//             const source = std.Io.Dir.cwd().readFileAllocOptions(
+//                 io,
+//                 path,
+//                 gpa,
+//                 .unlimited,
+//                 .of(u8),
+//                 0,
+//             ) catch |err| {
+//                 std.log.err("zon reload failed: {s}: {}", .{ path, err });
+//                 return false;
+//             };
+//             defer gpa.free(source);
+//
+//             var arena = std.heap.ArenaAllocator.init(gpa);
+//             var diagnostics: std.zon.parse.Diagnostics = undefined;
+//             const value = std.zon.parse.fromSlice(T, .{
+//                 .gpa = gpa,
+//                 .arena = arena.allocator(),
+//                 .source = source,
+//                 .diagnostics = &diagnostics,
+//             }) catch |err| {
+//                 arena.deinit();
+//                 std.log.err("zon reload failed: {s}: {}", .{ path, err });
+//                 return false;
+//             };
+//
+//             if (parsed) |*old| old.arena.deinit();
+//             parsed = .{ .value = value, .arena = arena };
+//             return true;
+//         }
+//
+//         fn deinit() void {
+//             if (parsed) |*old| old.arena.deinit();
+//         }
+//     };
+// }
+//
 var last: u64 = 0;
 var fps: u64 = 0;
 var fpsFrame: u64 = 0;
@@ -205,8 +208,8 @@ pub fn draw(option: Option) void {
         "精灵 {}", .{assets.frameStats.vertex},
         "文字 {}", .{assets.frameStats.text});
     writeFormatLine(&columns, "内存",
-        "使用 {} KB", .{memory.counter.used.load(.monotonic) / 1024},
-        "最高 {} KB", .{memory.counter.max.load(.monotonic) / 1024});
+        "使用 {} KB", .{assetStats.memoryUsed / 1024},
+        "最高 {} KB", .{assetStats.memoryPeak / 1024});
     writeFormatLine(&columns, "鼠标",
         "{d:.1}, {d:.1}", .{ window.mouse.raw.x, window.mouse.raw.y },
         "{d:.1}, {d:.1}", .{ window.mouse.pos.x, window.mouse.pos.y });
@@ -285,8 +288,8 @@ fn writeFormatLine(
 ) void {
     var leftBuffer: [80]u8 = undefined;
     var rightBuffer: [80]u8 = undefined;
-    const left = memory.format(&leftBuffer, leftFormat, leftArgs);
-    const right = memory.format(&rightBuffer, rightFormat, rightArgs);
+    const left = zhu.format(&leftBuffer, leftFormat, leftArgs);
+    const right = zhu.format(&rightBuffer, rightFormat, rightArgs);
     writeLine(&columns.label, label);
     writeLine(&columns.left, left);
     writeLine(&columns.right, right);

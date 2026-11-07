@@ -1,5 +1,9 @@
 //! 浏览器宿主接口，JavaScript 源码直接嵌入 Emscripten 的链接段。
+const std = @import("std");
+
 const dynamic = @import("../text.zig").dynamic;
+
+pub fn setup(_: std.mem.Allocator) void {}
 
 // 浏览器系统字体接口，画布状态由嵌入的 JavaScript 持有。
 pub const font = struct {
@@ -82,12 +86,9 @@ pub extern "env" fn zhu_font_close() void;
 pub extern "env" fn zhu_font_metrics(f32, *dynamic.Metrics) void;
 pub extern "env" fn zhu_font_pixels(u32, *dynamic.Char, [*]u8, u32) c_int;
 
-extern fn zhu_fetch_done(c_int, c_int, c_int) void;
-
-// 浏览器只登记完成结果，资源回调仍由下一帧执行。
-export fn zhu_fetch_complete(lane: c_int, size: c_int, status: c_int) void {
-    zhu_fetch_done(lane, size, status);
-}
+// 浏览器请求的发起与取消；请求状态和缓冲区由加载器持有。
+pub extern fn zhu_fetch_start(lane: c_int, path: [*:0]const u8) void;
+pub extern fn zhu_fetch_stop() void;
 
 // 显式保留 JavaScript 读取 Wasm 字符串所需的运行库函数。
 export var __em_lib_deps_zhu_storage align(1) linksection("em_lib_deps") =
@@ -193,7 +194,7 @@ export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
         \\        if (!response.ok) {
         \\            if (jobs[lane] === job) {
         \\                jobs[lane] = null;
-        \\                _zhu_fetch_complete(lane, 0, 1);
+        \\                _zhu_fetch_done(lane, 0, 1);
         \\            }
         \\            return;
         \\        }
@@ -202,11 +203,11 @@ export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
         \\        jobs[lane] = null;
         \\        const out = _zhu_fetch_alloc(lane, data.length);
         \\        HEAPU8.set(data, out);
-        \\        _zhu_fetch_complete(lane, data.length, 0);
+        \\        _zhu_fetch_done(lane, data.length, 0);
         \\    }).catch(() => {
         \\        if (jobs[lane] !== job) return;
         \\        jobs[lane] = null;
-        \\        _zhu_fetch_complete(lane, 0, 3);
+        \\        _zhu_fetch_done(lane, 0, 3);
         \\    });
         \\}
     ).*;

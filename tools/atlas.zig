@@ -1,9 +1,9 @@
 //! 图集合并。
 const std = @import("std");
+const zigimg = @import("zigimg");
+
 const Build = std.Build;
 const Dependency = Build.Dependency;
-
-const zigimg = @import("zigimg");
 
 // 输入目录用于计算图片 ID，生成的图片资源与源目录分开。
 pub const Options = struct {

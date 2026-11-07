@@ -7,10 +7,10 @@ const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
-const memory = @import("internal/memory.zig");
 const fetch = @import("internal/fetch.zig");
+const core = @import("internal/core.zig");
 
-const oom = memory.oom;
+const oom = core.oom;
 const Image = graphics.Image;
 const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
@@ -21,9 +21,16 @@ pub var io: std.Io = undefined;
 pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
-pub fn init(io_: std.Io) void {
+// 配置 IO 和统计分配器，不创建图形资源。
+pub fn setup(io_: std.Io, gpa: std.mem.Allocator) std.mem.Allocator {
     io = io_;
-    allocator = memory.allocator;
+    counter = core.Counter.init(gpa);
+    allocator = counter.allocator();
+    return allocator;
+}
+
+// 在图形环境建立后初始化资源加载和默认采样器。
+pub fn init() void {
     // 开启 append 时只读取程序尾部的资源包，否则启动外部资源加载器。
     if (options.append) {
         file.init() catch |err| {
@@ -32,6 +39,11 @@ pub fn init(io_: std.Io) void {
     } else fetch.setup(io, allocator);
 
     sampler.init();
+}
+
+// 获取当前现实时间，返回从 Unix 纪元开始的时间戳。
+pub fn timestamp() std.Io.Timestamp {
+    return std.Io.Timestamp.now(io, .real);
 }
 
 // 开始本帧绘制，重置统计并清空顶点，保留暂存区容量。
@@ -514,16 +526,16 @@ pub const file = struct {
     pub fn initPack(bytes: []const u8) void {
         std.debug.assert(std.mem.endsWith(u8, bytes, "b0b0"));
         const footer = bytes[bytes.len - 12 ..];
-        const count = memory.readInt(u32, footer[0..4]);
-        const size = memory.readInt(u32, footer[4..8]);
+        const count = zhu.readInt(u32, footer[0..4]);
+        const size = zhu.readInt(u32, footer[4..8]);
         const start = bytes.len - size;
         const indexStart = bytes.len - 12 - count * 12;
         cache.ensureUnusedCapacity(allocator, count) catch oom();
         for (0..count) |i| {
             const entry = bytes[indexStart + i * 12 ..][0..12];
-            const hash = memory.readInt(u32, entry[0..4]);
-            const offset = start + memory.readInt(u32, entry[4..8]);
-            const length = memory.readInt(u32, entry[8..12]);
+            const hash = zhu.readInt(u32, entry[0..4]);
+            const offset = start + zhu.readInt(u32, entry[4..8]);
+            const length = zhu.readInt(u32, entry[8..12]);
             cache.putAssumeCapacity(hash, .{
                 .state = .loaded,
                 .data = .{ .bytes = bytes[offset..][0..length] },
@@ -622,16 +634,18 @@ pub const FrameStats = struct {
     vertex: usize = 0, // 本帧已记录的顶点数量。
 };
 
-// 当前持有的资源总量，不表示启动以来的累计数量。
+// 当前资源总量与内存统计；内存峰值从初始化开始累计。
 pub const TotalStats = struct {
     image: usize,
     file: usize,
     sound: usize,
     music: usize,
     vertexCapacity: usize, // 当前 CPU 顶点暂存区可容纳的顶点数量。
+    memoryUsed: usize, // 当前分配的字节数。
+    memoryPeak: usize, // 初始化以来分配字节数的峰值。
 };
 
-// 查询当前持有的资源总量与顶点暂存区容量。
+// 返回统计值副本，各项独立读取，不保证来自同一时刻。
 pub fn queryTotalStats() TotalStats {
     return .{
         .image = imageCache.count(),
@@ -639,5 +653,49 @@ pub fn queryTotalStats() TotalStats {
         .sound = sound.cache.count(),
         .music = music.cache.count(),
         .vertexCapacity = gpu.vertices.capacity,
+        .memoryUsed = counter.used.load(.monotonic),
+        .memoryPeak = counter.max.load(.monotonic),
+    };
+}
+
+var counter: core.Counter = undefined;
+
+fn sk_alloc(len: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
+    return alloc(allocator, len);
+}
+
+fn sk_free(ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    free(allocator, ptr);
+}
+
+// C 的 free 不传长度，所以在返回指针前面存一份长度。
+const cAlign = std.mem.Alignment.of(std.c.max_align_t);
+const cHeaderSize = std.mem.alignForward(usize, //
+    @sizeOf(usize), @alignOf(std.c.max_align_t));
+
+fn cSlice(ptr: *anyopaque) []align(@alignOf(std.c.max_align_t)) u8 {
+    const base = @as([*]u8, @ptrCast(ptr)) - cHeaderSize;
+    const header: *usize = @ptrCast(@alignCast(base));
+    return @alignCast(base[0 .. cHeaderSize + header.*]);
+}
+
+fn alloc(gpa: std.mem.Allocator, len: usize) ?*anyopaque {
+    if (len == 0) return null;
+    const base = gpa.rawAlloc(cHeaderSize + len, //
+        cAlign, @returnAddress()) orelse return null;
+    @as(*usize, @ptrCast(@alignCast(base))).* = len;
+    return @ptrCast(base + cHeaderSize);
+}
+
+fn free(gpa: std.mem.Allocator, ptr: ?*anyopaque) void {
+    const p = ptr orelse return;
+    gpa.rawFree(cSlice(p), cAlign, @returnAddress());
+}
+
+// Sokol 统一使用资源模块的分配器。
+pub fn sokolAllocator(comptime T: type) T {
+    return .{
+        .alloc_fn = sk_alloc,
+        .free_fn = sk_free,
     };
 }

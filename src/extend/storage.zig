@@ -1,7 +1,8 @@
-//! 用户数据存储，目录按应用区分，由游戏在启动阶段单独初始化。
+//! 用户数据存储，目录按应用区分，由 zhu.setup 的 storage 选项初始化。
 const std = @import("std");
 const builtin = @import("builtin");
-const memory = @import("../internal/memory.zig");
+
+const zhu = @import("../zhu.zig");
 const android = @import("../internal/android.zig");
 const web = @import("../internal/web.zig");
 
@@ -11,39 +12,41 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 var io: std.Io = undefined;
+var gpa: Allocator = undefined;
 // 初始化时复制路径，避免保存启动环境变量中的借用切片。
 var pathBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
 var dataPath: []const u8 = undefined;
 
-/// 在游戏 main 中调用；name 是固定的应用数据名称，用于桌面目录和 Web 存储键。
+/// 由 zhu.setup 传入统计分配器；name 用于桌面目录和 Web 存储键。
 /// 安卓和 iOS 使用应用沙盒，Web 使用 name 作为浏览器存储键的前缀。
-pub fn init(info: std.process.Init, name: []const u8) void {
+pub fn setup(info: std.process.Init, gpa_: Allocator, name: []const u8) void {
     io = info.io;
+    gpa = gpa_;
     const env = info.environ_map;
     dataPath = switch (builtin.os.tag) {
-        .windows => memory.format(&pathBuffer, "{s}\\{s}", .{
+        .windows => zhu.format(&pathBuffer, "{s}\\{s}", .{
             env.get("APPDATA") orelse @panic("APPDATA not set"),
             name,
         }),
         .linux => if (builtin.abi.isAndroid())
             android.dataPath()
         else if (env.get("XDG_DATA_HOME")) |data|
-            memory.format(&pathBuffer, "{s}/{s}", .{ data, name })
+            zhu.format(&pathBuffer, "{s}/{s}", .{ data, name })
         else
-            memory.format(&pathBuffer, "{s}/.local/share/{s}", .{
+            zhu.format(&pathBuffer, "{s}/.local/share/{s}", .{
                 env.get("HOME") orelse @panic("HOME not set"),
                 name,
             }),
-        .macos => memory.format(&pathBuffer, "{s}/{s}/{s}", .{
+        .macos => zhu.format(&pathBuffer, "{s}/{s}/{s}", .{
             env.get("HOME") orelse @panic("HOME not set"),
             "Library/Application Support",
             name,
         }),
-        .ios => memory.format(&pathBuffer, "{s}/{s}", .{
+        .ios => zhu.format(&pathBuffer, "{s}/{s}", .{
             env.get("HOME") orelse @panic("HOME not set"),
             "Library/Application Support",
         }),
-        .emscripten => memory.format(&pathBuffer, "{s}", .{name}),
+        .emscripten => zhu.format(&pathBuffer, "{s}", .{name}),
         else => return,
     };
 }
@@ -77,19 +80,19 @@ pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
 }
 
 /// 读取完整用户数据，由调用者释放返回的内存。
-pub fn readAll(gpa: Allocator, path: [:0]const u8) ![:0]u8 {
+pub fn readAll(gpa_: Allocator, path: [:0]const u8) ![:0]u8 {
     if (builtin.os.tag == .emscripten) {
         var buffer: [4096]u8 = undefined;
         var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const key = webKey(&keyBuffer, path);
         return switch (try web.storage.load(key, &buffer)) {
-            .loaded => |content| try gpa.dupeSentinel(u8, content, 0),
-            .tooSmall => |len| readFromJs(gpa, path, len),
+            .loaded => |content| try gpa_.dupeSentinel(u8, content, 0),
+            .tooSmall => |len| readFromJs(gpa_, path, len),
         };
     }
     const dir = try std.Io.Dir.openDirAbsolute(io, dataPath, .{});
     defer dir.close(io);
-    return dir.readFileAllocOptions(io, path, gpa, .unlimited, .of(u8), 0);
+    return dir.readFileAllocOptions(io, path, gpa_, .unlimited, .of(u8), 0);
 }
 
 /// 保存用户数据，首次写入时创建存储目录和文件所在的子目录。
@@ -115,16 +118,15 @@ pub fn Loaded(comptime T: type) type {
         arena: *ArenaAllocator,
 
         pub fn deinit(self: @This()) void {
-            const gpa = self.arena.child_allocator;
+            const gpa_ = self.arena.child_allocator;
             self.arena.deinit();
-            gpa.destroy(self.arena);
+            gpa_.destroy(self.arena);
         }
     };
 }
 
 /// 按指定类型读取二进制存档，字段顺序和类型必须与写入时一致。
 pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
-    const gpa = memory.allocator;
     const content = try readAll(gpa, path);
     defer gpa.free(content);
 
@@ -143,7 +145,7 @@ pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
 /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
 /// ArrayList 只保存元素，读取后容量等于元素数量。
 pub fn writeValue(path: [:0]const u8, value: anytype) !void {
-    var output = Writer.Allocating.init(memory.allocator);
+    var output = Writer.Allocating.init(gpa);
     defer output.deinit();
     try encode(&output.writer, value);
     try writeAll(path, output.writer.buffered());
@@ -165,15 +167,14 @@ pub const Save = struct {
     }
 
     pub fn deinit(self: Save) void {
-        const gpa = self.arena.child_allocator;
+        const gpa_ = self.arena.child_allocator;
         self.arena.deinit();
-        gpa.destroy(self.arena);
+        gpa_.destroy(self.arena);
     }
 };
 
 /// 打开带版本的存档，只解析文件头，由游戏按版本选择读取类型。
 pub fn openSave(path: [:0]const u8) !Save {
-    const gpa = memory.allocator;
     const arena = try gpa.create(ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = ArenaAllocator.init(gpa);
@@ -191,7 +192,7 @@ pub fn openSave(path: [:0]const u8) !Save {
 
 /// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
 pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
-    var output = Writer.Allocating.init(memory.allocator);
+    var output = Writer.Allocating.init(gpa);
     defer output.deinit();
     try output.writer.writeAll("ZHYU");
     try output.writer.writeInt(u32, version, .little);
@@ -250,10 +251,10 @@ pub fn encode(writer: *Writer, value: anytype) Writer.Error!void {
     }
 }
 
-/// 从调用方提供的流读取一个值，切片和 ArrayList 使用 gpa 分配。
+/// 从调用方提供的流读取一个值，切片和 ArrayList 使用传入的分配器分配。
 /// 建议传入 arena 的分配器，以便成功或失败后统一释放。
 /// 只读取该值所需的字节，剩余内容由调用方处理。
-pub fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
+pub fn decode(reader: *Reader, comptime T: type, gpa_: Allocator) //
 (Reader.Error || Allocator.Error || error{InvalidData})!T {
     return switch (@typeInfo(T)) {
         .void => {},
@@ -272,31 +273,31 @@ pub fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
             break :blk @bitCast(try reader.takeInt(Int, .little));
         },
         .@"enum" => |info| blk: {
-            const value = try decode(reader, info.tag_type, gpa);
+            const value = try decode(reader, info.tag_type, gpa_);
             break :blk std.enums.fromInt(T, value) orelse return error.InvalidData;
         },
         .optional => |info| if (try reader.takeByte() == 0)
             null
         else
-            try decode(reader, info.child, gpa),
+            try decode(reader, info.child, gpa_),
         .array => |info| blk: {
             var result: T = undefined;
-            for (&result) |*item| item.* = try decode(reader, info.child, gpa);
+            for (&result) |*item| item.* = try decode(reader, info.child, gpa_);
             if (comptime info.sentinel()) |sentinel| {
                 result[info.len] = sentinel;
             }
             break :blk result;
         },
         .vector => |info| blk: {
-            const array = try decode(reader, [info.len]info.child, gpa);
+            const array = try decode(reader, [info.len]info.child, gpa_);
             break :blk array;
         },
         .@"union" => |info| blk: {
             const Tag = info.tag_type orelse @compileError("expected a tagged union");
-            const tag = try decode(reader, Tag, gpa);
+            const tag = try decode(reader, Tag, gpa_);
             inline for (info.field_names, info.field_types) |name, Field| {
                 if (@field(Tag, name) == tag) {
-                    const value = try decode(reader, Field, gpa);
+                    const value = try decode(reader, Field, gpa_);
                     break :blk @unionInit(T, name, value);
                 }
             }
@@ -304,12 +305,12 @@ pub fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
         },
         .@"struct" => |info| blk: {
             if (comptime isArrayList(T)) {
-                const items = try decode(reader, T.Slice, gpa);
+                const items = try decode(reader, T.Slice, gpa_);
                 break :blk T.fromOwnedSlice(items);
             }
             var result: T = undefined;
             inline for (info.field_names, info.field_types) |name, Field| {
-                @field(result, name) = try decode(reader, Field, gpa);
+                @field(result, name) = try decode(reader, Field, gpa_);
             }
             break :blk result;
         },
@@ -317,13 +318,13 @@ pub fn decode(reader: *Reader, comptime T: type, gpa: Allocator) //
             if (info.size != .slice) @compileError("expected a slice");
             const len = std.math.cast(usize, try reader.takeInt(u64, .little));
             const alignment = info.attrs.@"align" orelse @alignOf(info.child);
-            const items = try gpa.allocWithOptions(
+            const items = try gpa_.allocWithOptions(
                 info.child,
                 len orelse return error.InvalidData,
                 std.mem.Alignment.fromByteUnits(alignment),
                 info.sentinel(),
             );
-            for (items) |*item| item.* = try decode(reader, info.child, gpa);
+            for (items) |*item| item.* = try decode(reader, info.child, gpa_);
             break :blk items;
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -349,9 +350,9 @@ fn terminateBuffer(buffer: []u8, len: usize) [:0]u8 {
 }
 
 // 浏览器数据超过初始缓冲区时，按实际长度分配后重新读取。
-fn readFromJs(gpa: Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
-    const large = try gpa.alloc(u8, len + 1);
-    errdefer gpa.free(large);
+fn readFromJs(gpa_: Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
+    const large = try gpa_.alloc(u8, len + 1);
+    errdefer gpa_.free(large);
     var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const key = webKey(&keyBuffer, path);
     return switch (try web.storage.load(key, large[0..len])) {
@@ -362,5 +363,5 @@ fn readFromJs(gpa: Allocator, path: [:0]const u8, len: usize) ![:0]u8 {
 
 // 同一站点的不同游戏通过固定名称区分存档。
 fn webKey(buffer: []u8, path: [:0]const u8) [:0]u8 {
-    return memory.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
+    return zhu.formatZ(buffer, "{s}/{s}", .{ dataPath, path });
 }

@@ -1,13 +1,13 @@
 const std = @import("std");
+// 应用直接使用同一版本的 Sokol 构建工具。
+pub const sokol = @import("sokol");
+
 const linuxSdk = @import("sdk/linux.zig");
 const macosSdk = @import("sdk/macos.zig");
 const iosSdk = @import("sdk/ios.zig");
 const androidSdk = @import("sdk/android.zig");
 const webSdk = @import("sdk/web.zig");
 const windowsSdk = @import("sdk/windows.zig");
-
-// 应用直接使用同一版本的 Sokol 构建工具。
-pub const sokol = @import("sokol");
 
 // 每次构建只选择一种字体模式。
 pub const FontMode = linuxSdk.FontMode;

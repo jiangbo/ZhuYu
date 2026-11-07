@@ -1,7 +1,10 @@
 //! Windows 平台接口，字体实现放在内部模块中。
 const std = @import("std");
+
 const dynamic = @import("../text.zig").dynamic;
 const assert = std.debug.assert;
+
+pub fn setup(_: std.mem.Allocator) void {}
 
 // 按 Windows ABI 声明，x86 使用 stdcall，x64 和 ARM64 使用各自的系统调用约定。
 pub extern "imm32" fn ImmDisableIME(i32) callconv(.winapi) std.os.windows.BOOL;

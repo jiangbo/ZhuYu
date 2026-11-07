@@ -2,12 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
 const options = @import("options");
+const root = @import("root");
 
 const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
 const audio = @import("audio.zig");
 const camera = @import("camera.zig");
-const memory = @import("internal/memory.zig");
 const text = @import("text.zig");
 
 pub const Event = sk.app.Event;
@@ -33,7 +33,6 @@ pub var size: zhu.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑�
 pub var viewRect: zhu.Rect = undefined;
 pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
 var info: Option = undefined; // 当前窗口配置，由 run 设置。
-pub var io: std.Io = undefined; // 加载资源时使用的 IO
 
 // 根据编译目标选择窗口及字体共用的平台实现。
 pub const platform = switch (builtin.os.tag) {
@@ -51,7 +50,12 @@ pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
     if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
 }
 
-const root = @import("root");
+var allocator: std.mem.Allocator = undefined;
+
+pub fn setup(gpa: std.mem.Allocator) void {
+    platform.setup(gpa);
+    allocator = gpa;
+}
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
 pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
@@ -78,7 +82,7 @@ fn createDesc(title: [:0]const u8, s: zhu.Vector, o: Option) sk.app.Desc {
         .event_cb = windowEvent,
         .frame_cb = windowFrame,
         .cleanup_cb = windowDeinit,
-        .allocator = memory.sokolAllocator(sk.app.Allocator),
+        .allocator = assets.sokolAllocator(sk.app.Allocator),
         .high_dpi = true,
         .logger = .{ .func = sk.log.func },
     };
@@ -89,11 +93,11 @@ export fn windowInit() void {
     sk.gfx.setup(.{
         .environment = sk.glue.environment(),
         .logger = .{ .func = sk.log.func },
-        .allocator = memory.sokolAllocator(sk.gfx.Allocator),
+        .allocator = assets.sokolAllocator(sk.gfx.Allocator),
     });
-    assets.init(io);
+    assets.init();
     zhu.random.init(sk.time.now());
-    call(root, "init", .{memory.allocator});
+    call(root, "init", .{allocator});
 }
 
 // 本帧窗口尺寸是否变化，供游戏读取，帧末清除。
@@ -244,7 +248,7 @@ export fn windowFrame() void {
 }
 
 export fn windowDeinit() void {
-    call(root, "deinit", .{memory.allocator});
+    call(root, "deinit", .{allocator});
     audio.deinit();
     assets.deinit();
     sk.gfx.shutdown();
@@ -256,10 +260,6 @@ pub fn dpi() f32 {
     const bufferScale = sk.app.dpiScale();
     if (!builtin.abi.isAndroid()) return bufferScale;
     return bufferScale * platform.density();
-}
-
-pub fn timestamp() std.Io.Timestamp {
-    return std.Io.Timestamp.now(io, .real);
 }
 
 pub const showCursor = sk.app.showMouse;

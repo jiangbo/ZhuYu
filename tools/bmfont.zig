@@ -1,8 +1,10 @@
 const std = @import("std");
+const text = @import("text").static;
+
+const fontChars = @import("chars.zig");
+
 const Build = std.Build;
 const Dependency = Build.Dependency;
-const text = @import("text").static;
-const fontChars = @import("chars.zig");
 
 // BMFont 使用字体文件及其 Windows 字体名称，原文可来自文件或目录。
 pub const Options = struct {

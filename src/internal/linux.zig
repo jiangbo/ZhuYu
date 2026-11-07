@@ -1,9 +1,10 @@
 //! Linux 平台字体实现，构建和运行都不依赖 C 头文件。
 //! FreeType 对象由库分配；这里只声明读取字段所需的结构体前缀。
-
 const std = @import("std");
+
 const dynamic = @import("../text.zig").dynamic;
-const memory = @import("memory.zig");
+
+pub fn setup(_: std.mem.Allocator) void {}
 
 // Linux 系统字体的单例状态，公共图集由 text.dynamic 管理。
 pub const font = struct {
@@ -18,20 +19,24 @@ pub const font = struct {
         defer FcConfigDestroy(config);
         if (FT_Init_FreeType(&library) != 0) @panic("font library unavailable");
 
-        const pattern = FcPatternCreate() orelse memory.oom();
+        const pattern = FcPatternCreate() orelse
+            @panic("fontconfig: failed to create font pattern");
         defer FcPatternDestroy(pattern);
         if (FcPatternAddString(pattern, "family", option.family.ptr) == 0)
-            memory.oom();
+            @panic("fontconfig: failed to add font family");
         // 默认按简体中文匹配，避免优先选到日文字形。
-        if (FcPatternAddString(pattern, "lang", "zh-cn") == 0) memory.oom();
+        if (FcPatternAddString(pattern, "lang", "zh-cn") == 0)
+            @panic("fontconfig: failed to add font language");
         // Fontconfig 的普通和加粗字重分别是 80、200。
         const weight: c_int = switch (option.weight) {
             .normal => 80,
             .bold => 200,
         };
-        if (FcPatternAddInteger(pattern, "weight", weight) == 0) memory.oom();
+        if (FcPatternAddInteger(pattern, "weight", weight) == 0)
+            @panic("fontconfig: failed to add font weight");
         // 0 对应 FcMatchPattern，应用查询条件的配置规则。
-        if (FcConfigSubstitute(config, pattern, 0) == 0) memory.oom();
+        if (FcConfigSubstitute(config, pattern, 0) == 0)
+            @panic("fontconfig: failed to apply font rules");
         FcDefaultSubstitute(pattern);
 
         var result: FcResult = undefined;
@@ -45,8 +50,11 @@ pub const font = struct {
         if (FcPatternGetString(matched, "file", 0, &path) != 0 or
             FcPatternGetInteger(matched, "index", 0, &index) != 0)
             @panic("font file unavailable");
-        if (FT_New_Face(library, @ptrCast(path), index, &face) != 0)
-            @panic("font open failed");
+        const err = FT_New_Face(library, @ptrCast(path), index, &face);
+        if (err != 0) std.debug.panic(
+            "freetype: failed to open font {s}, index {}, error {}",
+            .{ std.mem.span(path), index, err },
+        );
         // FT_ENCODING_UNICODE 使用四字节标签 'unic'。
         if (FT_Select_Charmap(face, 0x756e6963) != 0)
             @panic("font unicode unavailable");
