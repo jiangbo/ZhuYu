@@ -172,8 +172,7 @@ pub fn framesX(comptime count: u8, size: Vector2, d: f32) [count]Frame {
     var result: [count]Frame = undefined;
     for (&result, 0..) |*frame, i| {
         const index: f32 = @floatFromInt(i);
-        frame.offset = .xy(index * size.x, 0);
-        frame.duration = d;
+        frame.* = .{ .offset = .xy(index * size.x, 0), .duration = d };
     }
     return result;
 }

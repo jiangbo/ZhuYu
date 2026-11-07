@@ -333,7 +333,7 @@ pub const static = struct {
                 }
             }.compare);
             if (index) |c| return .{ .page = i, .char = &page.chars[c] };
-            break;
+            // 各页码位范围可能重叠，未找到时继续检查后续页。
         }
         return null;
     }
