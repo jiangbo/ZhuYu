@@ -31,7 +31,7 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
             }
         };
         pub const Patch = union(enum) { add: Entry, sub: Entry };
-        pub const Move = enum { merge, clear, swap };
+        pub const Move = enum { move, merge, clear, swap };
         pub const Done = struct { ok: bool, patches: []const Patch };
         const Try = struct {
             buffer: ?*std.ArrayList(Patch) = null,
@@ -72,8 +72,9 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
             return false;
         }
 
-        pub fn get(self: *@This(), index: usize) ?Stack {
-            return if (self.getPtr(index)) |ptr| ptr.* else null;
+        pub fn get(self: *const @This(), index: usize) ?Stack {
+            const stack = self.stacks[index];
+            return if (stack.count == 0) null else stack;
         }
 
         pub fn getPtr(self: *@This(), index: usize) ?*Stack {
@@ -113,7 +114,7 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
             const empty = target.count == 0;
             if (empty or !std.meta.eql(source.item, target.item)) {
                 std.mem.swap(Stack, source, target);
-                return .swap;
+                return if (empty) .move else .swap;
             }
 
             const limit = limitOf(source.item);
