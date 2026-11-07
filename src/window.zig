@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
 const options = @import("options");
+const root = @import("root");
 
 const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
@@ -50,8 +51,6 @@ pub const platform = switch (builtin.os.tag) {
 pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
     if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
 }
-
-const root = @import("root");
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
 pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {

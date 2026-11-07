@@ -1,7 +1,7 @@
 //! Linux 平台字体实现，构建和运行都不依赖 C 头文件。
 //! FreeType 对象由库分配；这里只声明读取字段所需的结构体前缀。
-
 const std = @import("std");
+
 const dynamic = @import("../text.zig").dynamic;
 const memory = @import("memory.zig");
 

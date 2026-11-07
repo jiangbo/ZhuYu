@@ -1,9 +1,11 @@
 //! 使用跨平台 fontbm 生成普通位图字体。
 const std = @import("std");
-const Build = std.Build;
-const Dependency = Build.Dependency;
+
 const bmfont = @import("bmfont.zig");
 const fontChars = @import("chars.zig");
+
+const Build = std.Build;
+const Dependency = Build.Dependency;
 
 // 字体直接从文件读取，不需要安装字体或提供系统字体名称。
 pub const Options = struct {

@@ -1,8 +1,9 @@
 //! 一次生成全部 Tiled 瓦片集和地图，共用同一份瓦片集顺序。
 const std = @import("std");
+const zhu = @import("zhu");
+
 const Build = std.Build;
 const Dependency = Build.Dependency;
-const zhu = @import("zhu");
 const tiled = zhu.extend.tiled;
 
 pub const Options = struct {

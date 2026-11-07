@@ -1,8 +1,10 @@
 const std = @import("std");
+const text = @import("text").static;
+
+const fontChars = @import("chars.zig");
+
 const Build = std.Build;
 const Dependency = Build.Dependency;
-const text = @import("text").static;
-const fontChars = @import("chars.zig");
 
 // 游戏配置字体生成，路径以游戏项目为起点。
 pub const Options = struct {
