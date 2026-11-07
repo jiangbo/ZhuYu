@@ -60,7 +60,7 @@ pub fn buildWeb(
                 "-Wl,--export=__em_js__zhu_file_load",
                 "-Wl,--export=__em_js__zhu_file_save",
                 "-Wl,--export=__em_lib_deps_zhu_storage",
-                "-Wl,--export=zhu_fetch_complete",
+                "-Wl,--export=zhu_fetch_done",
                 "-Wl,--export=zhu_fetch_alloc",
             },
             options.extra_args,

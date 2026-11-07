@@ -2,11 +2,11 @@ const std = @import("std");
 const options = @import("options");
 const sk = @import("sokol");
 
+const core = @import("internal/core.zig");
 const assets = @import("assets.zig");
 const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const batch = @import("batch.zig");
-const memory = @import("internal/memory.zig");
 const window = @import("window.zig");
 
 const Image = graphics.Image;
@@ -66,7 +66,7 @@ pub fn drawNumber(number: anytype, pos: Vector2, option: Option) void {
 
 pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2, o: Option) void {
     var buffer: [1024]u8 = undefined;
-    draw(memory.format(&buffer, fmt, args), pos, o);
+    draw(zhu.format(&buffer, fmt, args), pos, o);
 }
 
 const Utf8View = std.unicode.Utf8View;
@@ -370,6 +370,8 @@ pub const dynamic = struct {
         rowHeight: i32 = 0,
     };
 
+    var gpa: std.mem.Allocator = undefined;
+
     pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
     var opened: bool = false; // 系统字体是否已经初始化。
     var fontOption: dynamic.Option = undefined; // 保存初始化配置，使用时直接读取。
@@ -381,9 +383,11 @@ pub const dynamic = struct {
     var pixels: []u8 = undefined; // 单线程生成字形时复用，容量不足才扩容。
 
     // 初始化所选平台的系统字体和度量，不提前生成字形像素。
-    pub fn init(option: dynamic.Option) void {
+    // 分配器管理字形缓存和公共像素缓冲，平台内部内存由平台管理。
+    pub fn init(gpa_: std.mem.Allocator, option: dynamic.Option) void {
         std.debug.assert(!opened);
         std.debug.assert(option.resizeDelay >= 0);
+        gpa = gpa_;
         glyphs = .empty;
         pixels = &.{};
         // 名称由平台填入；没有取得名称时显示请求的字体族。
@@ -429,7 +433,7 @@ pub const dynamic = struct {
         const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
         const len: usize = @intFromFloat(side * side * 4);
         if (pixels.len < len)
-            pixels = memory.allocator.realloc(pixels, len) catch memory.oom();
+            pixels = gpa.realloc(pixels, len) catch core.oom();
         // 重置装箱位置，保留上传缓冲及本帧已使用的上传区域。
         glyphState.layer = fontOption.atlas.layer;
         glyphState.x, glyphState.y = .{ 1, 1 };
@@ -455,8 +459,8 @@ pub const dynamic = struct {
     pub fn deinit() void {
         if (!opened) return;
         assets.gpu.destroyBuffer(glyphState.upload);
-        glyphs.deinit(memory.allocator);
-        memory.allocator.free(pixels);
+        glyphs.deinit(gpa);
+        gpa.free(pixels);
         backend.close();
         stats = .{};
         opened = false;
@@ -481,7 +485,7 @@ pub const dynamic = struct {
         const size = char.rect.size;
         const len: usize = @intFromFloat((size.x + 2) * (size.y + 2) * 4);
         if (len > pixels.len) {
-            pixels = memory.allocator.realloc(pixels, len) catch memory.oom();
+            pixels = gpa.realloc(pixels, len) catch core.oom();
             char = backend.pixels(code, pixels);
             // 按重试返回的尺寸确认缓冲区已经足够。
             const next = char.rect.size;
@@ -497,7 +501,7 @@ pub const dynamic = struct {
             },
             .advance = char.advance * factor,
         };
-        glyphs.put(memory.allocator, code, glyph) catch memory.oom();
+        glyphs.put(gpa, code, glyph) catch core.oom();
         stats.count = glyphs.count();
         return glyph;
     }

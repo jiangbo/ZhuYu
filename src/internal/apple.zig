@@ -2,7 +2,12 @@
 const std = @import("std");
 
 const dynamic = @import("../text.zig").dynamic;
-const memory = @import("memory.zig");
+
+var gpa: std.mem.Allocator = undefined;
+
+pub fn setup(gpa_: std.mem.Allocator) void {
+    gpa = gpa_;
+}
 
 pub const font = struct {
     var base: *anyopaque = undefined; // 保存所选字体，字号变化时复制。
@@ -64,12 +69,12 @@ pub const font = struct {
         };
     }
 
-    // 释放 CoreFoundation 对象及复用的像素内存。
+    // 释放 CoreFoundation 字体对象及像素缓冲区。
     pub fn close() void {
         if (current) |value| CFRelease(value);
         current = null;
         CFRelease(base);
-        memory.allocator.free(alpha);
+        gpa.free(alpha);
         alpha = &.{};
     }
 
@@ -84,11 +89,14 @@ pub const font = struct {
         const keys = [_]*const anyopaque{kCTFontAttributeName};
         const values = [_]*const anyopaque{current.?};
         const attrs = CFDictionaryCreate(null, &keys, //
-            &values, 1, null, null) orelse memory.oom();
+            &values, 1, null, null) orelse
+            @panic("corefoundation: failed to create font attributes");
         defer CFRelease(attrs);
-        const styled = CFAttributedStringCreate(null, text, attrs) orelse memory.oom();
+        const styled = CFAttributedStringCreate(null, text, attrs) orelse
+            @panic("corefoundation: failed to create styled font text");
         defer CFRelease(styled);
-        const line = CTLineCreateWithAttributedString(styled) orelse memory.oom();
+        const line = CTLineCreateWithAttributedString(styled) orelse
+            @panic("coretext: failed to create font line");
         defer CFRelease(line);
         // 使用系统的字形图像边界，也覆盖没有轮廓路径的字形。
         var bounds = CTLineGetImageBounds(line, null);
@@ -119,7 +127,8 @@ pub const font = struct {
         const len = stride * (height + 2);
         if (buffer.len < len * 4) return char;
         if (alpha.len < len)
-            alpha = memory.allocator.realloc(alpha, len) catch memory.oom();
+            alpha = gpa.realloc(alpha, len) catch
+                @panic("font: out of memory growing alpha buffer");
         @memset(alpha[0..len], 0);
         // 7 是仅含 Alpha 的位图，不涉及预乘 RGB 或通道顺序。
         const context = CGBitmapContextCreate(alpha.ptr, //
@@ -130,6 +139,7 @@ pub const font = struct {
         CGContextSetShouldSmoothFonts(context, false);
         CGContextSetTextPosition(context, 1 - left, 1 - bottom);
         CTLineDraw(line, context);
+        // TODO: 引擎支持预乘 Alpha 后，考虑直接生成 RGBA 数据。
         @memset(buffer[0 .. len * 4], 0);
         // Quartz 的位图首行对应顶部，基线定位仍使用向上的坐标。
         for (1..height + 1) |y| {
@@ -146,7 +156,8 @@ pub const font = struct {
 // UTF-8 编码编号为 kCFStringEncodingUTF8，CoreFoundation 复制输入字节。
 fn string(text: []const u8) *anyopaque {
     return CFStringCreateWithBytes(null, text.ptr, //
-        @intCast(text.len), 0x08000100, false) orelse memory.oom();
+        @intCast(text.len), 0x08000100, false) orelse
+        @panic("corefoundation: failed to create UTF-8 string");
 }
 
 // Apple 64 位平台的 CGFloat 是 double，CFIndex 是有符号指针宽度。

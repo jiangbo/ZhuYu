@@ -3,7 +3,12 @@ const root = @import("root");
 const sk = @import("sokol");
 
 const dynamic = @import("../text.zig").dynamic;
-const memory = @import("memory.zig");
+
+var gpa: std.mem.Allocator = undefined;
+
+pub fn setup(gpa_: std.mem.Allocator) void {
+    gpa = gpa_;
+}
 
 // JNI 固定槽位，只声明本模块调用的方法，其余位置保留指针大小。
 const Jni = extern struct {
@@ -247,13 +252,13 @@ pub fn dataPath() []const u8 {
 
 // 初始化安卓运行环境，再调用游戏入口取得窗口配置。
 export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {
-    const gpa = std.heap.c_allocator;
-    threaded = .init(gpa, .{});
+    const gpa_ = std.heap.c_allocator;
+    threaded = .init(gpa_, .{});
 
     // 只供 main 初始化阶段使用。
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = std.heap.ArenaAllocator.init(gpa_);
     defer arena.deinit();
-    var environ_map = std.process.Environ.Map.init(gpa);
+    var environ_map = std.process.Environ.Map.init(gpa_);
     defer environ_map.deinit();
 
     const result = root.main(.{
@@ -262,7 +267,7 @@ export fn sokol_main(_: c_int, _: ?*?[*:0]u8) sk.app.Desc {
             .environ = .empty,
         },
         .arena = &arena,
-        .gpa = gpa,
+        .gpa = gpa_,
         .io = threaded.io(),
         .environ_map = &environ_map,
         .preopens = .empty,
@@ -431,7 +436,7 @@ pub const font = struct {
             if (jni.CallObjectMethodA(e, face, get, null)) |selected| {
                 const count = jni.GetStringLength(e, selected);
                 const chars = jni.GetStringChars(e, selected, null) orelse
-                    memory.oom();
+                    @panic("android font: failed to get font name characters");
                 defer jni.ReleaseStringChars(e, selected, chars);
                 // 直接从 JNI 借用的 UTF-16 写入名称缓冲，不分配中间字符串。
                 const selectedName = chars[0..@intCast(count)];
@@ -579,7 +584,8 @@ pub const font = struct {
         rowBytes = @intCast(stride);
         const len = rowBytes * @as(usize, @intCast(bitmapHeight));
         if (alpha.len < len)
-            alpha = memory.allocator.realloc(alpha, len) catch memory.oom();
+            alpha = gpa.realloc(alpha, len) catch
+                @panic("android font: out of memory growing alpha buffer");
     }
 
     // 释放所有全局引用及缓冲区，再按需解除线程关联。
@@ -596,7 +602,7 @@ pub const font = struct {
         bitmapWidth = 0;
         bitmapHeight = 0;
         rowBytes = 0;
-        memory.allocator.free(alpha);
+        gpa.free(alpha);
         alpha = &.{};
         if (attached) {
             if (vm.*.DetachCurrentThread(vm) != 0)

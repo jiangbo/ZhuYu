@@ -3,7 +3,6 @@ const sk = @import("sokol");
 const options = @import("options");
 
 const assets = @import("assets.zig");
-const memory = @import("internal/memory.zig");
 const vorbis = @import("internal/vorbis.zig");
 
 const Allocator = std.mem.Allocator;
@@ -25,7 +24,7 @@ pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
     }
     if (desc.logger.func == null) desc.logger.func = sk.log.func;
     if (desc.allocator.alloc_fn == null and desc.allocator.free_fn == null) {
-        desc.allocator = memory.sokolAllocator(sk.audio.Allocator);
+        desc.allocator = assets.sokolAllocator(sk.audio.Allocator);
     }
 
     // 启动音频线程
