@@ -415,27 +415,23 @@ pub const sound = struct {
         cache.deinit(gpa);
     }
 
-    pub fn get(assetId: Id) ?Source {
-        return cache.get(assetId) orelse null;
-    }
-
     pub fn load(path: Path, handler: Handler) ?Source {
         const assetId = id(path);
         const entry = cache.getOrPut(gpa, assetId) catch oom();
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
-        // 首次加载统一通过回调交付，缓存命中直接返回。
+        // 同步完成返回资源，异步完成通过回调交付。
         file.load(path, assetId, struct {
-            fn callback(index: u64, _: file.Mode, resp: Response) void {
+            fn callback(index: u64, mode: file.Mode, resp: Response) void {
                 const source = Source.init(gpa, resp.data) catch |err|
                     std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
-                handler(loadedId, source);
+                if (mode == .async) handler(loadedId, source);
             }
         }.callback);
-        return null;
+        return cache.get(assetId).?;
     }
 };
 

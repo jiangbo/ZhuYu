@@ -196,13 +196,12 @@ pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
     opt.left = std.math.clamp(opt.left, 0.0, 1.0);
     opt.right = std.math.clamp(opt.right, 0.0, 1.0);
     const id = assets.id(path);
-    const source = assets.sound.get(id);
+    const source = assets.sound.load(path, soundLoaded);
     mutex.lockUncancelable(assets.io);
     const index = allocSoundIndex();
     sounds[index] = .{ .assetId = id, .source = source, .option = opt };
     mutex.unlock(assets.io);
 
-    if (source == null) _ = assets.sound.load(path, soundLoaded);
     return index;
 }
 
