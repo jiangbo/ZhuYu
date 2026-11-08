@@ -82,10 +82,6 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
     return entry.value_ptr.*;
 }
 
-pub fn loadSound(path: Path, o: audio.Sound.Option) audio.Sound {
-    return sound.load(path, o);
-}
-
 pub fn loadMusic(path: Path, loop: bool) ?audio.MusicSource {
     return music.load(path, loop);
 }
@@ -405,34 +401,41 @@ pub const view = struct {
     }
 };
 
-const sound = struct {
-    var cache: std.AutoHashMapUnmanaged(Id, audio.Sound) = .empty;
+pub const sound = struct {
+    pub const Source = audio.SoundSource;
+    pub const Handler = fn (Id, Source) void;
+
+    var cache: std.AutoHashMapUnmanaged(Id, ?Source) = .empty;
 
     fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |value| value.deinit(gpa);
+        while (iterator.next()) |value| {
+            if (value.*) |source| source.deinit(gpa);
+        }
         cache.deinit(gpa);
     }
 
-    fn load(path: Path, option: audio.Sound.Option) audio.Sound {
-        const entry = cache.getOrPut(gpa, id(path)) catch oom();
-        // 加载期间再次收到的同音效播放请求不排队、不补播。
-        if (entry.found_existing) return entry.value_ptr.*;
-
-        entry.value_ptr.* = .{ .option = option };
-        // 同步回调只解码，由当前调用负责播放并返回槽位。
-        file.load(path, 0, handler);
-        return cache.get(id(path)).?;
+    pub fn get(assetId: Id) ?Source {
+        return cache.get(assetId) orelse null;
     }
 
-    fn handler(_: u64, mode: file.Mode, resp: Response) void {
-        const decoded = audio.Sound.init(gpa, resp.data) catch |err|
-            std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
+    pub fn load(path: Path, handler: Handler) ?Source {
+        const assetId = id(path);
+        const entry = cache.getOrPut(gpa, assetId) catch oom();
+        if (entry.found_existing) return entry.value_ptr.*;
 
-        const soundCache = cache.getPtr(id(resp.path)).?;
-        const option = soundCache.option;
-        soundCache.* = decoded;
-        if (mode == .async) _ = audio.playSoundOption(resp.path, option);
+        entry.value_ptr.* = null;
+        // 首次加载统一通过回调交付，缓存命中直接返回。
+        file.load(path, assetId, struct {
+            fn callback(index: u64, _: file.Mode, resp: Response) void {
+                const source = Source.init(gpa, resp.data) catch |err|
+                    std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
+                const loadedId: Id = @intCast(index);
+                cache.getPtr(loadedId).?.* = source;
+                handler(loadedId, source);
+            }
+        }.callback);
+        return null;
     }
 };
 

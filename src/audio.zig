@@ -17,7 +17,7 @@ pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
     if (desc.num_channels == 0) desc.num_channels = 2;
     std.debug.assert(desc.num_channels == 1 or desc.num_channels == 2);
     sounds = soundBuffer;
-    for (sounds) |*sound| sound.state = .stopped;
+    for (sounds) |*sound| sound.* = .{};
 
     if (desc.stream_cb == null and desc.stream_userdata_cb == null) {
         desc.stream_cb = audioCallback;
@@ -151,16 +151,20 @@ pub const Sound = struct {
         left: f32 = 1,
         right: f32 = 1,
     };
-    samples: []const f32 = &.{},
+    source: ?SoundSource = null,
     option: Option = .{},
+    assetId: ?assets.Id = null,
 
     index: usize = 0,
-    channels: u8 = 0,
-    state: StateEnum = .playing,
+};
+
+pub const SoundSource = struct {
+    samples: []const f32,
+    channels: u8,
 
     /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
     /// 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
-    pub fn init(gpa: Allocator, data: []const u8) !Sound {
+    pub fn init(gpa: Allocator, data: []const u8) !SoundSource {
         var player = try vorbis.Player.init(gpa, data);
         defer player.deinit();
 
@@ -173,7 +177,7 @@ pub const Sound = struct {
     }
 
     /// 由持有 PCM 的缓存调用；播放槽位仅借用采样，不负责释放。
-    pub fn deinit(self: Sound, gpa: Allocator) void {
+    pub fn deinit(self: SoundSource, gpa: Allocator) void {
         gpa.free(self.samples);
     }
 };
@@ -188,36 +192,40 @@ pub fn playSound(path: [:0]const u8) void {
 pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
     if (!sk.audio.isvalid()) return null;
 
-    const left = std.math.clamp(option.left, 0.0, 1.0);
-    const right = std.math.clamp(option.right, 0.0, 1.0);
-    const sound = assets.loadSound(path, .{
-        .loop = option.loop,
-        .left = left,
-        .right = right,
-    });
-    if (sound.channels == 0) return null;
+    var opt = option;
+    opt.left = std.math.clamp(opt.left, 0.0, 1.0);
+    opt.right = std.math.clamp(opt.right, 0.0, 1.0);
+    const id = assets.id(path);
+    const source = assets.sound.get(id);
+    mutex.lockUncancelable(assets.io);
+    const index = allocSoundIndex();
+    sounds[index] = .{ .assetId = id, .source = source, .option = opt };
+    mutex.unlock(assets.io);
 
+    if (source == null) _ = assets.sound.load(path, soundLoaded);
+    return index;
+}
+
+/// 资产层在主线程通知就绪，启动等待同一资源的全部音效。
+fn soundLoaded(assetId: assets.Id, source: SoundSource) void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
-
-    const index = allocSoundIndex();
-    sounds[index] = .{
-        .samples = sound.samples,
-        .channels = sound.channels,
-        .option = .{ .loop = option.loop, .left = left, .right = right },
-    };
-    return index;
+    for (sounds) |*sound| {
+        if (sound.source == null and sound.assetId == assetId) {
+            sound.source = source;
+        }
+    }
 }
 
 pub fn stopSounds() void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
-    for (sounds) |*s| s.state = .stopped;
+    for (sounds) |*sound| sound.* = .{};
 }
 
 fn allocSoundIndex() usize {
     for (sounds, 0..) |*sound, index| {
-        if (sound.state == .stopped) return index;
+        if (sound.assetId == null) return index;
     }
     @panic("too many audio sound");
 }
@@ -258,8 +266,8 @@ fn fillSound(buffer: []f32) void {
     // 填充声音
     for (sounds) |*sound| {
         var len: usize = 0;
-        if (sound.state != .playing) continue;
-        while (len < buffer.len and sound.state == .playing) {
+        if (sound.source == null) continue;
+        while (len < buffer.len and sound.source != null) {
             len += mixSamples(buffer[len..], sound, volume);
         }
     }
@@ -268,15 +276,16 @@ fn fillSound(buffer: []f32) void {
 // 按帧应用左右音量，单声道输出取左右平均值。
 fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
     const channels: usize = @intCast(sk.audio.channels());
-    const source = sound.samples[sound.index..];
-    const frames = @min(buffer.len / channels, source.len / sound.channels);
+    const source = sound.source.?;
+    const samples = source.samples[sound.index..];
+    const frames = @min(buffer.len / channels, samples.len / source.channels);
     const left = volume * sound.option.left;
     const right = volume * sound.option.right;
 
     for (0..frames) |frame| {
-        const index = frame * sound.channels;
-        const l = source[index] * left;
-        const r = source[index + sound.channels - 1] * right;
+        const index = frame * source.channels;
+        const l = samples[index] * left;
+        const r = samples[index + source.channels - 1] * right;
         if (channels == 1) {
             buffer[frame] += (l + r) * 0.5;
         } else {
@@ -284,9 +293,9 @@ fn mixSamples(buffer: []f32, sound: *Sound, volume: f32) usize {
             buffer[frame * 2 + 1] += r;
         }
     }
-    sound.index += frames * sound.channels;
-    if (sound.index == sound.samples.len) {
-        if (sound.option.loop) sound.index = 0 else sound.state = .stopped;
+    sound.index += frames * source.channels;
+    if (sound.index == source.samples.len) {
+        if (sound.option.loop) sound.index = 0 else sound.* = .{};
     }
     return frames * channels;
 }
