@@ -1,13 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
-const options = @import("options");
 
 const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
-const fetch = @import("internal/fetch.zig");
+pub const file = @import("internal/file.zig");
 const core = @import("internal/core.zig");
 
 const oom = core.oom;
@@ -31,12 +30,7 @@ pub fn setup(io_: std.Io, gpa: std.mem.Allocator) std.mem.Allocator {
 
 // 在图形环境建立后初始化资源加载和默认采样器。
 pub fn init() void {
-    // 开启 append 时只读取程序尾部的资源包，否则启动外部资源加载器。
-    if (options.append) {
-        file.init() catch |err| {
-            std.debug.panic("asset pack init failed: {}", .{err});
-        };
-    } else fetch.setup(io, allocator);
+    file.init(io, allocator);
 
     sampler.init();
 }
@@ -54,7 +48,7 @@ pub fn beginDraw() void {
 
 // 推进异步加载，并在主线程执行资源回调。
 pub fn update() void {
-    if (!options.append) fetch.dowork();
+    file.update();
 }
 
 pub fn deinit() void {
@@ -63,7 +57,6 @@ pub fn deinit() void {
     view.deinit();
     sound.deinit();
     music.deinit();
-    if (!options.append) fetch.shutdown();
     file.deinit();
     gpu.deinit();
     sk.gfx.destroySampler(sampler.nearest);
@@ -100,10 +93,8 @@ pub fn loadMusic(path: Path, loop: bool) ?audio.MusicSource {
     return music.load(path, loop);
 }
 
-pub const Id = u32;
-pub fn id(name: []const u8) Id {
-    return std.hash.Fnv1a_32.hash(name);
-}
+pub const Id = file.Id;
+pub const id = file.id;
 
 pub fn loadAtlas(source: graphics.Atlas, filter: Filter) void {
     _ = atlas.load(source, 0, filter);
@@ -312,8 +303,8 @@ pub const atlas = struct {
         };
     }
 
-    fn handler(response: Response) void {
-        const pageIndex: PageIndex = @bitCast(response.index);
+    fn handler(index: u64, response: Response) void {
+        const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
         const img = decoder.load(allocator, response.data) catch |err| {
@@ -343,12 +334,12 @@ pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     _ = file.load(path, handle, struct {
-        fn callback(resp: Response) void {
+        fn callback(index: u64, resp: Response) void {
             const icon = decoder.loadIcon(allocator, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
             defer allocator.free(icon.data);
-            handler(resp.index, icon);
+            handler(index, icon);
         }
     }.callback);
 }
@@ -392,12 +383,12 @@ pub const view = struct {
         cache = .empty;
     }
 
-    fn handler(resp: Response) void {
+    fn handler(index: u64, resp: Response) void {
         const img = decoder.load(allocator, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
         defer allocator.free(img.data);
-        const imageView: sk.gfx.View = .{ .id = @intCast(resp.index) };
+        const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
         sk.gfx.initView(imageView, .{ .texture = .{
             .image = makeImage(img.width, img.height, 1, img.data),
@@ -441,14 +432,14 @@ const sound = struct {
         return entry.value_ptr.*;
     }
 
-    fn handler(resp: Response) void {
+    fn handler(index: u64, resp: Response) void {
         const decoded = audio.Sound.init(allocator, resp.data) catch |err|
             std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
         soundCache.* = decoded;
-        if (resp.index == 0) _ = audio.playSoundOption(resp.path, option);
+        if (index == 0) _ = audio.playSoundOption(resp.path, option);
     }
 };
 
@@ -464,12 +455,12 @@ const music = struct {
         return null;
     }
 
-    fn handler(resp: Response) void {
+    fn handler(index: u64, resp: Response) void {
         const rate: u32 = @intCast(sk.audio.sampleRate());
         const source = audio.MusicSource.init(allocator, resp.data, rate) catch |err|
             std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
         cache.getPtr(id(resp.path)).?.* = source;
-        audio.playMusicOption(resp.path, resp.index == 1);
+        audio.playMusicOption(resp.path, index == 1);
     }
 
     pub fn deinit() void {
@@ -481,152 +472,7 @@ const music = struct {
     }
 };
 
-pub const Response = struct {
-    index: u64 = undefined,
-    path: [:0]const u8,
-    data: []const u8 = &.{},
-};
-
-pub const file = struct {
-    pub const Data = struct { bytes: []const u8, owned: bool = false };
-
-    const FileState = enum { init, loading, loaded, handled };
-    const Handler = *const fn (Response) void;
-
-    const FileCache = struct {
-        state: FileState = .init,
-        index: u64 = 0,
-        data: Data = .{ .bytes = &.{} },
-        handler: Handler = undefined,
-    };
-
-    var cache: std.AutoHashMapUnmanaged(Id, FileCache) = .empty;
-    var mapping: ?std.Io.File.MemoryMap = null; // 原始资源切片的共同所有者。
-
-    // 直接映射当前程序，将包内资源登记为已加载的借用数据。
-    fn init() !void {
-        const exe = try std.process.openExecutable(io, .{});
-        errdefer exe.close(io);
-        const stat = try exe.stat(io);
-        var mapped = try exe.createMemoryMap(io, .{
-            .len = @intCast(stat.size),
-            .protection = .{ .read = true },
-            .populate = false,
-        });
-        errdefer mapped.destroy(io);
-        const bytes = mapped.memory;
-        if (!std.mem.endsWith(u8, bytes, "b0b0")) return error.AssetPackNotFound;
-
-        initPack(bytes);
-        mapping = mapped;
-    }
-
-    // 资源模块初始化后调用；切片必须是有效 pack，并保持到资源模块销毁。
-    // 只借用包内数据，不复制或释放调用方提供的切片。
-    pub fn initPack(bytes: []const u8) void {
-        std.debug.assert(std.mem.endsWith(u8, bytes, "b0b0"));
-        const footer = bytes[bytes.len - 12 ..];
-        const count = zhu.readInt(u32, footer[0..4]);
-        const size = zhu.readInt(u32, footer[4..8]);
-        const start = bytes.len - size;
-        const indexStart = bytes.len - 12 - count * 12;
-        cache.ensureUnusedCapacity(allocator, count) catch oom();
-        for (0..count) |i| {
-            const entry = bytes[indexStart + i * 12 ..][0..12];
-            const hash = zhu.readInt(u32, entry[0..4]);
-            const offset = start + zhu.readInt(u32, entry[4..8]);
-            const length = zhu.readInt(u32, entry[8..12]);
-            cache.putAssumeCapacity(hash, .{
-                .state = .loaded,
-                .data = .{ .bytes = bytes[offset..][0..length] },
-            });
-        }
-        std.log.info("loaded asset pack: {} files", .{count});
-    }
-
-    pub fn put(path: Path, data: Data) void {
-        const entry = cache.getOrPut(allocator, id(path)) catch oom();
-        std.debug.assert(!entry.found_existing);
-        entry.value_ptr.* = .{ .state = .loaded, .data = data };
-    }
-
-    pub fn load(path: Path, index: u64, handler: Handler) *FileCache {
-        const entry = cache.getOrPut(allocator, id(path)) catch oom();
-        if (entry.found_existing) {
-            const value = entry.value_ptr;
-            if (value.state == .loaded) {
-                value.index = index;
-                value.handler = handler;
-                handleLoaded(path, value, value.data.bytes.len);
-                return value;
-            }
-            if (value.index != index or value.handler != handler) {
-                std.debug.panic("asset path conflict: {s}", .{path});
-            }
-            return entry.value_ptr;
-        }
-
-        // append 模式缺少资源时立即报错，不再读取外部文件。
-        if (options.append) {
-            std.debug.panic("asset not found in appended pack: {s}", .{path});
-        }
-
-        entry.value_ptr.* = .{ .index = index, .handler = handler };
-
-        std.log.info("loading {s}", .{path});
-        fetch.send(path, callback);
-
-        entry.value_ptr.state = .loading;
-        return entry.value_ptr;
-    }
-
-    // 缓冲区在主线程移交给缓存，后续沿用资源自身的释放流程。
-    fn callback(resp: fetch.Response) void {
-        const data = resp.result catch |err| {
-            const msg = "assets load failed, path: {s}, error: {}";
-            std.debug.panic(msg, .{ resp.path, err });
-        };
-        const path = resp.path;
-        std.log.info("loaded: {s}", .{path});
-
-        const value = cache.getPtr(id(path)).?;
-        value.data = .{ .bytes = resp.buffer, .owned = true };
-        value.state = .loaded;
-        handleLoaded(path, value, data.len);
-    }
-
-    // 原始数据仅在回调期间有效，回调结束后释放自有缓冲区并清空引用。
-    fn handleLoaded(path: Path, value: *FileCache, size: usize) void {
-        const response: Response = .{
-            .index = value.index,
-            .path = path,
-            .data = value.data.bytes[0..size],
-        };
-
-        const owned = value.data.owned;
-        // 回调期间禁止使文件缓存指针失效的操作。
-        cache.lockPointers();
-        defer cache.unlockPointers();
-        value.handler(response);
-        if (owned) allocator.free(value.data.bytes);
-        value.data = .{ .bytes = &.{} };
-        value.state = .handled;
-    }
-
-    pub fn deinit() void {
-        var iterator = cache.valueIterator();
-        while (iterator.next()) |value| {
-            if (value.data.owned) allocator.free(value.data.bytes);
-        }
-        cache.deinit(allocator);
-        // 所有资源使用者销毁后，再释放它们借用的映射内存。
-        if (mapping) |*mapped| {
-            const exe = mapped.file;
-            mapped.destroy(io);
-            exe.close(io);
-        }
-    }
-};
+pub const Response = file.Response;
 
 // 本帧处理的字符数和顶点数。
 pub const FrameStats = struct {
@@ -649,7 +495,7 @@ pub const TotalStats = struct {
 pub fn queryTotalStats() TotalStats {
     return .{
         .image = imageCache.count(),
-        .file = file.cache.count(),
+        .file = file.count(),
         .sound = sound.cache.count(),
         .music = music.cache.count(),
         .vertexCapacity = gpu.vertices.capacity,

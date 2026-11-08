@@ -194,7 +194,7 @@ export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
         \\        if (!response.ok) {
         \\            if (jobs[lane] === job) {
         \\                jobs[lane] = null;
-        \\                _zhu_fetch_done(lane, 0, 1);
+        \\                _zhu_fetch_done(lane, 1);
         \\            }
         \\            return;
         \\        }
@@ -203,11 +203,11 @@ export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
         \\        jobs[lane] = null;
         \\        const out = _zhu_fetch_alloc(lane, data.length);
         \\        HEAPU8.set(data, out);
-        \\        _zhu_fetch_done(lane, data.length, 0);
+        \\        _zhu_fetch_done(lane, 0);
         \\    }).catch(() => {
         \\        if (jobs[lane] !== job) return;
         \\        jobs[lane] = null;
-        \\        _zhu_fetch_done(lane, 0, 3);
+        \\        _zhu_fetch_done(lane, 3);
         \\    });
         \\}
     ).*;
