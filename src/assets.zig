@@ -15,22 +15,22 @@ const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
 const Path = [:0]const u8;
 
-var allocator: std.mem.Allocator = undefined;
+var gpa: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
 pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
 // 配置 IO 和统计分配器，不创建图形资源。
-pub fn setup(io_: std.Io, gpa: std.mem.Allocator) std.mem.Allocator {
+pub fn setup(io_: std.Io, gpa_: std.mem.Allocator) std.mem.Allocator {
     io = io_;
-    counter = core.Counter.init(gpa);
-    allocator = counter.allocator();
-    return allocator;
+    counter = core.Counter.init(gpa_);
+    gpa = counter.allocator();
+    return gpa;
 }
 
 // 在图形环境建立后初始化资源加载和默认采样器。
 pub fn init() void {
-    file.init(io, allocator);
+    file.init(io, gpa);
     sampler.init();
 }
 
@@ -51,8 +51,8 @@ pub fn update() void {
 }
 
 pub fn deinit() void {
-    imageCache.deinit(allocator);
-    atlas.cache.deinit(allocator);
+    imageCache.deinit(gpa);
+    atlas.cache.deinit(gpa);
     view.deinit();
     sound.deinit();
     music.deinit();
@@ -65,7 +65,7 @@ pub fn deinit() void {
 pub const ImageOption = struct { filter: Filter = .nearest };
 
 pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
-    const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
+    const entry = imageCache.getOrPut(gpa, id(path)) catch oom();
     if (entry.found_existing) {
         std.debug.assert(entry.value_ptr.filter == option.filter);
         return entry.value_ptr.*;
@@ -103,7 +103,7 @@ pub fn getImageByPath(comptime path: Path) ?graphics.Image {
 }
 
 pub fn putImage(imageId: Id, image: graphics.Image) void {
-    imageCache.put(allocator, imageId, image) catch oom();
+    imageCache.put(gpa, imageId, image) catch oom();
 }
 
 pub const sampler = struct {
@@ -142,7 +142,7 @@ pub const gpu = struct {
     // 创建由资产模块管理的缓冲。
     pub fn makeBuffer(desc: sk.gfx.BufferDesc) sk.gfx.Buffer {
         const buffer = sk.gfx.makeBuffer(desc);
-        buffers.put(allocator, buffer, {}) catch oom();
+        buffers.put(gpa, buffer, {}) catch oom();
         return buffer;
     }
 
@@ -156,13 +156,13 @@ pub const gpu = struct {
 
     // 追加单个顶点，容量不足时自动增长。
     pub fn addVertex(value: graphics.Vertex) void {
-        vertices.append(allocator, value) catch oom();
+        vertices.append(gpa, value) catch oom();
         frameStats.vertex = vertices.items.len;
     }
 
     // 追加一组顶点，容量不足时自动增长。
     pub fn addVertices(values: []const graphics.Vertex) void {
-        vertices.appendSlice(allocator, values) catch oom();
+        vertices.appendSlice(gpa, values) catch oom();
         frameStats.vertex = vertices.items.len;
     }
 
@@ -197,36 +197,36 @@ pub const gpu = struct {
 
     // 登记由引擎统一销毁的流水线。
     pub fn addPipeline(value: sk.gfx.Pipeline) void {
-        pipelines.append(allocator, value) catch oom();
+        pipelines.append(gpa, value) catch oom();
     }
 
     // 登记由引擎统一销毁的着色器。
     pub fn addShader(value: sk.gfx.Shader) void {
-        shaders.append(allocator, value) catch oom();
+        shaders.append(gpa, value) catch oom();
     }
 
     // 登记图像复制操作，上传缓冲的写入策略由调用方决定。
     pub fn addUpdate(value: sk.gfx.CopyBufferToImageDesc) void {
-        updates.append(allocator, value) catch oom();
+        updates.append(gpa, value) catch oom();
     }
 
     fn deinit() void {
-        updates.deinit(allocator);
+        updates.deinit(gpa);
         updates = .empty;
-        vertices.deinit(allocator);
+        vertices.deinit(gpa);
         vertices = .empty;
         frameStats = .{};
         var iterator = buffers.keyIterator();
         while (iterator.next()) |buffer| sk.gfx.destroyBuffer(buffer.*);
-        buffers.deinit(allocator);
+        buffers.deinit(gpa);
         buffers = .empty;
 
         for (pipelines.items) |value| sk.gfx.destroyPipeline(value);
-        pipelines.deinit(allocator);
+        pipelines.deinit(gpa);
         pipelines = .empty;
 
         for (shaders.items) |value| sk.gfx.destroyShader(value);
-        shaders.deinit(allocator);
+        shaders.deinit(gpa);
         shaders = .empty;
     }
 };
@@ -246,7 +246,7 @@ pub const atlas = struct {
         std.debug.assert(source.imagePaths.len > 0);
         std.debug.assert(source.imagePaths.len + option.pages <= 256);
         const atlasId = id(source.imagePaths[0]);
-        const entry = cache.getOrPut(allocator, atlasId) catch oom();
+        const entry = cache.getOrPut(gpa, atlasId) catch oom();
         if (entry.found_existing) {
             var image = imageCache.get(atlasId).?;
             std.debug.assert(image.filter == option.filter);
@@ -267,7 +267,7 @@ pub const atlas = struct {
         entry.value_ptr.* = @intCast(source.imagePaths.len);
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
-        imageCache.ensureUnusedCapacity(allocator, len) catch oom();
+        imageCache.ensureUnusedCapacity(gpa, len) catch oom();
         for (source.imagePaths, 0..) |path, i| {
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
@@ -302,10 +302,10 @@ pub const atlas = struct {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
-        const img = decoder.load(allocator, response.data) catch |err| {
+        const img = decoder.load(gpa, response.data) catch |err| {
             std.debug.panic("{s}: {}", .{ response.path, err });
         };
-        defer allocator.free(img.data);
+        defer gpa.free(img.data);
 
         std.debug.assert(img.width == sk.gfx.queryImageWidth(atlasImage));
         std.debug.assert(img.height == sk.gfx.queryImageHeight(atlasImage));
@@ -330,10 +330,10 @@ const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     _ = file.load(path, handle, struct {
         fn callback(index: u64, resp: Response) void {
-            const icon = decoder.loadIcon(allocator, resp.data) catch |err| {
+            const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
-            defer allocator.free(icon.data);
+            defer gpa.free(icon.data);
             handler(index, icon);
         }
     }.callback);
@@ -350,7 +350,7 @@ pub const view = struct {
 
     // 创建视图时登记采样器与流水线。
     pub fn put(source: graphics.View, info: Info) void {
-        cache.put(allocator, source, info) catch oom();
+        cache.put(gpa, source, info) catch oom();
     }
 
     // 返回视图配置，视图必须已经登记。
@@ -374,15 +374,15 @@ pub const view = struct {
         var iterator = cache.keyIterator();
         while (iterator.next()) |key| sk.gfx.destroyView(key.*);
 
-        cache.deinit(allocator);
+        cache.deinit(gpa);
         cache = .empty;
     }
 
     fn handler(index: u64, resp: Response) void {
-        const img = decoder.load(allocator, resp.data) catch |err| {
+        const img = decoder.load(gpa, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
-        defer allocator.free(img.data);
+        defer gpa.free(img.data);
         const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
         sk.gfx.initView(imageView, .{ .texture = .{
@@ -410,12 +410,12 @@ const sound = struct {
 
     fn deinit() void {
         var iterator = cache.valueIterator();
-        while (iterator.next()) |value| value.deinit(allocator);
-        cache.deinit(allocator);
+        while (iterator.next()) |value| value.deinit(gpa);
+        cache.deinit(gpa);
     }
 
     fn load(path: Path, option: audio.Sound.Option) audio.Sound {
-        const entry = cache.getOrPut(allocator, id(path)) catch oom();
+        const entry = cache.getOrPut(gpa, id(path)) catch oom();
         // 加载期间再次收到的同音效播放请求不排队、不补播。
         if (entry.found_existing) return entry.value_ptr.*;
 
@@ -428,7 +428,7 @@ const sound = struct {
     }
 
     fn handler(index: u64, resp: Response) void {
-        const decoded = audio.Sound.init(allocator, resp.data) catch |err|
+        const decoded = audio.Sound.init(gpa, resp.data) catch |err|
             std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
 
         const soundCache = cache.getPtr(id(resp.path)).?;
@@ -442,7 +442,7 @@ const music = struct {
     var cache: std.AutoHashMapUnmanaged(Id, ?audio.MusicSource) = .empty;
 
     fn load(path: Path, loop: bool) ?audio.MusicSource {
-        const entry = cache.getOrPut(allocator, id(path)) catch oom();
+        const entry = cache.getOrPut(gpa, id(path)) catch oom();
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
@@ -452,7 +452,7 @@ const music = struct {
 
     fn handler(index: u64, resp: Response) void {
         const rate: u32 = @intCast(sk.audio.sampleRate());
-        const source = audio.MusicSource.init(allocator, resp.data, rate) catch |err|
+        const source = audio.MusicSource.init(gpa, resp.data, rate) catch |err|
             std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
         cache.getPtr(id(resp.path)).?.* = source;
         audio.playMusicOption(resp.path, index == 1);
@@ -461,9 +461,9 @@ const music = struct {
     pub fn deinit() void {
         var iterator = cache.valueIterator();
         while (iterator.next()) |value| {
-            if (value.*) |source| source.deinit(allocator);
+            if (value.*) |source| source.deinit(gpa);
         }
-        cache.deinit(allocator);
+        cache.deinit(gpa);
     }
 };
 
@@ -502,11 +502,11 @@ pub fn queryTotalStats() TotalStats {
 var counter: core.Counter = undefined;
 
 fn sk_alloc(len: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
-    return alloc(allocator, len);
+    return alloc(gpa, len);
 }
 
 fn sk_free(ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
-    free(allocator, ptr);
+    free(gpa, ptr);
 }
 
 // C 的 free 不传长度，所以在返回指针前面存一份长度。
@@ -520,17 +520,17 @@ fn cSlice(ptr: *anyopaque) []align(@alignOf(std.c.max_align_t)) u8 {
     return @alignCast(base[0 .. cHeaderSize + header.*]);
 }
 
-fn alloc(gpa: std.mem.Allocator, len: usize) ?*anyopaque {
+fn alloc(gpa_: std.mem.Allocator, len: usize) ?*anyopaque {
     if (len == 0) return null;
-    const base = gpa.rawAlloc(cHeaderSize + len, //
+    const base = gpa_.rawAlloc(cHeaderSize + len, //
         cAlign, @returnAddress()) orelse return null;
     @as(*usize, @ptrCast(@alignCast(base))).* = len;
     return @ptrCast(base + cHeaderSize);
 }
 
-fn free(gpa: std.mem.Allocator, ptr: ?*anyopaque) void {
+fn free(gpa_: std.mem.Allocator, ptr: ?*anyopaque) void {
     const p = ptr orelse return;
-    gpa.rawFree(cSlice(p), cAlign, @returnAddress());
+    gpa_.rawFree(cSlice(p), cAlign, @returnAddress());
 }
 
 // Sokol 统一使用资源模块的分配器。
