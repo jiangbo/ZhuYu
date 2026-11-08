@@ -277,11 +277,11 @@ pub const static = struct {
         static.lineHeight = zon.lineHeight;
 
         if (assets.getImage(assets.id(data.images[0])) == null) {
-            assets.loadAtlas(.{
+            _ = assets.atlas.load(.{
                 .imagePaths = data.images,
                 .size = data.imageSize,
                 .images = &.{},
-            }, option.filter);
+            }, .{ .filter = option.filter });
         }
 
         for (data.images, 0..) |path, i| {

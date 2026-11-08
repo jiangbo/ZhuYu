@@ -58,7 +58,7 @@ pub const epsilon = core.epsilon;
 
 pub const clamp = std.math.clamp;
 pub const loadImage = assets.loadImage;
-pub const loadAtlas = assets.loadAtlas;
+pub const loadAtlas = assets.atlas.load;
 pub const getImage = assets.getImageByPath;
 pub const oom = core.oom;
 

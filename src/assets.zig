@@ -31,7 +31,6 @@ pub fn setup(io_: std.Io, gpa: std.mem.Allocator) std.mem.Allocator {
 // 在图形环境建立后初始化资源加载和默认采样器。
 pub fn init() void {
     file.init(io, allocator);
-
     sampler.init();
 }
 
@@ -63,9 +62,7 @@ pub fn deinit() void {
     sk.gfx.destroySampler(sampler.linear);
 }
 
-pub const ImageOption = struct {
-    filter: Filter = .nearest, // 纹理过滤方式
-};
+pub const ImageOption = struct { filter: Filter = .nearest };
 
 pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
     const entry = imageCache.getOrPut(allocator, id(path)) catch oom();
@@ -95,10 +92,6 @@ pub fn loadMusic(path: Path, loop: bool) ?audio.MusicSource {
 
 pub const Id = file.Id;
 pub const id = file.id;
-
-pub fn loadAtlas(source: graphics.Atlas, filter: Filter) void {
-    _ = atlas.load(source, 0, filter);
-}
 
 pub fn getImage(imageId: Id) ?graphics.Image {
     if (builtin.is_test) return .empty;
@@ -239,6 +232,8 @@ pub const gpu = struct {
 };
 
 pub const atlas = struct {
+    pub const Option = struct { pages: u8 = 0, filter: Filter = .nearest };
+
     // 记录每个图集剩余待加载的图片页数。
     var cache: std.AutoHashMapUnmanaged(Id, i32) = .empty;
 
@@ -246,29 +241,29 @@ pub const atlas = struct {
     const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
 
     // 加载图片并预留可写页；返回整页 Image，layer 是首个可写层。
-    pub fn load(source: graphics.Atlas, pages: u8, filter: Filter) Image {
+    pub fn load(source: graphics.Atlas, option: Option) Image {
         // 层号使用一个字节，创建 GPU 纹理前检查图集页数。
         std.debug.assert(source.imagePaths.len > 0);
-        std.debug.assert(source.imagePaths.len + pages <= 256);
+        std.debug.assert(source.imagePaths.len + option.pages <= 256);
         const atlasId = id(source.imagePaths[0]);
         const entry = cache.getOrPut(allocator, atlasId) catch oom();
         if (entry.found_existing) {
             var image = imageCache.get(atlasId).?;
-            std.debug.assert(image.filter == filter);
-            image.layer = if (pages == 0) 0 else @intCast(source.imagePaths.len);
+            std.debug.assert(image.filter == option.filter);
+            image.layer = if (option.pages == 0) 0 else @intCast(source.imagePaths.len);
             return image;
         }
 
         const atlasView = sk.gfx.makeView(.{
             .texture = .{ .image = sk.gfx.makeImage(.{
-                .usage = .{ .write_unsealed = true, .copy_dst = pages > 0 },
+                .usage = .{ .write_unsealed = true, .copy_dst = option.pages > 0 },
                 .width = @intFromFloat(source.size.x),
                 .height = @intFromFloat(source.size.y),
                 .type = .ARRAY,
-                .num_slices = @intCast(source.imagePaths.len + pages),
+                .num_slices = @intCast(source.imagePaths.len + option.pages),
             }) },
         });
-        view.put(atlasView, .{ .sampler = sampler.get(filter) });
+        view.put(atlasView, .{ .sampler = sampler.get(option.filter) });
         entry.value_ptr.* = @intCast(source.imagePaths.len);
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
@@ -277,7 +272,7 @@ pub const atlas = struct {
             imageCache.putAssumeCapacity(id(path), .{
                 .view = atlasView,
                 .layer = @intCast(i),
-                .filter = filter,
+                .filter = option.filter,
                 .offset = .zero,
                 .size = source.size,
             });
@@ -292,14 +287,14 @@ pub const atlas = struct {
         for (source.images) |image| {
             var img = image;
             img.view = atlasView;
-            img.filter = filter;
+            img.filter = option.filter;
             imageCache.putAssumeCapacity(image.view.id, img);
         }
         return .{
             .view = atlasView,
-            .layer = if (pages == 0) 0 else @intCast(source.imagePaths.len),
+            .layer = if (option.pages == 0) 0 else @intCast(source.imagePaths.len),
             .size = source.size,
-            .filter = filter,
+            .filter = option.filter,
         };
     }
 
@@ -540,8 +535,5 @@ fn free(gpa: std.mem.Allocator, ptr: ?*anyopaque) void {
 
 // Sokol 统一使用资源模块的分配器。
 pub fn sokolAllocator(comptime T: type) T {
-    return .{
-        .alloc_fn = sk_alloc,
-        .free_fn = sk_free,
-    };
+    return .{ .alloc_fn = sk_alloc, .free_fn = sk_free };
 }
