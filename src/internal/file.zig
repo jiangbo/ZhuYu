@@ -21,7 +21,8 @@ pub const Response = struct {
     path: [:0]const u8,
     data: []const u8,
 };
-const Handler = *const fn (index: u64, resp: Response) void;
+pub const Mode = enum { sync, async };
+const Handler = *const fn (u64, Mode, Response) void;
 const FileState = enum { loading, loaded, handled };
 const FileCache = struct {
     state: FileState = .loading,
@@ -112,7 +113,7 @@ pub fn count() usize {
 }
 
 // 同一路径只加载一次；借用数据同步回调，外部文件排队读取。
-pub fn load(path: [:0]const u8, index: u64, handler: Handler) *FileCache {
+pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
     const fileId = id(path);
     const entry = cache.getOrPut(allocator, fileId) catch oom();
     const value = entry.value_ptr;
@@ -120,8 +121,8 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) *FileCache {
         if (value.state == .loaded) {
             value.index = index;
             value.handler = handler;
-            handleLoaded(path, value, value.data);
-            return cache.getPtr(fileId).?;
+            handleLoaded(path, value, value.data, .sync);
+            return;
         }
         // 已评审：资源按用途使用独立路径，图集页面与 icon 不共用文件。
         // 当前资源缓存到退出，同一路径只绑定一组 index/handler，不支持重新加载。
@@ -129,7 +130,7 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) *FileCache {
         if (value.index != index or value.handler != handler) {
             std.debug.panic("asset path conflict: {s}", .{path});
         }
-        return value;
+        return;
     }
     if (options.append) {
         std.debug.panic("asset not found in appended pack: {s}", .{path});
@@ -137,17 +138,21 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) *FileCache {
     value.* = .{ .index = index, .handler = handler };
     std.log.info("loading {s}", .{path});
     enqueue(path);
-    return value;
 }
 
 // 先完成文件记录，再执行回调，回调可以继续加载其他文件。
-fn handleLoaded(path: [:0]const u8, value: *FileCache, data: []const u8) void {
+fn handleLoaded(
+    path: [:0]const u8,
+    value: *FileCache,
+    data: []const u8,
+    mode: Mode,
+) void {
     const handler = value.handler;
     const index = value.index;
     const response: Response = .{ .path = path, .data = data };
     value.state = .handled;
     value.data = &.{};
-    handler(index, response);
+    handler(index, mode, response);
 }
 
 // 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
@@ -216,7 +221,7 @@ fn handleSlot(slot: *Slot) void {
     };
     slot.result = &.{};
     std.log.info("loaded: {s}", .{path});
-    handleLoaded(path, cache.getPtr(id(path)).?, data);
+    handleLoaded(path, cache.getPtr(id(path)).?, data, .async);
     allocator.free(data);
     allocator.free(path);
     slot.state.store(.idle, .release);

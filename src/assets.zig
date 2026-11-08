@@ -78,7 +78,7 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
         .filter = option.filter,
     };
     view.put(imageView, .{ .sampler = sampler.get(option.filter) });
-    _ = file.load(path, imageView.id, view.handler);
+    file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
 
@@ -281,7 +281,7 @@ pub const atlas = struct {
                 .atlasId = atlasId,
                 .layer = @intCast(i),
             };
-            _ = file.load(path, @bitCast(pageIndex), handler);
+            file.load(path, @bitCast(pageIndex), handler);
         }
 
         for (source.images) |image| {
@@ -298,7 +298,7 @@ pub const atlas = struct {
         };
     }
 
-    fn handler(index: u64, response: Response) void {
+    fn handler(index: u64, _: file.Mode, response: Response) void {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
@@ -328,8 +328,8 @@ pub const atlas = struct {
 pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
-    _ = file.load(path, handle, struct {
-        fn callback(index: u64, resp: Response) void {
+    file.load(path, handle, struct {
+        fn callback(index: u64, _: file.Mode, resp: Response) void {
             const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
                 std.debug.panic("{s}: {}", .{ resp.path, err });
             };
@@ -378,7 +378,7 @@ pub const view = struct {
         cache = .empty;
     }
 
-    fn handler(index: u64, resp: Response) void {
+    fn handler(index: u64, _: file.Mode, resp: Response) void {
         const img = decoder.load(gpa, resp.data) catch |err| {
             std.debug.panic("{s}: {}", .{ resp.path, err });
         };
@@ -421,20 +421,18 @@ const sound = struct {
 
         entry.value_ptr.* = .{ .option = option };
         // 同步回调只解码，由当前调用负责播放并返回槽位。
-        const request = file.load(path, 1, handler);
-        // 返回后若尚未加载，异步回调只补播首次请求。
-        request.index = 0;
-        return entry.value_ptr.*;
+        file.load(path, 0, handler);
+        return cache.get(id(path)).?;
     }
 
-    fn handler(index: u64, resp: Response) void {
+    fn handler(_: u64, mode: file.Mode, resp: Response) void {
         const decoded = audio.Sound.init(gpa, resp.data) catch |err|
             std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
 
         const soundCache = cache.getPtr(id(resp.path)).?;
         const option = soundCache.option;
         soundCache.* = decoded;
-        if (index == 0) _ = audio.playSoundOption(resp.path, option);
+        if (mode == .async) _ = audio.playSoundOption(resp.path, option);
     }
 };
 
@@ -446,11 +444,11 @@ const music = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
-        _ = file.load(path, if (loop) 1 else 0, handler);
+        file.load(path, if (loop) 1 else 0, handler);
         return null;
     }
 
-    fn handler(index: u64, resp: Response) void {
+    fn handler(index: u64, _: file.Mode, resp: Response) void {
         const rate: u32 = @intCast(sk.audio.sampleRate());
         const source = audio.MusicSource.init(gpa, resp.data, rate) catch |err|
             std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
