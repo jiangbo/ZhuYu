@@ -46,14 +46,15 @@ var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
 var flushed = false;
 
 // 命令缓冲区由调用方持有，必须保持有效且容量足够。
-pub fn init(cmds: []Command) void {
+// image 用于圆形等基础图形；不绘制基础图形时可传 null。
+pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
     defaultPipeline = createPipeline(shaderDesc);
 
-    // 基础图形使用预先加载的 circle.png，其中心区域必须为白色。
+    // 调用方提供圆形图片，其中心区域必须为白色。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
-    circleImage = assets.getImageByPath("circle.png") orelse return;
+    circleImage = image orelse return;
     const rect = zhu.Rect.init(.zero, circleImage.size);
     whiteImage = circleImage.sub(rect.centerScale(0.25));
 }

@@ -5,7 +5,7 @@ var commands: [8]zhu.batch.Command = undefined; // 示例持有绘制命令缓�
 
 // 窗口创建后初始化绘制，不加载外部资源。
 pub fn init(_: zhu.Allocator) void {
-    zhu.batch.init(&commands);
+    zhu.batch.init(&commands, null);
 }
 
 // 每帧清屏并提交绘制。
