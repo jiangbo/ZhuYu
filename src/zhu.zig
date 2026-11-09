@@ -37,6 +37,7 @@ pub const EnumAnimation = graphics.EnumAnimation;
 pub const Allocator = std.mem.Allocator;
 
 pub const Timer = core.Timer;
+pub const ease = core.ease;
 pub const enums = core.enums;
 pub const Vector = core.Vector;
 pub const Vector2 = core.Vector2;

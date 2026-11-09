@@ -139,6 +139,100 @@ pub const Timer = struct {
     }
 };
 
+/// 缓动进度，输入 t 为 0～1；back 系列允许输出超出此范围。
+/// In 由慢到快，Out 由快到慢，InOut 两端慢、中间快。
+pub const ease = struct {
+    pub fn smoothstep(t: f32) f32 {
+        return t * t * (3 - 2 * t);
+    }
+
+    pub fn quadIn(t: f32) f32 {
+        return t * t;
+    }
+
+    pub fn quadOut(t: f32) f32 {
+        return 1 - quadIn(1 - t);
+    }
+
+    pub fn quadInOut(t: f32) f32 {
+        return if (t < 0.5) quadIn(2 * t) * 0.5 else 1 - quadIn(2 - 2 * t) * 0.5;
+    }
+
+    pub fn cubeIn(t: f32) f32 {
+        return t * t * t;
+    }
+
+    pub fn cubeOut(t: f32) f32 {
+        return 1 - cubeIn(1 - t);
+    }
+
+    pub fn cubeInOut(t: f32) f32 {
+        return if (t < 0.5) cubeIn(2 * t) * 0.5 else 1 - cubeIn(2 - 2 * t) * 0.5;
+    }
+
+    pub fn quartIn(t: f32) f32 {
+        const square = t * t;
+        return square * square;
+    }
+
+    pub fn quartOut(t: f32) f32 {
+        return 1 - quartIn(1 - t);
+    }
+
+    pub fn quartInOut(t: f32) f32 {
+        return if (t < 0.5) quartIn(2 * t) * 0.5 else 1 - quartIn(2 - 2 * t) * 0.5;
+    }
+
+    pub fn quintIn(t: f32) f32 {
+        const square = t * t;
+        return square * square * t;
+    }
+
+    pub fn quintOut(t: f32) f32 {
+        return 1 - quintIn(1 - t);
+    }
+
+    pub fn quintInOut(t: f32) f32 {
+        return if (t < 0.5) quintIn(2 * t) * 0.5 else 1 - quintIn(2 - 2 * t) * 0.5;
+    }
+
+    pub fn sinIn(t: f32) f32 {
+        return 1 - @cos(t * (std.math.pi / 2.0));
+    }
+
+    pub fn sinOut(t: f32) f32 {
+        return @sin(t * (std.math.pi / 2.0));
+    }
+
+    pub fn sinInOut(t: f32) f32 {
+        return (1 - @cos(t * std.math.pi)) * 0.5;
+    }
+
+    pub fn circleIn(t: f32) f32 {
+        return 1 - @sqrt(1 - t * t);
+    }
+
+    pub fn circleOut(t: f32) f32 {
+        return @sqrt(t * (2 - t));
+    }
+
+    pub fn circleInOut(t: f32) f32 {
+        return if (t < 0.5) circleIn(2 * t) * 0.5 else 1 - circleIn(2 - 2 * t) * 0.5;
+    }
+
+    pub fn backIn(t: f32) f32 {
+        return t * t * t - t * @sin(t * std.math.pi);
+    }
+
+    pub fn backOut(t: f32) f32 {
+        return 1 - backIn(1 - t);
+    }
+
+    pub fn backInOut(t: f32) f32 {
+        return if (t < 0.5) backIn(2 * t) * 0.5 else 1 - backIn(2 - 2 * t) * 0.5;
+    }
+};
+
 pub const enums = struct {
     const Array = std.EnumArray;
 
