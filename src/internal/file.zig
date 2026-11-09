@@ -17,22 +17,15 @@ pub fn id(path: []const u8) Id {
     return std.hash.Fnv1a_32.hash(path);
 }
 
-pub const Response = struct {
-    path: [:0]const u8,
-    data: []const u8,
-};
+pub const Response = struct { path: [:0]const u8, data: []const u8 };
 pub const Mode = enum { sync, async };
 const Handler = *const fn (u64, Mode, Response) void;
-const FileState = enum { loading, loaded, handled };
-const FileCache = struct {
-    state: FileState = .loading,
+const Record = struct {
     index: u64 = 0,
-    data: []const u8 = &.{},
+    // 有数据时等待同步交付；null 表示外部请求或已交付的记录。
+    data: ?[]const u8 = null,
     handler: Handler = undefined,
 };
-
-var cache: std.AutoHashMapUnmanaged(Id, FileCache) = .empty;
-var mapping: ?std.Io.File.MemoryMap = null;
 
 const Slot = struct {
     state: std.atomic.Value(enum(u8) { idle, queued, done }) = .init(.idle),
@@ -42,16 +35,19 @@ const Slot = struct {
 
 var allocator: std.mem.Allocator = undefined;
 var io: std.Io = undefined;
+var records: std.AutoHashMapUnmanaged(Id, Record) = .empty;
+var mapping: ?std.Io.File.MemoryMap = null;
+
+// 仅主线程访问的等待队列。
+var requests: std.Deque([:0]const u8) = .empty;
+var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
+var started: bool = false; // 仅主线程读写加载器生命周期。
+
 // 首次请求时打开，读取线程退出后关闭。
 var assetDir: std.Io.Dir = undefined;
-// 仅主线程访问的等待队列。
-var requests: std.ArrayList([:0]const u8) = .empty;
-var nextRequest: usize = 0;
-var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
 var worker: ?std.Thread = null;
 var wake: std.Io.Event = .unset;
 var stop: std.atomic.Value(bool) = .init(false);
-var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 保存加载配置；append 模式映射包内数据，外部读取仍按需启动。
 pub fn init(fileIo: std.Io, gpa: std.mem.Allocator) void {
@@ -87,47 +83,44 @@ pub fn initPack(bytes: []const u8) void {
     const size = std.mem.readInt(u32, footer[4..8], .little);
     const start = bytes.len - size;
     const indexStart = bytes.len - 12 - fileCount * 12;
-    cache.ensureUnusedCapacity(allocator, fileCount) catch oom();
+    records.ensureUnusedCapacity(allocator, fileCount) catch oom();
     for (0..fileCount) |i| {
         const entry = bytes[indexStart + i * 12 ..][0..12];
         const hash = std.mem.readInt(u32, entry[0..4], .little);
         const offset = start + std.mem.readInt(u32, entry[4..8], .little);
         const length = std.mem.readInt(u32, entry[8..12], .little);
-        cache.putAssumeCapacity(hash, .{
-            .state = .loaded,
-            .data = bytes[offset..][0..length],
-        });
+        records.putAssumeCapacity(hash, .{ .data = bytes[offset..][0..length] });
     }
     std.log.info("loaded asset pack: {} files", .{fileCount});
 }
 
 // 只借用切片，调用方保留数据直到文件回调完成或文件模块销毁。
 pub fn put(path: [:0]const u8, data: []const u8) void {
-    const entry = cache.getOrPut(allocator, id(path)) catch oom();
+    const entry = records.getOrPut(allocator, id(path)) catch oom();
     std.debug.assert(!entry.found_existing);
-    entry.value_ptr.* = .{ .state = .loaded, .data = data };
+    entry.value_ptr.* = .{ .data = data };
 }
 
 pub fn count() usize {
-    return cache.count();
+    return records.count();
 }
 
 // 同一路径只加载一次；借用数据同步回调，外部文件排队读取。
 pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
     const fileId = id(path);
-    const entry = cache.getOrPut(allocator, fileId) catch oom();
-    const value = entry.value_ptr;
+    const entry = records.getOrPut(allocator, fileId) catch oom();
+    const record = entry.value_ptr;
     if (entry.found_existing) {
-        if (value.state == .loaded) {
-            value.index = index;
-            value.handler = handler;
-            handleLoaded(path, value, value.data, .sync);
+        if (record.data) |data| {
+            record.index = index;
+            record.handler = handler;
+            handleLoaded(path, record, data, .sync);
             return;
         }
         // 已评审：资源按用途使用独立路径，图集页面与 icon 不共用文件。
         // 当前资源缓存到退出，同一路径只绑定一组 index/handler，不支持重新加载。
         // 此检查是有意的使用约束；引入资源卸载后再调整，无需为跨用途复用扩展。
-        if (value.index != index or value.handler != handler) {
+        if (record.index != index or record.handler != handler) {
             std.debug.panic("asset path conflict: {s}", .{path});
         }
         return;
@@ -135,7 +128,7 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
     if (options.append) {
         std.debug.panic("asset not found in appended pack: {s}", .{path});
     }
-    value.* = .{ .index = index, .handler = handler };
+    record.* = .{ .index = index, .handler = handler };
     std.log.info("loading {s}", .{path});
     enqueue(path);
 }
@@ -143,15 +136,14 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
 // 先完成文件记录，再执行回调，回调可以继续加载其他文件。
 fn handleLoaded(
     path: [:0]const u8,
-    value: *FileCache,
+    record: *Record,
     data: []const u8,
     mode: Mode,
 ) void {
-    const handler = value.handler;
-    const index = value.index;
+    const handler = record.handler;
+    const index = record.index;
     const response: Response = .{ .path = path, .data = data };
-    value.state = .handled;
-    value.data = &.{};
+    record.data = null;
     handler(index, mode, response);
 }
 
@@ -183,7 +175,7 @@ fn enqueue(path: [:0]const u8) void {
     }
     const owned = allocator.dupeSentinel(u8, path, 0) catch
         @panic("out of memory");
-    requests.append(allocator, owned) catch @panic("out of memory");
+    requests.pushBack(allocator, owned) catch oom();
 }
 
 // 主线程接收结果并补充请求，回调可以继续提交资源加载。
@@ -192,22 +184,16 @@ pub fn update() void {
     for (&slots, 0..) |*slot, lane| {
         handleSlot(slot);
         if (slot.state.load(.acquire) != .idle) continue;
-        if (nextRequest == requests.items.len) continue;
+        const path = requests.popFront() orelse continue;
 
         // 空闲槽位接收下一个请求，交给后台线程或浏览器读取。
-        slot.path = requests.items[nextRequest];
-        nextRequest += 1;
+        slot.path = path;
         slot.state.store(.queued, .release);
         if (builtin.os.tag == .emscripten) {
             web.zhu_fetch_start(@intCast(lane), slot.path.ptr);
         } else {
             wake.set(io);
         }
-    }
-    // 等待队列已全部派发，清空记录并保留容量。
-    if (nextRequest == requests.items.len) {
-        requests.clearRetainingCapacity();
-        nextRequest = 0;
     }
 }
 
@@ -221,7 +207,7 @@ fn handleSlot(slot: *Slot) void {
     };
     slot.result = &.{};
     std.log.info("loaded: {s}", .{path});
-    handleLoaded(path, cache.getPtr(id(path)).?, data, .async);
+    handleLoaded(path, records.getPtr(id(path)).?, data, .async);
     allocator.free(data);
     allocator.free(path);
     slot.state.store(.idle, .release);
@@ -239,10 +225,9 @@ fn shutdown() void {
         worker = null;
         if (!builtin.abi.isAndroid()) assetDir.close(io);
     }
-    for (requests.items[nextRequest..]) |path| allocator.free(path);
+    while (requests.popFront()) |path| allocator.free(path);
     requests.deinit(allocator);
     requests = .empty;
-    nextRequest = 0;
     for (&slots) |*slot| {
         if (slot.state.load(.acquire) == .idle) continue;
         allocator.free(slot.path);
@@ -257,8 +242,8 @@ fn shutdown() void {
 // 先停止读取，再释放记录和包内数据的共同所有者。
 pub fn deinit() void {
     shutdown();
-    cache.deinit(allocator);
-    cache = .empty;
+    records.deinit(allocator);
+    records = .empty;
     if (mapping) |*mapped| {
         const exe = mapped.file;
         mapped.destroy(io);
