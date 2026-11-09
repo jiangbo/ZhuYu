@@ -291,7 +291,7 @@ pub const atlas = struct {
         };
     }
 
-    fn handler(index: u64, _: file.Mode, response: Response) void {
+    fn handler(_: file.Mode, index: u64, response: Response) void {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
@@ -322,7 +322,7 @@ pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     file.load(path, handle, struct {
-        fn callback(index: u64, _: file.Mode, resp: Response) void {
+        fn callback(_: file.Mode, index: u64, resp: Response) void {
             const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
                 panicFmt("{s}: {}", .{ resp.path, err });
             };
@@ -371,7 +371,7 @@ pub const view = struct {
         cache = .empty;
     }
 
-    fn handler(index: u64, _: file.Mode, resp: Response) void {
+    fn handler(_: file.Mode, index: u64, resp: Response) void {
         const img = decoder.load(gpa, resp.data) catch |err| {
             panicFmt("{s}: {}", .{ resp.path, err });
         };
@@ -420,7 +420,7 @@ pub const sound = struct {
         entry.value_ptr.* = null;
         // 同步完成返回资源，异步完成通过回调交付。
         file.load(path, assetId, struct {
-            fn callback(index: u64, mode: file.Mode, resp: Response) void {
+            fn callback(mode: file.Mode, index: u64, resp: Response) void {
                 const source = Source.init(gpa, resp.data) catch |err|
                     panicFmt("sound init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
@@ -446,7 +446,7 @@ pub const music = struct {
         entry.value_ptr.* = null;
         // 同步完成返回资源，异步完成通过回调交付。
         file.load(path, assetId, struct {
-            fn callback(index: u64, mode: file.Mode, resp: Response) void {
+            fn callback(mode: file.Mode, index: u64, resp: Response) void {
                 const rate: u32 = @intCast(sk.audio.sampleRate());
                 const source = Source.init(gpa, resp.data, rate) catch |err|
                     panicFmt("music init failed: {s}: {}", .{ resp.path, err });
