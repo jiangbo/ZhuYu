@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) !void {
     const font = b.option(FontMode, "font", "Font mode") orelse .bitmap;
     // 仅切换 Linux 桌面后端，Android 和 Web 继续使用各自的默认后端。
     const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
-    // 应用创建依赖时传入，开启后只从程序尾部的资源包加载。
     const append = b.option(bool, "append", "Append asset pack") orelse false;
     // 不使用 MIDI 的应用不编译播放器和内置音色。
     const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
@@ -28,7 +27,12 @@ pub fn build(b: *std.Build) !void {
     const imgui = b.option(bool, "imgui", "Enable ImGui") orelse false;
     const options = b.addOptions();
     options.addOption(FontMode, "font", font);
-    options.addOption(bool, "append", append);
+    // append 只对桌面目标生效，其他目标继续使用各自的资产加载方式。
+    options.addOption(bool, "append", switch (target.result.os.tag) {
+        .windows, .macos => append,
+        .linux => append and !target.result.abi.isAndroid(),
+        else => false,
+    });
     options.addOption(bool, "midi", midi);
     options.addOption(bool, "samplers", samplers);
 
