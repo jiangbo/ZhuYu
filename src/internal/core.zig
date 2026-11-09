@@ -475,6 +475,16 @@ pub const Vector2 = extern struct {
             .y = std.math.lerp(self.y, other.y, t),
         };
     }
+
+    /// 二次贝塞尔：a 为起点，b 为控制点，c 为终点；t 为 0～1。
+    pub fn bezier2(a: Vector2, b: Vector2, c: Vector2, t: f32) Vector2 {
+        return a.mix(b, t).mix(b.mix(c, t), t);
+    }
+
+    /// 三次贝塞尔：a 为起点，b/c 为控制点，d 为终点；t 为 0～1。
+    pub fn bezier3(a: Vector2, b: Vector2, c: Vector2, d: Vector2, t: f32) Vector2 {
+        return a.mix(b, t).bezier2(b.mix(c, t), c.mix(d, t), t);
+    }
 };
 
 pub const Vector4 = extern struct {
