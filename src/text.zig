@@ -45,6 +45,7 @@ pub const Option = struct {
     max: f32 = std.math.floatMax(f32), // 最大宽度，超过换行
     spacing: f32 = 0, // 文字间的间距
     anchor: ?Vector2 = null, // 锚点
+    count: usize = std.math.maxInt(usize), // 显示字符数，换行不计
 
     pub fn with(
         self: Option,
@@ -72,21 +73,22 @@ pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2, o: Option) voi
 
 const Utf8View = std.unicode.Utf8View;
 
-// 文字布局：本次排版尺寸，没画完时 next 是下一段起点。
+// 文字布局不受 option.count 影响，next 是下一页的 UTF-8 字节位置。
 pub const Layout = struct {
-    size: Vector2, // 本次排版尺寸
-    next: ?usize, // 下一段起点，完整画完时为 null
+    size: Vector2 = .zero, // 本次排版尺寸
+    count: usize = 0, // 本页字符总数，换行不计。
+    next: ?usize = null, // 下一页起点，最后一页为 null。
 };
 
-// 绘制完整文字，宽度超出 option.max 换行，高度不限。
+// 绘制文字，宽度超出 option.max 换行，高度不限。
 pub fn draw(text: String, position: Vector2, option: Option) void {
     _ = drawAt(text, position, option);
 }
 
 // 把文字画进矩形：宽度超出换行，高度超出停止，
-// 没画完时 next 是剩余文字的起点。
+// count 控制本页显示进度，返回的 next 始终指向下一页。
 pub fn drawIn(text: String, rect: Rect, option: Option) Layout {
-    if (text.len == 0) return .{ .size = .zero, .next = null };
+    if (text.len == 0) return .{};
 
     // 矩形宽度和 option.max 同时限制本次排版。
     const opt = option.with(.max, @min(rect.size.x, option.max));
@@ -127,6 +129,7 @@ fn layout(
     const start = position.add(option.offset);
 
     var next: ?usize = null;
+    var count: usize = 0;
     var width: f32, var line: f32 = .{ 0, 1 };
     var maxWidth: f32 = 0;
     var iterator = Utf8View.initUnchecked(text).iterator();
@@ -160,7 +163,8 @@ fn layout(
         width += advance;
         maxWidth = @max(maxWidth, width);
 
-        if (!render) continue;
+        count += 1;
+        if (!render or count > option.count) continue;
 
         if (glyph.rect.size.x > 0 and glyph.rect.size.y > 0) {
             const charPos = drawPos.add(glyph.rect.min.mul(scale));
@@ -173,7 +177,7 @@ fn layout(
         assets.frameStats.text += 1;
     }
 
-    return .{ .size = .xy(maxWidth, line * height), .next = next };
+    return .{ .size = .xy(maxWidth, line * height), .count = count, .next = next };
 }
 
 pub fn drawLines(lines: Lines, position: Vector2, spacing: f32) void {
