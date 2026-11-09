@@ -118,7 +118,8 @@ pub const MusicSource = struct {
 };
 
 pub const Music = struct {
-    source: MusicSource = undefined,
+    source: ?MusicSource = null,
+    assetId: ?assets.Id = null,
     state: StateEnum = .playing,
     loop: bool = true,
 };
@@ -129,14 +130,23 @@ pub fn playMusic(path: [:0]const u8) void {
 
 pub fn playMusicOption(path: [:0]const u8, loop: bool) void {
     if (!sk.audio.isvalid()) return;
-    const source = assets.loadMusic(path, loop);
-    if (source == null) return;
+    const assetId = assets.id(path);
+    const source = assets.music.load(path, musicLoaded);
 
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
 
-    source.?.reset();
-    music = .{ .source = source.?, .loop = loop };
+    if (source) |value| value.reset();
+    music = .{ .source = source, .assetId = assetId, .loop = loop };
+}
+
+fn musicLoaded(assetId: assets.Id, source: MusicSource) void {
+    mutex.lockUncancelable(assets.io);
+    defer mutex.unlock(assets.io);
+    if (music.assetId != assetId) return;
+
+    source.reset();
+    music.source = source;
 }
 
 pub fn setMusicState(state: StateEnum) void {
@@ -243,12 +253,12 @@ export fn audioCallback(b: [*c]f32, frames: i32, channels: i32) void {
 }
 
 fn fillMusic(buffer: []f32, channels: i32) void {
+    const source = music.source orelse return;
     // 先处理音乐，目前只支持播放一个音乐。
     const volume = musicVolume.load(.acquire);
     var len: usize = 0; // 存储填充的长度
     // 因为有可能循环播放，所以循环添加，直到缓冲区填满。
     while (music.state == .playing) {
-        const source = music.source;
         const count = source.fillSamples(buffer[len..], channels);
         len += @as(usize, @intCast(count * channels));
 

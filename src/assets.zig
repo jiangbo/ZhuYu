@@ -10,6 +10,7 @@ pub const file = @import("internal/file.zig");
 const core = @import("internal/core.zig");
 
 const oom = core.oom;
+const panicFmt = std.debug.panic;
 const Image = graphics.Image;
 const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
@@ -80,10 +81,6 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
     view.put(imageView, .{ .sampler = sampler.get(option.filter) });
     file.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
-}
-
-pub fn loadMusic(path: Path, loop: bool) ?audio.MusicSource {
-    return music.load(path, loop);
 }
 
 pub const Id = file.Id;
@@ -299,7 +296,7 @@ pub const atlas = struct {
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
         const img = decoder.load(gpa, response.data) catch |err| {
-            std.debug.panic("{s}: {}", .{ response.path, err });
+            panicFmt("{s}: {}", .{ response.path, err });
         };
         defer gpa.free(img.data);
 
@@ -327,7 +324,7 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     file.load(path, handle, struct {
         fn callback(index: u64, _: file.Mode, resp: Response) void {
             const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
-                std.debug.panic("{s}: {}", .{ resp.path, err });
+                panicFmt("{s}: {}", .{ resp.path, err });
             };
             defer gpa.free(icon.data);
             handler(index, icon);
@@ -376,7 +373,7 @@ pub const view = struct {
 
     fn handler(index: u64, _: file.Mode, resp: Response) void {
         const img = decoder.load(gpa, resp.data) catch |err| {
-            std.debug.panic("{s}: {}", .{ resp.path, err });
+            panicFmt("{s}: {}", .{ resp.path, err });
         };
         defer gpa.free(img.data);
         const imageView: sk.gfx.View = .{ .id = @intCast(index) };
@@ -425,7 +422,7 @@ pub const sound = struct {
         file.load(path, assetId, struct {
             fn callback(index: u64, mode: file.Mode, resp: Response) void {
                 const source = Source.init(gpa, resp.data) catch |err|
-                    std.debug.panic("sound load failed: {s}: {}", .{ resp.path, err });
+                    panicFmt("sound init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
                 if (mode == .async) handler(loadedId, source);
@@ -435,24 +432,30 @@ pub const sound = struct {
     }
 };
 
-const music = struct {
-    var cache: std.AutoHashMapUnmanaged(Id, ?audio.MusicSource) = .empty;
+pub const music = struct {
+    pub const Source = audio.MusicSource;
+    pub const Handler = fn (Id, Source) void;
 
-    fn load(path: Path, loop: bool) ?audio.MusicSource {
-        const entry = cache.getOrPut(gpa, id(path)) catch oom();
+    var cache: std.AutoHashMapUnmanaged(Id, ?Source) = .empty;
+
+    pub fn load(path: Path, handler: Handler) ?Source {
+        const assetId = id(path);
+        const entry = cache.getOrPut(gpa, assetId) catch oom();
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
-        file.load(path, if (loop) 1 else 0, handler);
-        return null;
-    }
-
-    fn handler(index: u64, _: file.Mode, resp: Response) void {
-        const rate: u32 = @intCast(sk.audio.sampleRate());
-        const source = audio.MusicSource.init(gpa, resp.data, rate) catch |err|
-            std.debug.panic("music load failed: {s}: {}", .{ resp.path, err });
-        cache.getPtr(id(resp.path)).?.* = source;
-        audio.playMusicOption(resp.path, index == 1);
+        // 同步完成返回资源，异步完成通过回调交付。
+        file.load(path, assetId, struct {
+            fn callback(index: u64, mode: file.Mode, resp: Response) void {
+                const rate: u32 = @intCast(sk.audio.sampleRate());
+                const source = Source.init(gpa, resp.data, rate) catch |err|
+                    panicFmt("music init failed: {s}: {}", .{ resp.path, err });
+                const loadedId: Id = @intCast(index);
+                cache.getPtr(loadedId).?.* = source;
+                if (mode == .async) handler(loadedId, source);
+            }
+        }.callback);
+        return cache.get(assetId).?;
     }
 
     pub fn deinit() void {
