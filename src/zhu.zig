@@ -35,6 +35,7 @@ pub const NineImage = graphics.NineImage;
 pub const Atlas = graphics.Atlas;
 pub const Color = graphics.Color;
 pub const Animation = graphics.Animation;
+pub const SourceT = graphics.SourceT;
 pub const EnumAnimation = graphics.EnumAnimation;
 pub const Allocator = std.mem.Allocator;
 

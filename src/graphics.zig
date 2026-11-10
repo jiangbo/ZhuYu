@@ -62,25 +62,47 @@ pub const Frame = struct {
     extend: u32 = 0, // 自由扩展
 };
 
+/// 配置使用整数或枚举扩展值，转换时该值必须能用 u32 表示。
+/// frames 始终借用原切片，调用方负责保持其有效。
+pub fn SourceT(comptime T: type) type {
+    return struct {
+        imageId: ImageId = 0,
+        image: Image = .empty,
+        size: Vector2, // 单帧尺寸
+        frames: []const Frame,
+        loop: bool = true, // 是否循环播放
+        // 整数默认 0，枚举默认第一个声明的值。
+        extend: T = switch (@typeInfo(T)) {
+            .int => 0,
+            .@"enum" => std.enums.values(T)[0],
+            else => @compileError("extend must be an integer or enum"),
+        },
+
+        pub fn toSource(self: @This()) Animation.Source {
+            return .{
+                .imageId = self.imageId,
+                .image = self.image,
+                .size = self.size,
+                .frames = self.frames,
+                .loop = self.loop,
+                .extend = zhu.toIndex(u32, self.extend),
+            };
+        }
+    };
+}
+
 pub fn EnumAnimation(comptime T: type) type {
     return std.EnumArray(T, Animation);
 }
 pub const Animation = struct {
     pub const Frames = []const Frame;
     pub const Step = enum { next, loop, end };
-    pub const Source = struct {
-        imageId: ImageId = 0,
-        image: Image = .empty,
-        size: Vector2, // 单帧尺寸
-        frames: Frames,
-        loop: bool = true, // 是否循环播放
-    };
+    pub const Source = SourceT(u32);
 
     elapsed: f32 = -zhu.epsilon,
     index: u8 = 0,
     row: u8 = 0,
     source: Source,
-    extend: u32 = 0,
 
     pub fn init(image: Image, size: Vector2, frames: Frames) Animation {
         return .initSource(.{ .image = image, .size = size, .frames = frames });
@@ -126,6 +148,8 @@ pub const Animation = struct {
         self.reset();
     }
 
+    /// delta 使用引擎传入的 Sokol 平滑帧时间，每次最多推进一帧。
+    /// 这是小引擎的设计约定，不为长时间卡顿增加跨帧补算。
     pub fn update(self: *Animation, delta: f32) ?Step {
         if (self.index == self.source.frames.len) return null; // 已经结束
         if (self.elapsed < 0) {
@@ -149,7 +173,7 @@ pub const Animation = struct {
     }
 
     pub fn getEnumExtend(self: *const Animation, T: type) T {
-        return @fromBackingInt(@intCast(self.extend));
+        return @fromBackingInt(@intCast(self.source.extend));
     }
 
     pub fn stop(self: *Animation) void {
