@@ -35,11 +35,6 @@ pub fn init() void {
     sampler.init();
 }
 
-// 获取当前现实时间，返回从 Unix 纪元开始的时间戳。
-pub fn timestamp() std.Io.Timestamp {
-    return std.Io.Timestamp.now(io, .real);
-}
-
 // 开始本帧绘制，重置统计并清空顶点，保留暂存区容量。
 pub fn beginDraw() void {
     frameStats = .{};

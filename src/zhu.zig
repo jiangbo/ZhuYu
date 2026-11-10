@@ -11,6 +11,7 @@ pub const batch = @import("batch.zig");
 pub const camera = @import("camera.zig");
 pub const text = @import("text.zig");
 const core = @import("internal/core.zig");
+const platform = @import("internal/platform.zig");
 
 pub const key = window.key;
 pub const mouse = window.mouse;
@@ -26,6 +27,7 @@ pub const extend = struct {
 
 // 常用扩展模块，保留 extend 下的完整分类。
 pub const widget = extend.widget;
+pub const storage = extend.storage;
 
 pub const Image = graphics.Image;
 pub const Vertex = graphics.Vertex;
@@ -37,6 +39,7 @@ pub const EnumAnimation = graphics.EnumAnimation;
 pub const Allocator = std.mem.Allocator;
 
 pub const Timer = core.Timer;
+pub const DateTime = platform.DateTime;
 pub const ease = core.ease;
 pub const enums = core.enums;
 pub const Vector = core.Vector;
@@ -61,7 +64,13 @@ pub const clamp = std.math.clamp;
 pub const loadImage = assets.loadImage;
 pub const loadAtlas = assets.atlas.load;
 pub const getImage = assets.getImageByPath;
+pub const localTime = platform.localTime;
 pub const oom = core.oom;
+
+/// 获取当前本地日期和时间；需要先调用 zhu.setup。
+pub fn now() DateTime {
+    return localTime(std.Io.Timestamp.now(assets.io, .real));
+}
 
 // 按内存布局重新解释值，调用方保证字段布局相符。
 pub fn reinterpret(comptime T: type, value: anytype) T {
@@ -96,6 +105,7 @@ pub const SetupOption = struct {
 
 /// 配置引擎依赖；指定 storage 时同时初始化用户数据存储。
 pub fn setup(info: std.process.Init, option: SetupOption) void {
+    platform.setup();
     const gpa = assets.setup(info.io, info.gpa);
     window.setup(gpa);
     if (option.storage) |name| extend.storage.setup(info, gpa, name);

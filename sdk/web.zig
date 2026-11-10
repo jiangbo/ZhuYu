@@ -54,6 +54,7 @@ pub fn buildWeb(
                 "-Wl,--export=__em_js__zhu_font_metrics",
                 "-Wl,--export=__em_js__zhu_font_pixels",
                 "-Wl,--export=__em_js__zhu_coarse_pointer",
+                "-Wl,--export=__em_js__zhu_local_time",
                 "-Wl,--export=__em_js__zhu_fetch_start",
                 "-Wl,--export=__em_js__zhu_fetch_stop",
                 "-Wl,--export=__em_js__zhu_file_exists",

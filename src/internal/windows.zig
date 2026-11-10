@@ -2,12 +2,38 @@
 const std = @import("std");
 
 const dynamic = @import("../text.zig").dynamic;
+const DateTime = @import("platform.zig").DateTime;
 const assert = std.debug.assert;
 
 pub fn setup(_: std.mem.Allocator) void {}
 
-// 按 Windows ABI 声明，x86 使用 stdcall，x64 和 ARM64 使用各自的系统调用约定。
-pub extern "imm32" fn ImmDisableIME(i32) callconv(.winapi) std.os.windows.BOOL;
+pub fn localTime(seconds: i64) DateTime {
+    // FILETIME 从 1601 年开始，单位为 100 纳秒。
+    const fileSeconds = @as(i128, seconds) + 11644473600;
+    const ticks: u64 = @intCast(fileSeconds * 10000000);
+    const file: FileTime = .{
+        .dwLowDateTime = @truncate(ticks),
+        .dwHighDateTime = @intCast(ticks >> 32),
+    };
+    var utc: SystemTime = undefined;
+    assert(FileTimeToSystemTime(&file, &utc) != 0);
+    var result: SystemTime = undefined;
+    // 空时区指针使用系统当前时区，并按目标日期应用动态夏令时规则。
+    assert(SystemTimeToTzSpecificLocalTimeEx(null, &utc, &result) != 0);
+    var local: FileTime = undefined;
+    assert(SystemTimeToFileTime(&result, &local) != 0);
+    const localTicks = (@as(i128, local.dwHighDateTime) << 32) |
+        local.dwLowDateTime;
+    return .{
+        .year = result.year,
+        .month = result.month,
+        .day = result.day,
+        .hour = result.hour,
+        .minute = result.minute,
+        .second = result.second,
+        .utcOffset = @intCast(@divTrunc(localTicks - ticks, 10000000)),
+    };
+}
 
 // COM 接口的首字段都是虚表指针，前三个方法共用 IUnknown ABI。
 fn releaseObject(object: *anyopaque) void {
@@ -265,6 +291,35 @@ pub const font = struct {
         };
     }
 };
+
+// 按 Windows ABI 声明，x86 使用 stdcall，x64 和 ARM64 使用各自的系统调用约定。
+pub extern "imm32" fn ImmDisableIME(i32) callconv(.winapi) std.os.windows.BOOL;
+
+const FileTime = std.os.windows.FILETIME;
+const SystemTime = extern struct {
+    year: u16,
+    month: u16,
+    weekDay: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    millisecond: u16,
+};
+
+extern "kernel32" fn FileTimeToSystemTime(
+    *const FileTime,
+    *SystemTime,
+) callconv(.winapi) c_int;
+extern "kernel32" fn SystemTimeToFileTime(
+    *const SystemTime,
+    *FileTime,
+) callconv(.winapi) c_int;
+extern "kernel32" fn SystemTimeToTzSpecificLocalTimeEx(
+    ?*const anyopaque,
+    *const SystemTime,
+    *SystemTime,
+) callconv(.winapi) c_int;
 
 // DirectWrite 与 GDI 的原始 ABI 声明。
 const Guid = std.os.windows.GUID;

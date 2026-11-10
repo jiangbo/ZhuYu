@@ -1,9 +1,19 @@
 //! 浏览器宿主接口，JavaScript 源码直接嵌入 Emscripten 的链接段。
 const std = @import("std");
 
+const DateTime = @import("platform.zig").DateTime;
 const dynamic = @import("../text.zig").dynamic;
 
 pub fn setup(_: std.mem.Allocator) void {}
+
+// 秒数以 double 传递，避免 Wasm i64 与 JavaScript BigInt 的转换。
+extern "env" fn zhu_local_time(f64, *DateTime) void;
+
+pub fn localTime(seconds: i64) DateTime {
+    var result: DateTime = undefined;
+    zhu_local_time(@floatFromInt(seconds), &result);
+    return result;
+}
 
 // 浏览器系统字体接口，画布状态由嵌入的 JavaScript 持有。
 pub const font = struct {
@@ -79,6 +89,25 @@ pub const storage = struct {
 
 // 查询主要指针类型，用于推测是否缺少实体键盘。
 pub extern "env" fn zhu_coarse_pointer() c_int;
+
+// DateTime 按声明顺序保存七个 i32，偏移秒数采用东区为正的约定。
+export var __em_js__zhu_local_time align(1) linksection("em_js") =
+    (
+        \\(double seconds, int *out)<::>{
+        \\    const date = new Date(seconds * 1000);
+        \\    const local = new Date(0);
+        \\    local.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+        \\    const hour = date.getHours(), minute = date.getMinutes();
+        \\    local.setUTCHours(hour, minute, date.getSeconds(), 0);
+        \\    HEAP32[out >> 2] = date.getFullYear();
+        \\    HEAP32[(out >> 2) + 1] = date.getMonth() + 1;
+        \\    HEAP32[(out >> 2) + 2] = date.getDate();
+        \\    HEAP32[(out >> 2) + 3] = hour;
+        \\    HEAP32[(out >> 2) + 4] = minute;
+        \\    HEAP32[(out >> 2) + 5] = date.getSeconds();
+        \\    HEAP32[(out >> 2) + 6] = (local.getTime() - date.getTime()) / 1000;
+        \\}
+    ).*;
 
 // 打开、关闭浏览器字体，并读取像素度量和字形数据。
 pub extern "env" fn zhu_font_open([*:0]const u8, u32) c_int;
