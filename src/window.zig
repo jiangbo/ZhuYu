@@ -35,10 +35,6 @@ pub var viewRect: zhu.Rect = undefined;
 pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
 var info: Option = undefined; // 当前窗口配置，由 run 设置。
 
-pub fn call(object: anytype, comptime name: []const u8, args: anytype) void {
-    if (@hasDecl(object, name)) @call(.auto, @field(object, name), args);
-}
-
 var allocator: std.mem.Allocator = undefined;
 
 pub fn setup(gpa: std.mem.Allocator) void {
@@ -70,7 +66,7 @@ pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
     platform.run(desc, option.disableIME);
 }
 
-export fn windowInit() void {
+fn windowInit() callconv(.c) void {
     computeViewRect();
     sk.gfx.setup(.{
         .environment = sk.glue.environment(),
@@ -79,17 +75,45 @@ export fn windowInit() void {
     });
     assets.init();
     zhu.random.init(sk.time.now());
-    call(root, "init", .{allocator});
+    if (@hasDecl(root, "init")) root.init(allocator);
 }
 
-// 本帧窗口尺寸是否变化，供游戏读取，帧末清除。
-pub var resized: bool = false;
-
-export fn windowEvent(raw: ?*const Event) void {
+fn windowEvent(raw: ?*const Event) callconv(.c) void {
     const ev = raw orelse return;
     if (@hasDecl(root, "event")) return root.event(ev);
     handleEvent(ev);
 }
+
+fn windowFrame() callconv(.c) void {
+    const frameStart = sk.time.now();
+    assets.update();
+    if (resized) computeViewRect();
+    if (anyMoved()) {
+        mouse.pos = mouse.raw.sub(viewRect.min).div(scale);
+        for (&touch.points) |*slot| {
+            if (slot.*) |*point| {
+                point.pos = point.raw.sub(viewRect.min).div(scale);
+            }
+        }
+    }
+    const delta: f32 = @floatCast(sk.app.frameDuration());
+    if (options.font == .system) text.dynamic.update(delta);
+    root.frame(delta);
+    endInput();
+    resized = false;
+    frameTicks = sk.time.since(frameStart);
+}
+
+fn windowDeinit() callconv(.c) void {
+    if (@hasDecl(root, "deinit")) root.deinit(allocator);
+    audio.deinit();
+    assets.deinit();
+    sk.gfx.shutdown();
+    if (builtin.abi.isAndroid()) platform.backend.threaded.deinit();
+}
+
+// 本帧窗口尺寸是否变化，供游戏读取，帧末清除。
+pub var resized: bool = false;
 
 // 默认窗口和输入处理；应用覆盖 event 后可按需转发。
 pub fn handleEvent(ev: *const Event) void {
@@ -209,33 +233,6 @@ pub fn computeViewRect() void {
 }
 
 pub var frameTicks: u64 = 0;
-export fn windowFrame() void {
-    const frameStart = sk.time.now();
-    assets.update();
-    if (resized) computeViewRect();
-    if (anyMoved()) {
-        mouse.pos = mouse.raw.sub(viewRect.min).div(scale);
-        for (&touch.points) |*slot| {
-            if (slot.*) |*point| {
-                point.pos = point.raw.sub(viewRect.min).div(scale);
-            }
-        }
-    }
-    const delta: f32 = @floatCast(sk.app.frameDuration());
-    if (options.font == .system) text.dynamic.update(delta);
-    call(root, "frame", .{delta});
-    endInput();
-    resized = false;
-    frameTicks = sk.time.since(frameStart);
-}
-
-export fn windowDeinit() void {
-    call(root, "deinit", .{allocator});
-    audio.deinit();
-    assets.deinit();
-    sk.gfx.shutdown();
-    if (builtin.abi.isAndroid()) platform.backend.threaded.deinit();
-}
 
 // 返回界面单位到渲染像素的倍率，安卓额外应用系统界面密度。
 pub fn dpi() f32 {

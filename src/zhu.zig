@@ -136,7 +136,10 @@ test "enum accepts runtime integer" {
 }
 
 test "compile zhu modules" {
-    std.testing.refAllDecls(window);
+    // 测试入口没有应用 frame，窗口启动路径由 clear 示例构建验证。
+    inline for (comptime std.meta.declarations(window)) |name| {
+        if (!comptime std.mem.eql(u8, name, "run")) _ = &@field(window, name);
+    }
     std.testing.refAllDecls(assets);
     std.testing.refAllDecls(audio);
     std.testing.refAllDecls(graphics);
