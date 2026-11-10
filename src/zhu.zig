@@ -68,9 +68,14 @@ pub const getImage = assets.getImageByPath;
 pub const localTime = platform.localTime;
 pub const oom = core.oom;
 
+/// 获取当前 Unix 时间戳；需要先调用 zhu.setup。
+pub fn timestamp() std.Io.Timestamp {
+    return std.Io.Timestamp.now(assets.io, .real);
+}
+
 /// 获取当前本地日期和时间；需要先调用 zhu.setup。
 pub fn now() DateTime {
-    return localTime(std.Io.Timestamp.now(assets.io, .real));
+    return localTime(timestamp());
 }
 
 // 按内存布局重新解释值，调用方保证字段布局相符。
