@@ -152,7 +152,7 @@ pub const Map = struct {
         if (tileSet.getTileByLocalId(localId)) |tile| {
             if (tile.animation.len == 0) return null;
             return graphics.Animation.initSource(.{
-                .image = assets.getImage(tileSet.image).?,
+                .imageId = tileSet.image,
                 .size = tileSet.tileSize,
                 .frames = tile.animation,
             });

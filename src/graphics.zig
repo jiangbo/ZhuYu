@@ -62,12 +62,11 @@ pub const Frame = struct {
     extend: u32 = 0, // 自由扩展
 };
 
-/// 配置使用整数或枚举扩展值，转换时该值必须能用 u32 表示。
+/// 配置使用整数或枚举扩展值，转换时该值必须能用 u16 表示。
 /// frames 始终借用原切片，调用方负责保持其有效。
 pub fn SourceT(comptime T: type) type {
     return struct {
         imageId: ImageId = 0,
-        image: Image = .empty,
         size: Vector2, // 单帧尺寸
         frames: []const Frame,
         loop: bool = true, // 是否循环播放
@@ -81,11 +80,10 @@ pub fn SourceT(comptime T: type) type {
         pub fn toSource(self: @This()) Animation.Source {
             return .{
                 .imageId = self.imageId,
-                .image = self.image,
                 .size = self.size,
                 .frames = self.frames,
                 .loop = self.loop,
-                .extend = zhu.toIndex(u32, self.extend),
+                .extend = zhu.toIndex(u16, self.extend),
             };
         }
     };
@@ -97,23 +95,23 @@ pub fn EnumAnimation(comptime T: type) type {
 pub const Animation = struct {
     pub const Frames = []const Frame;
     pub const Step = enum { next, loop, end };
-    pub const Source = SourceT(u32);
+    pub const Source = SourceT(u16);
 
     elapsed: f32 = -zhu.epsilon,
-    index: u8 = 0,
-    row: u8 = 0,
+    index: u16 = 0,
+    row: u16 = 0,
     source: Source,
+    image: Image,
 
     pub fn init(image: Image, size: Vector2, frames: Frames) Animation {
-        return .initSource(.{ .image = image, .size = size, .frames = frames });
+        return .{
+            .source = .{ .size = size, .frames = frames },
+            .image = image,
+        };
     }
 
     pub fn initSource(source: Source) Animation {
-        std.debug.assert(source.frames.len <= 255);
-        if (source.image.isValid()) return .{ .source = source };
-        var self: Animation = .{ .source = source };
-        self.source.image = assets.getImage(source.imageId).?;
-        return self;
+        return .{ .source = source, .image = assets.getImage(source.imageId).? };
     }
 
     pub fn initFinished(source: Source) Animation {
@@ -135,16 +133,17 @@ pub const Animation = struct {
         const frames = self.source.frames;
         var offset = frames[@min(frames.len - 1, index)].offset;
         offset.y += @as(f32, @floatFromInt(self.row)) * self.source.size.y;
-        return self.source.image.sub(.init(offset, self.source.size));
+        return self.image.sub(.init(offset, self.source.size));
     }
 
     pub fn play(self: *Animation, source: Source) void {
-        self.source = Animation.initSource(source).source;
+        self.source = source;
+        self.image = assets.getImage(source.imageId).?;
         self.reset();
     }
 
     pub fn playRow(self: *Animation, row: anytype) void {
-        self.row = zhu.toIndex(u8, row);
+        self.row = zhu.toIndex(u16, row);
         self.reset();
     }
 
