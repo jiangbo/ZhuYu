@@ -164,27 +164,40 @@ pub fn EnumAnimation(comptime T: type) type {
     return std.EnumArray(T, Animation);
 }
 pub const Animation = struct {
+    comptime {
+        std.debug.assert(@sizeOf(@This()) <= 64);
+    }
+
     pub const Frames = []const Frame;
-    pub const Step = enum { next, loop, end };
+    pub const Step = enum { start, next, loop, end };
     pub const Source = SourceT(u16);
 
     elapsed: f32 = -zhu.epsilon,
     index: u16 = 0,
     row: u16 = 0,
+    // 已评审：运行时 imageId 保存上次更新的窗口帧号，图片已解析到 image。
     source: Source,
     image: Image,
 
     pub fn init(image: Image, size: Vector2, frames: Frames) Animation {
         std.debug.assert(frames.len != 0);
-        return .{
-            .source = .{ .imageId = 0, .size = size, .frames = frames },
-            .image = image,
-        };
+        for (frames) |f| std.debug.assert(f.duration > 0);
+        const id = std.math.maxInt(u32);
+        const source: Source = .{ .imageId = id, .frames = frames, .size = size };
+        return .{ .source = source, .image = image };
     }
 
     pub fn initSource(source: Source) Animation {
+        return .initWithFrame(source, std.math.maxInt(u32));
+    }
+
+    fn initWithFrame(source: Source, frameId: u32) Animation {
         std.debug.assert(source.frames.len != 0);
-        return .{ .source = source, .image = assets.getImage(source.imageId).? };
+        for (source.frames) |f| std.debug.assert(f.duration > 0);
+        const image = assets.getImage(source.imageId).?;
+        var self: Animation = .{ .source = source, .image = image };
+        self.source.imageId = frameId;
+        return self;
     }
 
     pub fn initFinished(source: Source) Animation {
@@ -209,11 +222,13 @@ pub const Animation = struct {
         return self.image.sub(.init(offset, self.source.size));
     }
 
-    pub fn play(self: *Animation, source: Source) void {
-        std.debug.assert(source.frames.len != 0);
-        self.source = source;
-        self.image = assets.getImage(source.imageId).?;
-        self.reset();
+    pub fn play(self: *Animation, source: Source, row: anytype) void {
+        self.* = .initWithFrame(source, self.source.imageId);
+        self.row = zhu.toIndex(u16, row);
+    }
+
+    pub fn playSource(self: *Animation, source: Source) void {
+        self.play(source, self.row);
     }
 
     pub fn playRow(self: *Animation, row: anytype) void {
@@ -221,15 +236,18 @@ pub const Animation = struct {
         self.reset();
     }
 
-    /// delta 使用引擎传入的 Sokol 平滑帧时间，每次最多推进一帧。
-    /// 这是小引擎的设计约定，不为长时间卡顿增加跨帧补算。
+    /// 按窗口帧号仅累加一次 delta；重复调用可逐个取出追帧事件。
     pub fn update(self: *Animation, delta: f32) ?Step {
         if (self.index == self.source.frames.len) return null; // 已经结束
-        if (self.elapsed < 0) {
-            self.elapsed = delta;
-            return .next;
+        const frameId: u32 = @truncate(window.frameCount());
+        if (self.source.imageId != frameId) {
+            self.source.imageId = frameId;
+            if (self.elapsed < 0) {
+                self.elapsed = delta;
+                return .start; // 首帧
+            }
+            self.elapsed += delta;
         }
-        self.elapsed += delta;
         const current = self.source.frames[self.index];
         if (self.elapsed < current.duration) return null; // 还未到下一帧
 
