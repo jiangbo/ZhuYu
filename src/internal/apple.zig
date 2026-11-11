@@ -1,9 +1,20 @@
 //! macOS 与 iOS 共用系统字体，公共层负责缓存和图集。
 const std = @import("std");
 
+const zhu = @import("../zhu.zig");
 const dynamic = @import("../text.zig").dynamic;
 
+const Init = std.process.Init;
+
 var gpa: std.mem.Allocator = undefined;
+
+// 当前平台的用户数据目录，路径写入调用方缓冲区。
+pub fn storagePath(info: Init, name: []const u8, buf: []u8) []const u8 {
+    const home = info.environ_map.get("HOME") orelse @panic("HOME not set");
+    if (@import("builtin").os.tag == .ios)
+        return zhu.format(buf, "{s}/Library/Application Support", .{home});
+    return zhu.format(buf, "{s}/Library/Application Support/{s}", .{ home, name });
+}
 
 pub fn setup(gpa_: std.mem.Allocator) void {
     gpa = gpa_;

@@ -1,8 +1,11 @@
 //! 浏览器宿主接口，JavaScript 源码直接嵌入 Emscripten 的链接段。
 const std = @import("std");
 
+const zhu = @import("../zhu.zig");
 const DateTime = @import("platform.zig").DateTime;
 const dynamic = @import("../text.zig").dynamic;
+
+const Allocator = std.mem.Allocator;
 
 pub fn setup(_: std.mem.Allocator) void {}
 
@@ -50,9 +53,61 @@ pub const font = struct {
     }
 };
 
-// 浏览器存储桥接，调用方传入包含游戏名称的完整存储键。
+// 浏览器用户数据存储，内部为文件名添加应用名称前缀。
 pub const storage = struct {
-    pub const Load = union(enum) { loaded: []u8, tooSmall: usize };
+    var nameBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var dataName: []const u8 = "";
+
+    pub fn setup(name: []const u8) []const u8 {
+        dataName = zhu.format(&nameBuffer, "{s}", .{name});
+        return dataName;
+    }
+
+    pub fn exists(path: [:0]const u8) bool {
+        var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        return existsKey(key(&buf, path));
+    }
+
+    pub fn readBuffer(path: [:0]const u8, buf: []u8) ![:0]u8 {
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const result = try load(key(&keyBuffer, path), buf[0 .. buf.len - 1]);
+        return switch (result) {
+            .loaded => |content| blk: {
+                buf[content.len] = 0;
+                break :blk buf[0..content.len :0];
+            },
+            .tooSmall => error.BufferTooSmall,
+        };
+    }
+
+    pub fn readAll(gpa: Allocator, path: [:0]const u8) ![:0]u8 {
+        var buf: [4096]u8 = undefined;
+        var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const pathKey = key(&keyBuffer, path);
+        return switch (try load(pathKey, &buf)) {
+            .loaded => |content| try gpa.dupeSentinel(u8, content, 0),
+            .tooSmall => |len| blk: {
+                const large = try gpa.allocSentinel(u8, len, 0);
+                errdefer gpa.free(large);
+                switch (try load(pathKey, large)) {
+                    .loaded => break :blk large,
+                    .tooSmall => return error.BufferTooSmall,
+                }
+            },
+        };
+    }
+
+    pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
+        var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        try save(key(&buf, path), content);
+    }
+
+    fn key(buf: []u8, path: [:0]const u8) [:0]u8 {
+        if (dataName.len == 0) @panic("set a storage name in zhu.setup");
+        return zhu.formatZ(buf, "{s}/{s}", .{ dataName, path });
+    }
+
+    const Load = union(enum) { loaded: []u8, tooSmall: usize };
 
     // 浏览器存档函数由 web.zig 的 JavaScript 描述静态接入。
     extern fn zhu_file_exists(path: [*:0]const u8) c_int;
@@ -60,29 +115,21 @@ pub const storage = struct {
     extern fn zhu_file_save(path: [*:0]const u8, data: [*]const u8, len: c_int) c_int;
 
     /// 检查浏览器中是否存在存档。
-    pub fn exists(path: [:0]const u8) bool {
+    fn existsKey(path: [:0]const u8) bool {
         return zhu_file_exists(path.ptr) != 0;
     }
 
     /// 读取浏览器存档，将原始字节写入传入的缓冲区。
-    pub fn load(path: [:0]const u8, buffer: []u8) !Load {
-        const len = zhu_file_load(
-            path.ptr,
-            buffer.ptr,
-            @intCast(buffer.len),
-        );
-        if (len == 0 and !exists(path)) return error.FileNotFound;
+    fn load(path: [:0]const u8, buffer: []u8) !Load {
+        const len = zhu_file_load(path.ptr, buffer.ptr, @intCast(buffer.len));
+        if (len == 0 and !existsKey(path)) return error.FileNotFound;
         if (len < 0) return .{ .tooSmall = @intCast(-len) };
         return .{ .loaded = buffer[0..@intCast(len)] };
     }
 
     /// 将存档字节编码为 Base64，保存到浏览器。
-    pub fn save(path: [:0]const u8, data: []const u8) !void {
-        const err = zhu_file_save(
-            path.ptr,
-            data.ptr,
-            @intCast(data.len),
-        );
+    fn save(path: [:0]const u8, data: []const u8) !void {
+        const err = zhu_file_save(path.ptr, data.ptr, @intCast(data.len));
         if (err != 0) return error.WriteFailed;
     }
 };

@@ -10,6 +10,8 @@ pub const graphics = @import("graphics.zig");
 pub const batch = @import("batch.zig");
 pub const camera = @import("camera.zig");
 pub const text = @import("text.zig");
+pub const codec = @import("internal/codec.zig");
+pub const storage = platform.storage;
 const core = @import("internal/core.zig");
 const platform = @import("internal/platform.zig");
 
@@ -20,14 +22,12 @@ pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
     pub const widget = @import("extend/widget.zig");
     pub const bag = @import("extend/bag.zig");
-    pub const storage = @import("extend/storage.zig");
     pub const touch = @import("extend/touch.zig");
     pub const tiled = @import("extend/tiled.zig");
 };
 
 // 常用扩展模块，保留 extend 下的完整分类。
 pub const widget = extend.widget;
-pub const storage = extend.storage;
 
 pub const Image = graphics.Image;
 pub const Vertex = graphics.Vertex;
@@ -113,7 +113,7 @@ pub fn setup(info: std.process.Init, option: SetupOption) void {
     platform.setup();
     const gpa = assets.setup(info.io, info.gpa);
     window.setup(gpa);
-    if (option.storage) |name| extend.storage.setup(info, gpa, name);
+    if (option.storage) |name| storage.setup(info, gpa, name);
 }
 
 pub fn percentInt(a: anytype, b: anytype) f32 {
@@ -165,7 +165,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(extend.debug);
     std.testing.refAllDecls(extend.widget);
     std.testing.refAllDecls(extend.bag);
-    std.testing.refAllDecls(extend.storage);
+    std.testing.refAllDecls(storage);
     std.testing.refAllDecls(extend.touch);
     std.testing.refAllDecls(extend.touch.stick);
     std.testing.refAllDecls(extend.tiled);

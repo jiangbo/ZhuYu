@@ -2,8 +2,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
+
+const zhu = @import("../zhu.zig");
+const codec = @import("codec.zig");
+
+const Init = std.process.Init;
 const assert = std.debug.assert;
-const print = @import("../zhu.zig").format;
+const print = zhu.format;
 
 pub const backend = switch (builtin.os.tag) {
     .windows => @import("windows.zig"),
@@ -14,6 +19,175 @@ pub const backend = switch (builtin.os.tag) {
         @import("linux.zig"),
     .emscripten => @import("web.zig"),
     else => struct {},
+};
+
+/// 用户数据存储，目录按应用区分，由 zhu.setup 的 storage 选项初始化。
+pub const storage = struct {
+    const Reader = std.Io.Reader;
+    const Writer = std.Io.Writer;
+    const Allocator = std.mem.Allocator;
+    const ArenaAllocator = std.heap.ArenaAllocator;
+
+    var io: std.Io = undefined;
+    var gpa: Allocator = undefined;
+    // 初始化时复制路径，避免保存启动环境变量中的借用切片。
+    var pathBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var dataPath: []const u8 = "";
+
+    /// 由 zhu.setup 传入统计分配器；name 用于桌面目录和 Web 存储键。
+    /// 安卓和 iOS 使用应用沙盒，Web 使用 name 作为浏览器存储键的前缀。
+    pub fn setup(info: Init, gpa_: Allocator, name: []const u8) void {
+        io = info.io;
+        gpa = gpa_;
+        dataPath = if (builtin.os.tag == .emscripten)
+            backend.storage.setup(name)
+        else
+            backend.storagePath(info, name, &pathBuffer);
+    }
+
+    fn openOrCreateDir(create: bool) !std.Io.Dir {
+        if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
+        if (create) return std.Io.Dir.cwd().createDirPathOpen(io, dataPath, .{});
+        return std.Io.Dir.openDirAbsolute(io, dataPath, .{});
+    }
+
+    /// 检查用户数据文件是否存在，路径相对于存储目录。
+    pub fn exists(path: [:0]const u8) bool {
+        if (builtin.os.tag == .emscripten) return backend.storage.exists(path);
+        const dir = openOrCreateDir(false) catch return false;
+        defer dir.close(io);
+        dir.access(io, path, .{}) catch return false;
+        return true;
+    }
+
+    /// 读取用户数据，并在缓冲区末尾添加零字节。
+    pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
+        if (builtin.os.tag == .emscripten)
+            return backend.storage.readBuffer(path, buffer);
+        const buf = buffer[0 .. buffer.len - 1];
+        const dir = try openOrCreateDir(false);
+        defer dir.close(io);
+        const content = try dir.readFile(io, path, buf);
+        return terminateBuffer(buffer, content.len);
+    }
+
+    /// 读取完整用户数据，由调用者释放返回的内存。
+    pub fn readAll(gpa_: Allocator, path: [:0]const u8) ![:0]u8 {
+        if (builtin.os.tag == .emscripten) return backend.storage.readAll(gpa_, path);
+        const dir = try openOrCreateDir(false);
+        defer dir.close(io);
+        return dir.readFileAllocOptions(io, path, gpa_, .unlimited, .of(u8), 0);
+    }
+
+    /// 保存用户数据，首次写入时创建存储目录和文件所在的子目录。
+    pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
+        if (builtin.os.tag == .emscripten)
+            return backend.storage.writeAll(path, content);
+        const dir = try openOrCreateDir(true);
+        defer dir.close(io);
+        if (std.fs.path.dirname(path)) |sub| try dir.createDirPath(io, sub);
+
+        var file = try dir.createFile(io, path, .{ .truncate = true });
+        defer file.close(io);
+        try file.writeStreamingAll(io, content);
+    }
+
+    /// 读取结果拥有所有切片数据，使用结束后调用 deinit，切片随之失效。
+    /// 读取的 ArrayList 由 arena 管理，扩容时应使用 arena 的分配器。
+    pub fn Loaded(comptime T: type) type {
+        return struct {
+            value: T,
+            arena: *ArenaAllocator,
+
+            pub fn deinit(self: @This()) void {
+                const gpa_ = self.arena.child_allocator;
+                self.arena.deinit();
+                gpa_.destroy(self.arena);
+            }
+        };
+    }
+
+    /// 按指定类型读取二进制存档，字段顺序和类型必须与写入时一致。
+    pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
+        const content = try readAll(gpa, path);
+        defer gpa.free(content);
+
+        const arena = try gpa.create(ArenaAllocator);
+        errdefer gpa.destroy(arena);
+        arena.* = ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+
+        var reader = Reader.fixed(content);
+        const value = try codec.decode(&reader, T, arena.allocator());
+        if (reader.seek != content.len) return error.InvalidData;
+        return .{ .value = value, .arena = arena };
+    }
+
+    /// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
+    /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
+    /// ArrayList 只保存元素，读取后容量等于元素数量。
+    pub fn writeValue(path: [:0]const u8, value: anytype) !void {
+        if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
+        var output = Writer.Allocating.init(gpa);
+        defer output.deinit();
+        try codec.encode(&output.writer, value);
+        try writeAll(path, output.writer.buffered());
+    }
+
+    /// 带版本的存档，持有文件内容和读取时分配的数据。
+    pub const Save = struct {
+        version: u32,
+        content: []const u8,
+        arena: *ArenaAllocator,
+
+        /// 每次从数据区开头读取，返回值中的切片在 deinit 后失效。
+        /// 读取的 ArrayList 由 arena 管理，扩容时应使用 arena 的分配器。
+        pub fn read(self: *Save, comptime T: type) !T {
+            var reader = Reader.fixed(self.content);
+            const value = try codec.decode(&reader, T, self.arena.allocator());
+            if (reader.seek != self.content.len) return error.InvalidData;
+            return value;
+        }
+
+        pub fn deinit(self: Save) void {
+            const gpa_ = self.arena.child_allocator;
+            self.arena.deinit();
+            gpa_.destroy(self.arena);
+        }
+    };
+
+    /// 打开带版本的存档，只解析文件头，由游戏按版本选择读取类型。
+    pub fn openSave(path: [:0]const u8) !Save {
+        if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
+        const arena = try gpa.create(ArenaAllocator);
+        errdefer gpa.destroy(arena);
+        arena.* = ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+
+        const content = try readAll(arena.allocator(), path);
+        var reader = Reader.fixed(content);
+        const version = try codec.readVersion(&reader);
+        return .{
+            .version = version,
+            .content = content[reader.seek..],
+            .arena = arena,
+        };
+    }
+
+    /// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
+    pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
+        if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
+        var output = Writer.Allocating.init(gpa);
+        defer output.deinit();
+        try codec.encodeVersion(&output.writer, version, value);
+        try writeAll(path, output.writer.buffered());
+    }
+
+    // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
+    fn terminateBuffer(buffer: []u8, len: usize) [:0]u8 {
+        buffer[len] = 0;
+        return buffer[0..len :0];
+    }
 };
 
 /// 日期时间格式的最大字节数，包含秒级 UTC 偏移，不含零结尾。

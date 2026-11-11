@@ -1,9 +1,18 @@
 //! Windows 平台接口，字体实现放在内部模块中。
 const std = @import("std");
 
+const zhu = @import("../zhu.zig");
 const dynamic = @import("../text.zig").dynamic;
 const DateTime = @import("platform.zig").DateTime;
+
+const Init = std.process.Init;
 const assert = std.debug.assert;
+
+// 当前平台的用户数据目录，路径写入调用方缓冲区。
+pub fn storagePath(info: Init, name: []const u8, buf: []u8) []const u8 {
+    const base = info.environ_map.get("APPDATA") orelse @panic("APPDATA not set");
+    return zhu.format(buf, "{s}\\{s}", .{ base, name });
+}
 
 pub fn setup(_: std.mem.Allocator) void {}
 
