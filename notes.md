@@ -10,13 +10,13 @@
 
 - 状态：暂缓替换，先保留现有实现。以下限制适用于项目使用的 Zig 0.17
   标准库和当前引擎实现；后续上游变化以 Codeberg 为准。
-- 替换范围：`src/internal/file.zig` 的桌面文件读取和线程唤醒已经使用
+- 替换范围：`src/internal/fetch.zig` 的桌面文件读取和线程唤醒已经使用
   `std.Io`，剩下的主要是自建请求调度、结果交接与平台适配。
 - 帧循环不能阻塞：`std.Io.async` 允许在调用线程同步执行任务，当前
   `Threaded` 后端在单线程、资源不足或达到并发限制时可能退回同步执行。
   若改用 `std.Io.concurrent`，还需处理 `ConcurrencyUnavailable`，不能把
   文件读取或等待未完成任务放进主线程的每帧更新。
-- 回调仍须回到主线程：当前 `assets.update()` 调用 `file.update()`，再执行
+- 回调仍须回到主线程：当前 `assets.update()` 调用 `fetch.update()`，再执行
   图片上传 GPU、音频处理和缓存修改。换成标准库任务后，仍需完成结果队列
   和每帧非阻塞分发，不能在工作线程直接调用现有资源回调。
 - Web 不能直接改为文件读取：资源通过 `src/internal/web.zig` 中的 JavaScript

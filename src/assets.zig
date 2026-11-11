@@ -6,7 +6,7 @@ const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
-pub const file = @import("internal/file.zig");
+pub const fetch = @import("internal/fetch.zig");
 const core = @import("internal/core.zig");
 
 const oom = core.oom;
@@ -31,7 +31,7 @@ pub fn setup(io_: std.Io, gpa_: std.mem.Allocator) std.mem.Allocator {
 
 // 在图形环境建立后初始化资源加载和默认采样器。
 pub fn init() void {
-    file.init(io, gpa);
+    fetch.init(io, gpa);
     sampler.init();
 }
 
@@ -43,7 +43,7 @@ pub fn beginDraw() void {
 
 // 推进异步加载，并在主线程执行资源回调。
 pub fn update() void {
-    file.update();
+    fetch.update();
 }
 
 pub fn deinit() void {
@@ -52,7 +52,7 @@ pub fn deinit() void {
     view.deinit();
     sound.deinit();
     music.deinit();
-    file.deinit();
+    fetch.deinit();
     gpu.deinit();
     sk.gfx.destroySampler(sampler.nearest);
     sk.gfx.destroySampler(sampler.linear);
@@ -74,12 +74,12 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
         .filter = option.filter,
     };
     view.put(imageView, .{ .sampler = sampler.get(option.filter) });
-    file.load(path, imageView.id, view.handler);
+    fetch.load(path, imageView.id, view.handler);
     return entry.value_ptr.*;
 }
 
-pub const Id = file.Id;
-pub const id = file.id;
+pub const Id = fetch.Id;
+pub const id = fetch.id;
 
 pub fn getImage(imageId: Id) ?graphics.Image {
     if (builtin.is_test) return .empty;
@@ -269,7 +269,7 @@ pub const atlas = struct {
                 .atlasId = atlasId,
                 .layer = @intCast(i),
             };
-            file.load(path, @bitCast(pageIndex), handler);
+            fetch.load(path, @bitCast(pageIndex), handler);
         }
 
         for (source.images) |image| {
@@ -286,7 +286,7 @@ pub const atlas = struct {
         };
     }
 
-    fn handler(_: file.Mode, index: u64, response: Response) void {
+    fn handler(_: fetch.Mode, index: u64, response: Response) void {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
@@ -316,8 +316,8 @@ pub const atlas = struct {
 pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
-    file.load(path, handle, struct {
-        fn callback(_: file.Mode, index: u64, resp: Response) void {
+    fetch.load(path, handle, struct {
+        fn callback(_: fetch.Mode, index: u64, resp: Response) void {
             const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
                 panicFmt("{s}: {}", .{ resp.path, err });
             };
@@ -366,7 +366,7 @@ pub const view = struct {
         cache = .empty;
     }
 
-    fn handler(_: file.Mode, index: u64, resp: Response) void {
+    fn handler(_: fetch.Mode, index: u64, resp: Response) void {
         const img = decoder.load(gpa, resp.data) catch |err| {
             panicFmt("{s}: {}", .{ resp.path, err });
         };
@@ -414,8 +414,8 @@ pub const sound = struct {
 
         entry.value_ptr.* = null;
         // 同步完成返回资源，异步完成通过回调交付。
-        file.load(path, assetId, struct {
-            fn callback(mode: file.Mode, index: u64, resp: Response) void {
+        fetch.load(path, assetId, struct {
+            fn callback(mode: fetch.Mode, index: u64, resp: Response) void {
                 const source = Source.init(gpa, resp.data) catch |err|
                     panicFmt("sound init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
@@ -440,8 +440,8 @@ pub const music = struct {
 
         entry.value_ptr.* = null;
         // 同步完成返回资源，异步完成通过回调交付。
-        file.load(path, assetId, struct {
-            fn callback(mode: file.Mode, index: u64, resp: Response) void {
+        fetch.load(path, assetId, struct {
+            fn callback(mode: fetch.Mode, index: u64, resp: Response) void {
                 const rate: u32 = @intCast(sk.audio.sampleRate());
                 const source = Source.init(gpa, resp.data, rate) catch |err|
                     panicFmt("music init failed: {s}: {}", .{ resp.path, err });
@@ -462,7 +462,7 @@ pub const music = struct {
     }
 };
 
-pub const Response = file.Response;
+pub const Response = fetch.Response;
 
 // 本帧处理的字符数和顶点数。
 pub const FrameStats = struct {
@@ -485,7 +485,7 @@ pub const TotalStats = struct {
 pub fn queryTotalStats() TotalStats {
     return .{
         .image = imageCache.count(),
-        .file = file.count(),
+        .file = fetch.count(),
         .sound = sound.cache.count(),
         .music = music.cache.count(),
         .vertexCapacity = gpu.vertices.capacity,
