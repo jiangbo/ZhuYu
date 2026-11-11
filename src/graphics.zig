@@ -66,7 +66,7 @@ pub const Frame = struct {
 /// frames 始终借用原切片，调用方负责保持其有效。
 pub fn SourceT(comptime T: type) type {
     return struct {
-        imageId: ImageId = 0,
+        imageId: ImageId,
         size: Vector2, // 单帧尺寸
         frames: []const Frame,
         loop: bool = true, // 是否循环播放
@@ -89,6 +89,73 @@ pub fn SourceT(comptime T: type) type {
     };
 }
 
+pub fn Sources(T: type) type {
+    return struct {
+        sources: []const SourceT(T),
+
+        pub fn init(sources: []const SourceT(T)) @This() {
+            return .{ .sources = sources };
+        }
+
+        pub fn initChecked(sources: []const SourceT(T)) @This() {
+            for (sources, 0..) |src, index| {
+                std.debug.assert(@backingInt(src.extend) == index);
+            }
+            return .init(sources);
+        }
+
+        /// 编译期整理缺项或乱序配置；枚举必须从零开始连续编号。
+        /// 缺省动作的 frames 为空，不能用于播放。
+        pub fn generate(comptime configs: []const SourceT(T)) @This() {
+            const sources = comptime blk: {
+                const values = std.enums.values(T);
+                var result = std.mem.zeroes([values.len]SourceT(T));
+                for (values, 0..) |tag, index| {
+                    std.debug.assert(@backingInt(tag) == index);
+                    result[index].extend = tag;
+                }
+                for (configs) |src| {
+                    result[@backingInt(src.extend)] = src;
+                }
+                break :blk result;
+            };
+            return .{ .sources = &sources };
+        }
+
+        /// 编译期按字段名生成源，缺省动作保留空帧占位。
+        pub fn fromStruct(comptime configs: EnumSource(T)) @This() {
+            const sources = comptime blk: {
+                const values = std.enums.values(T);
+                var result: [values.len]SourceT(T) = undefined;
+                for (values, 0..) |tag, index| {
+                    std.debug.assert(@backingInt(tag) == index);
+                    const src = @field(configs, @tagName(tag)) orelse
+                        std.mem.zeroes(Animation.Source);
+                    result[index] = .{
+                        .imageId = src.imageId,
+                        .size = src.size,
+                        .frames = src.frames,
+                        .loop = src.loop,
+                        .extend = tag,
+                    };
+                }
+                break :blk result;
+            };
+            return .{ .sources = &sources };
+        }
+
+        pub fn get(self: @This(), action: T) Animation.Source {
+            return self.sources[zhu.toIndex(usize, action)].toSource();
+        }
+    };
+}
+
+/// 按枚举名称配置动画源，可直接从 ZON 导入，省略的动作默认为 null。
+pub fn EnumSource(T: type) type {
+    const Source = ?Animation.Source;
+    return std.enums.EnumFieldStruct(T, Source, @as(Source, null));
+}
+
 pub fn EnumAnimation(comptime T: type) type {
     return std.EnumArray(T, Animation);
 }
@@ -104,13 +171,15 @@ pub const Animation = struct {
     image: Image,
 
     pub fn init(image: Image, size: Vector2, frames: Frames) Animation {
+        std.debug.assert(frames.len != 0);
         return .{
-            .source = .{ .size = size, .frames = frames },
+            .source = .{ .imageId = 0, .size = size, .frames = frames },
             .image = image,
         };
     }
 
     pub fn initSource(source: Source) Animation {
+        std.debug.assert(source.frames.len != 0);
         return .{ .source = source, .image = assets.getImage(source.imageId).? };
     }
 
@@ -137,6 +206,7 @@ pub const Animation = struct {
     }
 
     pub fn play(self: *Animation, source: Source) void {
+        std.debug.assert(source.frames.len != 0);
         self.source = source;
         self.image = assets.getImage(source.imageId).?;
         self.reset();
@@ -192,47 +262,49 @@ pub const Animation = struct {
     }
 };
 
-pub fn framesX(comptime count: u8, size: Vector2, d: f32) [count]Frame {
-    var result: [count]Frame = undefined;
-    for (&result, 0..) |*frame, i| {
-        const index: f32 = @floatFromInt(i);
-        frame.* = .{ .offset = .xy(index * size.x, 0), .duration = d };
+pub const frame = struct {
+    pub fn x(comptime count: u8, size: Vector2, d: f32) [count]Frame {
+        var result: [count]Frame = undefined;
+        for (&result, 0..) |*item, i| {
+            const index: f32 = @floatFromInt(i);
+            item.* = .{ .offset = .xy(index * size.x, 0), .duration = d };
+        }
+        return result;
     }
-    return result;
-}
 
-/// 倒序复制完整帧；输入非空，输出容量至少为输入长度，不能重叠。
-pub fn reverseFrames(frames: []const Frame, buffer: []Frame) []Frame {
-    std.debug.assert(frames.len > 0 and buffer.len >= frames.len);
-    const result = buffer[0..frames.len];
-    @memcpy(result, frames);
-    std.mem.reverse(Frame, result);
-    return result;
-}
-
-/// 生成不重复端点的往返序列；输入非空，输出容量需足够，不能重叠。
-pub fn pingPongFrames(frames: []const Frame, buffer: []Frame) []Frame {
-    const len = pingPongLen(frames.len);
-    std.debug.assert(buffer.len >= len);
-    const result = buffer[0..len];
-    @memcpy(result[0..frames.len], frames);
-    if (frames.len > 2) {
-        _ = reverseFrames(frames[1 .. frames.len - 1], result[frames.len..]);
+    /// 倒序复制完整帧；输入非空，输出容量至少为输入长度，不能重叠。
+    pub fn reverse(frames: []const Frame, buffer: []Frame) []Frame {
+        std.debug.assert(frames.len > 0 and buffer.len >= frames.len);
+        const result = buffer[0..frames.len];
+        @memcpy(result, frames);
+        std.mem.reverse(Frame, result);
+        return result;
     }
-    return result;
-}
 
-fn pingPongLen(len: usize) usize {
-    std.debug.assert(len > 0);
-    return if (len == 1) 1 else len * 2 - 2;
-}
+    /// 生成不重复端点的往返序列；输入非空，输出容量需足够，不能重叠。
+    pub fn pingPong(frames: []const Frame, buffer: []Frame) []Frame {
+        const len = pingPongLen(frames.len);
+        std.debug.assert(buffer.len >= len);
+        const result = buffer[0..len];
+        @memcpy(result[0..frames.len], frames);
+        if (frames.len > 2) {
+            _ = reverse(frames[1 .. frames.len - 1], result[frames.len..]);
+        }
+        return result;
+    }
 
-pub fn pingPongFramesX(comptime n: u8, size: Vector2, d: f32) [pingPongLen(n)]Frame {
-    const frames = framesX(n, size, d);
-    var result: [pingPongLen(n)]Frame = undefined;
-    _ = pingPongFrames(&frames, &result);
-    return result;
-}
+    fn pingPongLen(len: usize) usize {
+        std.debug.assert(len > 0);
+        return if (len == 1) 1 else len * 2 - 2;
+    }
+
+    pub fn pingPongX(comptime n: u8, size: Vector2, d: f32) [pingPongLen(n)]Frame {
+        const frames = x(n, size, d);
+        var result: [pingPongLen(n)]Frame = undefined;
+        _ = pingPong(&frames, &result);
+        return result;
+    }
+};
 
 pub const Filter = enum(u8) { nearest, linear };
 
