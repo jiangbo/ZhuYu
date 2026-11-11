@@ -50,6 +50,7 @@ pub const Circle = core.Circle;
 pub const AxisCapsule = core.AxisCapsule;
 pub const Shape = core.Shape;
 pub const random = core.random;
+pub const dateTimeBufferSize = platform.dateTimeBufferSize;
 
 // 安卓平台适配，日志和 panic 配置由 buildAndroid 注入入口。
 pub const android = struct {
