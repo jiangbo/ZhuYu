@@ -89,15 +89,25 @@ pub fn SourceT(comptime T: type) type {
     };
 }
 
+pub fn SliceSource(T: type) type {
+    return []const SourceT(T);
+}
+
+/// 按枚举名称配置动画源，可直接从 ZON 导入，省略的动作默认为 null。
+pub fn EnumSource(T: type) type {
+    const Source = ?Animation.Source;
+    return std.enums.EnumFieldStruct(T, Source, @as(Source, null));
+}
+
 pub fn Sources(T: type) type {
     return struct {
-        sources: []const SourceT(T),
+        sources: SliceSource(T),
 
-        pub fn init(sources: []const SourceT(T)) @This() {
+        pub fn init(sources: SliceSource(T)) @This() {
             return .{ .sources = sources };
         }
 
-        pub fn initChecked(sources: []const SourceT(T)) @This() {
+        pub fn initChecked(sources: SliceSource(T)) @This() {
             for (sources, 0..) |src, index| {
                 std.debug.assert(@backingInt(src.extend) == index);
             }
@@ -106,7 +116,7 @@ pub fn Sources(T: type) type {
 
         /// 编译期整理缺项或乱序配置；枚举必须从零开始连续编号。
         /// 缺省动作的 frames 为空，不能用于播放。
-        pub fn generate(comptime configs: []const SourceT(T)) @This() {
+        pub fn generate(comptime configs: SliceSource(T)) @This() {
             const sources = comptime blk: {
                 const values = std.enums.values(T);
                 var result = std.mem.zeroes([values.len]SourceT(T));
@@ -148,12 +158,6 @@ pub fn Sources(T: type) type {
             return self.sources[zhu.toIndex(usize, action)].toSource();
         }
     };
-}
-
-/// 按枚举名称配置动画源，可直接从 ZON 导入，省略的动作默认为 null。
-pub fn EnumSource(T: type) type {
-    const Source = ?Animation.Source;
-    return std.enums.EnumFieldStruct(T, Source, @as(Source, null));
 }
 
 pub fn EnumAnimation(comptime T: type) type {
