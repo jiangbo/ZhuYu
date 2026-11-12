@@ -79,17 +79,19 @@ pub const storage = struct {
         return dir.readFileAllocOptions(io, path, gpa_, .unlimited, .of(u8), 0);
     }
 
-    /// 保存用户数据，首次写入时创建存储目录和文件所在的子目录。
+    /// 原子替换用户数据，首次写入时创建存储目录和文件所在的子目录。
     pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
         if (builtin.os.tag == .emscripten)
             return backend.storage.writeAll(path, content);
         const dir = try openOrCreateDir(true);
         defer dir.close(io);
-        if (std.fs.path.dirname(path)) |sub| try dir.createDirPath(io, sub);
-
-        var file = try dir.createFile(io, path, .{ .truncate = true });
-        defer file.close(io);
-        try file.writeStreamingAll(io, content);
+        var atomicFile = try dir.createFileAtomic(io, path, .{
+            .make_path = true,
+            .replace = true,
+        });
+        defer atomicFile.deinit(io);
+        try atomicFile.file.writeStreamingAll(io, content);
+        try atomicFile.replace(io);
     }
 
     /// 读取结果拥有所有切片数据，使用结束后调用 deinit，切片随之失效。
