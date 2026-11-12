@@ -321,6 +321,17 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     }.callback, .{ .kind = .image });
 }
 
+const ZlibHandler = fn (u64, []const u8) void;
+
+/// 异步加载并解压 zlib；字节仅在回调期间有效，需要保留时自行复制。
+pub fn loadZlib(path: Path, handle: u64, handler: ZlibHandler) void {
+    fetch.load(path, handle, struct {
+        fn callback(index: u64, resp: Response) void {
+            handler(index, resp.content.zlib);
+        }
+    }.callback, .{ .kind = .zlib });
+}
+
 pub const view = struct {
     // 视图的绘制配置，流水线为空时使用默认图片流水线。
     pub const Info = struct {
