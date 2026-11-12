@@ -110,10 +110,9 @@ pub const SetupOption = struct {
 
 /// 配置引擎依赖；指定 storage 时同时初始化用户数据存储。
 pub fn setup(info: std.process.Init, option: SetupOption) void {
-    platform.setup();
     const gpa = assets.setup(info.io, info.gpa);
+    platform.setup(info, gpa, option.storage);
     window.setup(gpa);
-    if (option.storage) |name| storage.setup(info, gpa, name);
 }
 
 pub fn percentInt(a: anytype, b: anytype) f32 {

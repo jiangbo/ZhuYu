@@ -38,7 +38,6 @@ var info: Option = undefined; // 当前窗口配置，由 run 设置。
 var allocator: std.mem.Allocator = undefined;
 
 pub fn setup(gpa: std.mem.Allocator) void {
-    platform.backend.setup(gpa);
     allocator = gpa;
     key.mayNotHave = platform.mayNotHaveKeyboard();
 }

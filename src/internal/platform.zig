@@ -7,8 +7,11 @@ const zhu = @import("../zhu.zig");
 const codec = @import("codec.zig");
 
 const Init = std.process.Init;
+const Io = std.Io;
 const assert = std.debug.assert;
 const print = zhu.format;
+
+var io: Io = undefined;
 
 pub const backend = switch (builtin.os.tag) {
     .windows => @import("windows.zig"),
@@ -21,6 +24,22 @@ pub const backend = switch (builtin.os.tag) {
     else => struct {},
 };
 
+/// 读取原生资源文件；Android 使用 APK 资源，其他平台使用传入目录。
+/// 返回的缓冲区由调用者释放，Web 不支持同步文件读取。
+pub fn readFile(gpa: zhu.Allocator, dir: ?Io.Dir, path: [:0]const u8) ![]u8 {
+    if (builtin.os.tag == .emscripten) @panic("web has no file system");
+    if (builtin.abi.isAndroid()) return backend.readAsset(path, gpa);
+    const file = try dir.?.openFile(io, path, .{});
+    defer file.close(io);
+    const size: usize = @intCast(try file.length(io));
+    const data = try gpa.alloc(u8, size);
+    errdefer gpa.free(data);
+    if (try file.readPositionalAll(io, data, 0) != size) {
+        return error.UnexpectedEof;
+    }
+    return data;
+}
+
 /// 用户数据存储，目录按应用区分，由 zhu.setup 的 storage 选项初始化。
 pub const storage = struct {
     const Reader = std.Io.Reader;
@@ -28,22 +47,10 @@ pub const storage = struct {
     const Allocator = std.mem.Allocator;
     const ArenaAllocator = std.heap.ArenaAllocator;
 
-    var io: std.Io = undefined;
     var gpa: Allocator = undefined;
     // 初始化时复制路径，避免保存启动环境变量中的借用切片。
     var pathBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var dataPath: []const u8 = "";
-
-    /// 由 zhu.setup 传入统计分配器；name 用于桌面目录和 Web 存储键。
-    /// 安卓和 iOS 使用应用沙盒，Web 使用 name 作为浏览器存储键的前缀。
-    pub fn setup(info: Init, gpa_: Allocator, name: []const u8) void {
-        io = info.io;
-        gpa = gpa_;
-        dataPath = if (builtin.os.tag == .emscripten)
-            backend.storage.setup(name)
-        else
-            backend.storagePath(info, name, &pathBuffer);
-    }
 
     fn openOrCreateDir(create: bool) !std.Io.Dir {
         if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
@@ -256,7 +263,17 @@ pub const DateTime = extern struct {
 };
 
 // POSIX 平台在启动时读取时区设置。
-pub fn setup() void {
+/// 保存共用 IO，并按应用名称初始化用户数据存储。
+pub fn setup(info: Init, gpa: zhu.Allocator, dir: ?[]const u8) void {
+    io = info.io;
+    backend.setup(gpa);
+    if (dir) |name| {
+        storage.gpa = gpa;
+        storage.dataPath = if (builtin.os.tag == .emscripten)
+            backend.storage.setup(name)
+        else
+            backend.storagePath(info, name, &storage.pathBuffer);
+    }
     switch (builtin.os.tag) {
         .linux, .macos, .ios => posixTime.tzset(),
         else => {},
