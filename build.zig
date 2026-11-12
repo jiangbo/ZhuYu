@@ -47,7 +47,9 @@ pub fn build(b: *std.Build) !void {
         .egl = linuxGles,
         .with_sokol_imgui = imgui,
     });
-    b.installArtifact(sokolDep.artifact("sokol_clib"));
+    const sokolLibrary = sokolDep.artifact("sokol_clib");
+    sokolLibrary.lto = if (optimize == .debug) .none else .full;
+    b.installArtifact(sokolLibrary);
     const sokolModule = sokolDep.module("sokol");
     const shader = try createShader(b, sokolDep, target.result, samplers);
 
@@ -72,7 +74,7 @@ pub fn build(b: *std.Build) !void {
         zhu.linkSystemLibrary("aaudio", .{});
         zhu.linkSystemLibrary("m", .{});
         zhu.pic = true;
-        sokolDep.artifact("sokol_clib").root_module.pic = true;
+        sokolLibrary.root_module.pic = true;
     }
 
     // 仅交叉构建接入包内 SDK，本机构建使用本机开发环境。
