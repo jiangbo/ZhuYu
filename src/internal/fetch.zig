@@ -17,11 +17,21 @@ pub fn id(path: []const u8) Id {
     return std.hash.Fnv1a_32.hash(path);
 }
 
-pub const Response = struct { path: [:0]const u8, data: []const u8 };
+pub const Response = struct {
+    path: [:0]const u8,
+    data: []const u8,
+    extra1: i32 = 0,
+    extra2: i32 = 0,
+};
 pub const Mode = enum { sync, async };
+pub const Kind = enum { image };
+pub const Option = struct {
+    kind: ?Kind = null,
+};
 const Handler = *const fn (Mode, u64, Response) void;
 const Record = struct {
     index: u64 = 0,
+    option: Option = .{},
     // 有数据时等待同步交付；null 表示外部请求或已交付的记录。
     data: ?[]const u8 = null,
     handler: Handler = undefined,
@@ -106,13 +116,14 @@ pub fn count() usize {
 }
 
 // 同一路径只加载一次；借用数据同步回调，外部文件排队读取。
-pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
+pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) void {
     const fileId = id(path);
     const entry = records.getOrPut(allocator, fileId) catch oom();
     const record = entry.value_ptr;
     if (entry.found_existing) {
         if (record.data) |data| {
             record.index, record.handler = .{ index, handler };
+            record.option = option;
             record.data = null;
             record.handler(.sync, record.index, .{ .path = path, .data = data });
             return;
@@ -120,7 +131,9 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
         // 已评审：资源按用途使用独立路径，图集页面与 icon 不共用文件。
         // 当前资源缓存到退出，同一路径只绑定一组 index/handler，不支持重新加载。
         // 此检查是有意的使用约束；引入资源卸载后再调整，无需为跨用途复用扩展。
-        if (record.index != index or record.handler != handler) {
+        if (record.index != index or record.handler != handler or
+            !std.meta.eql(record.option, option))
+        {
             std.debug.panic("asset path conflict: {s}", .{path});
         }
         return;
@@ -128,7 +141,7 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler) void {
     if (options.append) {
         std.debug.panic("asset not found in appended pack: {s}", .{path});
     }
-    record.* = .{ .index = index, .handler = handler };
+    record.* = .{ .index = index, .handler = handler, .option = option };
     std.log.info("loading {s}", .{path});
     enqueue(path);
 }

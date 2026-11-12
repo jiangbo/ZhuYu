@@ -74,7 +74,7 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
         .filter = option.filter,
     };
     view.put(imageView, .{ .sampler = sampler.get(option.filter) });
-    fetch.load(path, imageView.id, view.handler);
+    fetch.load(path, imageView.id, view.handler, .{ .kind = .image });
     return entry.value_ptr.*;
 }
 
@@ -269,7 +269,7 @@ pub const atlas = struct {
                 .atlasId = atlasId,
                 .layer = @intCast(i),
             };
-            fetch.load(path, @bitCast(pageIndex), handler);
+            fetch.load(path, @bitCast(pageIndex), handler, .{ .kind = .image });
         }
 
         for (source.images) |image| {
@@ -324,7 +324,7 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
             defer gpa.free(icon.data);
             handler(index, icon);
         }
-    }.callback);
+    }.callback, .{ .kind = .image });
 }
 
 pub const view = struct {
@@ -422,7 +422,7 @@ pub const sound = struct {
                 cache.getPtr(loadedId).?.* = source;
                 if (mode == .async) handler(loadedId, source);
             }
-        }.callback);
+        }.callback, .{});
         return cache.get(assetId).?;
     }
 };
@@ -449,7 +449,7 @@ pub const music = struct {
                 cache.getPtr(loadedId).?.* = source;
                 if (mode == .async) handler(loadedId, source);
             }
-        }.callback);
+        }.callback, .{});
         return cache.get(assetId).?;
     }
 
