@@ -286,7 +286,7 @@ pub const atlas = struct {
         };
     }
 
-    fn handler(_: fetch.Mode, index: u64, response: Response) void {
+    fn handler(index: u64, response: Response) void {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
@@ -317,7 +317,7 @@ pub const Icon = decoder.Image;
 const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     fetch.load(path, handle, struct {
-        fn callback(_: fetch.Mode, index: u64, resp: Response) void {
+        fn callback(index: u64, resp: Response) void {
             const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
                 panicFmt("{s}: {}", .{ resp.path, err });
             };
@@ -366,7 +366,7 @@ pub const view = struct {
         cache = .empty;
     }
 
-    fn handler(_: fetch.Mode, index: u64, resp: Response) void {
+    fn handler(index: u64, resp: Response) void {
         const img = decoder.load(gpa, resp.data) catch |err| {
             panicFmt("{s}: {}", .{ resp.path, err });
         };
@@ -413,14 +413,14 @@ pub const sound = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
-        // 同步完成返回资源，异步完成通过回调交付。
+        // 缓存命中直接返回资源，首次加载通过回调交付。
         fetch.load(path, assetId, struct {
-            fn callback(mode: fetch.Mode, index: u64, resp: Response) void {
+            fn callback(index: u64, resp: Response) void {
                 const source = Source.init(gpa, resp.data) catch |err|
                     panicFmt("sound init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
-                if (mode == .async) handler(loadedId, source);
+                handler(loadedId, source);
             }
         }.callback, .{});
         return cache.get(assetId).?;
@@ -439,15 +439,15 @@ pub const music = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         entry.value_ptr.* = null;
-        // 同步完成返回资源，异步完成通过回调交付。
+        // 缓存命中直接返回资源，首次加载通过回调交付。
         fetch.load(path, assetId, struct {
-            fn callback(mode: fetch.Mode, index: u64, resp: Response) void {
+            fn callback(index: u64, resp: Response) void {
                 const rate: u32 = @intCast(sk.audio.sampleRate());
                 const source = Source.init(gpa, resp.data, rate) catch |err|
                     panicFmt("music init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
-                if (mode == .async) handler(loadedId, source);
+                handler(loadedId, source);
             }
         }.callback, .{});
         return cache.get(assetId).?;

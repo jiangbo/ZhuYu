@@ -23,14 +23,14 @@ pub const Response = struct {
     extra1: i32 = 0,
     extra2: i32 = 0,
 };
-pub const Mode = enum { sync, async };
 pub const Kind = enum { image };
 pub const Option = struct {
     kind: ?Kind = null,
 };
-const Handler = *const fn (Mode, u64, Response) void;
+const Handler = *const fn (u64, Response) void;
 const Request = struct {
     path: [:0]const u8,
+    data: ?[]const u8 = null,
     index: u64,
     handler: Handler,
     option: Option,
@@ -39,7 +39,8 @@ const Request = struct {
 const Slot = struct {
     state: std.atomic.Value(enum(u8) { idle, todo, done }) = .init(.idle),
     request: Request = undefined,
-    result: anyerror![]u8 = &.{},
+    result: anyerror![]const u8 = &.{},
+    needsFree: bool = false,
 };
 
 var gpa: std.mem.Allocator = undefined;
@@ -53,13 +54,13 @@ var queue: std.Deque(Request) = .empty;
 var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
-// 首次请求时打开，读取线程退出后关闭。
+// 首次读取外部文件时打开，后台线程退出后关闭。
 var assetDir: ?std.Io.Dir = null;
 var worker: ?std.Thread = null;
 var wake: std.Io.Event = .unset;
 var stop: std.atomic.Value(bool) = .init(false);
 
-// 保存加载配置；append 模式映射包内数据，外部读取仍按需启动。
+// 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
 pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator) void {
     std.debug.assert(!started);
     io = fileIo;
@@ -115,23 +116,34 @@ pub fn count() usize {
     return records.count();
 }
 
-// 同一路径只加载一次；借用数据同步回调，外部文件排队读取。
+// 同一路径只加载一次；所有请求排队，由 update 交付结果。
 pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) void {
     const fileId = id(path);
     const entry = records.getOrPut(gpa, fileId) catch oom();
+    var data: ?[]const u8 = null;
     if (entry.found_existing) {
-        const data = entry.value_ptr.* orelse
+        data = entry.value_ptr.* orelse
             std.debug.panic("asset already requested: {s}", .{path});
-        entry.value_ptr.* = null;
-        handler(.sync, index, .{ .path = path, .data = data });
-        return;
-    }
-    if (options.append) {
-        std.debug.panic("asset not found in appended pack: {s}", .{path});
+    } else if (options.append) {
+        std.debug.panic("asset not found in pack: {s}", .{path});
     }
     entry.value_ptr.* = null;
     std.log.info("loading {s}", .{path});
-    enqueue(.{ .path = path, .index = index, .handler = handler, .option = option });
+    // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
+    if (!started) {
+        if (builtin.os.tag != .emscripten) {
+            worker = std.Thread.spawn(.{}, runBackground, .{}) catch |err|
+                std.debug.panic("start asset reader: {}", .{err});
+        }
+        started = true;
+    }
+    queue.pushBack(gpa, .{
+        .path = gpa.dupeSentinel(u8, path, 0) catch oom(),
+        .data = data,
+        .index = index,
+        .handler = handler,
+        .option = option,
+    }) catch oom();
 }
 
 // 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
@@ -146,25 +158,6 @@ fn openAssetDir() !std.Io.Dir {
     return exeDir.openDir(io, "assets", .{});
 }
 
-// 主线程登记路径和请求队列，文件内容由后台按实际长度分配。
-fn enqueue(request: Request) void {
-    // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
-    if (!started) {
-        if (builtin.os.tag != .emscripten) {
-            if (!builtin.abi.isAndroid()) {
-                assetDir = openAssetDir() catch |err|
-                    std.debug.panic("open assets directory: {}", .{err});
-            }
-            worker = std.Thread.spawn(.{}, runBackground, .{}) catch |err|
-                std.debug.panic("start asset reader: {}", .{err});
-        }
-        started = true;
-    }
-    var queued = request;
-    queued.path = gpa.dupeSentinel(u8, request.path, 0) catch oom();
-    queue.pushBack(gpa, queued) catch oom();
-}
-
 // 主线程接收结果并补充请求，回调可以继续提交资源加载。
 pub fn update() void {
     if (!started) return;
@@ -175,9 +168,15 @@ pub fn update() void {
 
         // 空闲槽位接收下一个请求，交给后台线程或浏览器读取。
         slot.request = request;
+        slot.needsFree = request.data == null;
         slot.state.store(.todo, .release);
         if (builtin.os.tag == .emscripten) {
-            web.zhu_fetch_start(@intCast(lane), slot.request.path.ptr);
+            if (request.data) |data| {
+                slot.result = data;
+                slot.state.store(.done, .release);
+            } else {
+                web.zhu_fetch_start(@intCast(lane), request.path.ptr);
+            }
         } else {
             wake.set(io);
         }
@@ -195,8 +194,8 @@ fn handleSlot(slot: *Slot) void {
     };
     slot.result = &.{};
     std.log.info("loaded: {s}", .{path});
-    request.handler(.async, request.index, .{ .path = path, .data = data });
-    gpa.free(data);
+    request.handler(request.index, .{ .path = path, .data = data });
+    if (slot.needsFree) gpa.free(data);
     gpa.free(path);
     slot.state.store(.idle, .release);
 }
@@ -220,7 +219,7 @@ fn shutdown() void {
     for (&slots) |*slot| {
         if (slot.state.load(.acquire) == .idle) continue;
         gpa.free(slot.request.path);
-        gpa.free(slot.result catch &.{});
+        if (slot.needsFree) gpa.free(slot.result catch &.{});
         slot.* = .{};
     }
     stop.store(false, .release);
@@ -250,10 +249,19 @@ fn runBackground() void {
         for (&slots) |*slot| {
             if (stop.load(.acquire)) return;
             if (slot.state.load(.acquire) != .todo) continue;
-            slot.result = platform.readFile(gpa, assetDir, slot.request.path);
+            slot.result = readRequest(slot.request);
             slot.state.store(.done, .release);
         }
     }
+}
+
+// 借用数据无需读取文件；外部目录只在真正需要读取时打开。
+fn readRequest(request: Request) ![]const u8 {
+    if (request.data) |data| return data;
+    if (!builtin.abi.isAndroid() and assetDir == null) {
+        assetDir = try openAssetDir();
+    }
+    return platform.readFile(gpa, assetDir, request.path);
 }
 
 // 浏览器拿到响应后直接为请求槽位分配缓冲区。
