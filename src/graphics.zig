@@ -172,10 +172,10 @@ pub const Animation = struct {
     pub const Step = enum { start, next, loop, end };
     pub const Source = SourceT(u16);
 
-    elapsed: f32 = -zhu.epsilon,
+    // 负号表示首帧事件尚未取出；其绝对值仍是累计时间。
+    elapsed: f32 = -0.0,
     index: u16 = 0,
     row: u16 = 0,
-    // 已评审：运行时 imageId 保存上次更新的窗口帧号，图片已解析到 image。
     source: Source,
     image: Image,
 
@@ -183,21 +183,17 @@ pub const Animation = struct {
         std.debug.assert(frames.len != 0);
         for (frames) |f| std.debug.assert(f.duration > 0);
         const id = std.math.maxInt(u32);
-        const source: Source = .{ .imageId = id, .frames = frames, .size = size };
-        return .{ .source = source, .image = image };
+        return .{
+            .source = .{ .imageId = id, .frames = frames, .size = size },
+            .image = image,
+        };
     }
 
     pub fn initSource(source: Source) Animation {
-        return .initWithFrame(source, std.math.maxInt(u32));
-    }
-
-    fn initWithFrame(source: Source, frameId: u32) Animation {
         std.debug.assert(source.frames.len != 0);
         for (source.frames) |f| std.debug.assert(f.duration > 0);
         const image = assets.getImage(source.imageId).?;
-        var self: Animation = .{ .source = source, .image = image };
-        self.source.imageId = frameId;
-        return self;
+        return .{ .source = source, .image = image };
     }
 
     pub fn initFinished(source: Source) Animation {
@@ -223,7 +219,7 @@ pub const Animation = struct {
     }
 
     pub fn play(self: *Animation, source: Source, row: anytype) void {
-        self.* = .initWithFrame(source, self.source.imageId);
+        self.* = .initSource(source);
         self.row = zhu.toIndex(u16, row);
     }
 
@@ -236,17 +232,26 @@ pub const Animation = struct {
         self.reset();
     }
 
-    /// 按窗口帧号仅累加一次 delta；重复调用可逐个取出追帧事件。
-    pub fn update(self: *Animation, delta: f32) ?Step {
-        if (self.index == self.source.frames.len) return null; // 已经结束
-        const frameId: u32 = @truncate(window.frameCount());
-        if (self.source.imageId != frameId) {
-            self.source.imageId = frameId;
-            if (self.elapsed < 0) {
-                self.elapsed = delta;
-                return .start; // 首帧
-            }
-            self.elapsed += delta;
+    /// 推进到当前时间对应的帧，丢弃途中事件。
+    pub fn update(self: *Animation, delta: f32) void {
+        self.advance(delta);
+        while (self.nextStep() != null) {}
+    }
+
+    /// 累加时间；随后调用 nextStep 逐个取出事件。
+    pub fn advance(self: *Animation, delta: f32) void {
+        std.debug.assert(delta >= 0);
+        if (self.isFinished()) return;
+        const starting = std.math.signbit(self.elapsed);
+        self.elapsed += if (starting) -delta else delta;
+    }
+
+    /// 取出下一个事件；play/reset 会清除剩余时间并重新产生首帧事件。
+    pub fn nextStep(self: *Animation) ?Step {
+        if (self.isFinished()) return null;
+        if (std.math.signbit(self.elapsed)) {
+            self.elapsed = -self.elapsed;
+            return .start;
         }
         const current = self.source.frames[self.index];
         if (self.elapsed < current.duration) return null; // 还未到下一帧
@@ -280,7 +285,7 @@ pub const Animation = struct {
     }
 
     pub fn reset(self: *Animation) void {
-        self.index, self.elapsed = .{ 0, -zhu.epsilon };
+        self.index, self.elapsed = .{ 0, -0.0 };
     }
 };
 
