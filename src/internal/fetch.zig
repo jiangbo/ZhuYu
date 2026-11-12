@@ -1,5 +1,5 @@
-//! 原始文件加载：路径去重、资源包和借用切片。
-//! 外部文件由四个槽位异步读取。
+//! 文件加载与图片解码：路径去重、资源包和借用切片。
+//! 原生后台读取和解码，主线程交付结果；Web 在主线程解码。
 //! 基准随 Sokol 依赖更新；升级时检查上游差异并同步适用修复。
 //! 上游基准（floooh/sokol）：
 //! https://github.com/floooh/sokol/commit/efeb77603e24daea7d1dd6445b9358bb5d82533b
@@ -10,6 +10,7 @@ const options = @import("options");
 
 const platform = @import("platform.zig");
 const web = @import("web.zig");
+const image = @import("image.zig");
 const oom = @import("core.zig").oom;
 
 pub const Id = u32;
@@ -39,7 +40,7 @@ const Request = struct {
 const Slot = struct {
     state: std.atomic.Value(enum(u8) { idle, todo, done }) = .init(.idle),
     request: Request = undefined,
-    result: anyerror![]const u8 = &.{},
+    result: anyerror!Response = .{ .path = "", .data = &.{} },
     needsFree: bool = false,
 };
 
@@ -172,7 +173,8 @@ pub fn update() void {
         slot.state.store(.todo, .release);
         if (builtin.os.tag == .emscripten) {
             if (request.data) |data| {
-                slot.result = data;
+                // Web 的借用数据在主线程解码，结果由后续 update 交付。
+                slot.result = decode(slot, data);
                 slot.state.store(.done, .release);
             } else {
                 web.zhu_fetch_start(@intCast(lane), request.path.ptr);
@@ -188,14 +190,14 @@ fn handleSlot(slot: *Slot) void {
     if (slot.state.load(.acquire) != .done) return;
     const request = slot.request;
     const path = request.path;
-    const data = slot.result catch |err| {
+    const response = slot.result catch |err| {
         const msg = "assets load failed, path: {s}, error: {}";
         std.debug.panic(msg, .{ path, err });
     };
-    slot.result = &.{};
+    slot.result = .{ .path = "", .data = &.{} };
     std.log.info("loaded: {s}", .{path});
-    request.handler(request.index, .{ .path = path, .data = data });
-    if (slot.needsFree) gpa.free(data);
+    request.handler(request.index, response);
+    if (slot.needsFree) gpa.free(response.data);
     gpa.free(path);
     slot.state.store(.idle, .release);
 }
@@ -219,7 +221,9 @@ fn shutdown() void {
     for (&slots) |*slot| {
         if (slot.state.load(.acquire) == .idle) continue;
         gpa.free(slot.request.path);
-        if (slot.needsFree) gpa.free(slot.result catch &.{});
+        if (slot.needsFree) {
+            if (slot.result) |r| gpa.free(r.data) else |_| {}
+        }
         slot.* = .{};
     }
     stop.store(false, .release);
@@ -249,33 +253,65 @@ fn runBackground() void {
         for (&slots) |*slot| {
             if (stop.load(.acquire)) return;
             if (slot.state.load(.acquire) != .todo) continue;
-            slot.result = readRequest(slot.request);
-            slot.state.store(.done, .release);
+            defer slot.state.store(.done, .release);
+            const request = slot.request;
+            // 原生平台在后台解码；借用数据无需打开文件。
+            if (request.data) |data| {
+                slot.result = decode(slot, data);
+                continue;
+            }
+
+            if (!builtin.abi.isAndroid() and assetDir == null) {
+                assetDir = openAssetDir() catch |err| {
+                    slot.result = err;
+                    continue;
+                };
+            }
+            const data = platform.readFile(gpa, assetDir, request.path) catch |err| {
+                slot.result = err;
+                continue;
+            };
+            slot.result = decode(slot, data);
         }
     }
 }
 
-// 借用数据无需读取文件；外部目录只在真正需要读取时打开。
-fn readRequest(request: Request) ![]const u8 {
-    if (request.data) |data| return data;
-    if (!builtin.abi.isAndroid() and assetDir == null) {
-        assetDir = try openAssetDir();
+// 图片解码产生独立像素；原始字节只释放自己分配的部分。
+fn decode(slot: *Slot, data: []const u8) !Response {
+    const request = slot.request;
+    const kind = request.option.kind orelse return .{
+        .path = request.path,
+        .data = data,
+    };
+    switch (kind) {
+        .image => {
+            const freeInput = slot.needsFree;
+            defer if (freeInput) gpa.free(data);
+            const decoded = try image.loadIcon(gpa, data);
+            slot.needsFree = true;
+            return .{
+                .path = request.path,
+                .data = decoded.data,
+                .extra1 = decoded.width,
+                .extra2 = decoded.height,
+            };
+        },
     }
-    return platform.readFile(gpa, assetDir, request.path);
 }
 
 // 浏览器拿到响应后直接为请求槽位分配缓冲区。
 fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
     const data = gpa.alloc(u8, size) catch @panic("out of memory");
-    slots[@intCast(lane)].result = data;
+    const slot = &slots[@intCast(lane)];
+    slot.result = .{ .path = slot.request.path, .data = data };
     return data.ptr;
 }
 
-// 浏览器只登记完成结果，资源回调仍由下一帧 update 执行。
+// 浏览器在主线程解码，资源回调仍由下一帧 update 执行。
 fn webDone(lane: c_int, status: c_int) callconv(.c) void {
     const slot = &slots[@intCast(lane)];
     slot.result = switch (status) {
-        0 => slot.result,
+        0 => decode(slot, (slot.result catch unreachable).data),
         1 => error.HttpFailed,
         3 => error.NetworkFailed,
         else => unreachable,

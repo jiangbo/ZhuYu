@@ -290,16 +290,13 @@ pub const atlas = struct {
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
-        const img = decoder.load(gpa, response.data) catch |err| {
-            panicFmt("{s}: {}", .{ response.path, err });
-        };
-        defer gpa.free(img.data);
-
-        std.debug.assert(img.width == sk.gfx.queryImageWidth(atlasImage));
-        std.debug.assert(img.height == sk.gfx.queryImageHeight(atlasImage));
+        const width = sk.gfx.queryImageWidth(atlasImage);
+        const height = sk.gfx.queryImageHeight(atlasImage);
+        std.debug.assert(response.extra1 == width);
+        std.debug.assert(response.extra2 == height);
 
         sk.gfx.writeImageUnsealed(.{
-            .src = .{ .data = sk.gfx.asRange(img.data) },
+            .src = .{ .data = sk.gfx.asRange(response.data) },
             .dst = .{ .image = atlasImage, .slice = pageIndex.layer },
             // 零值表示从当前图层写到最后一层，这里只写本次加载的图层。
             .size = .{ .num_slices = 1 },
@@ -318,11 +315,11 @@ const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     fetch.load(path, handle, struct {
         fn callback(index: u64, resp: Response) void {
-            const icon = decoder.loadIcon(gpa, resp.data) catch |err| {
-                panicFmt("{s}: {}", .{ resp.path, err });
-            };
-            defer gpa.free(icon.data);
-            handler(index, icon);
+            handler(index, .{
+                .width = resp.extra1,
+                .height = resp.extra2,
+                .data = @constCast(resp.data),
+            });
         }
     }.callback, .{ .kind = .image });
 }
@@ -367,19 +364,17 @@ pub const view = struct {
     }
 
     fn handler(index: u64, resp: Response) void {
-        const img = decoder.load(gpa, resp.data) catch |err| {
-            panicFmt("{s}: {}", .{ resp.path, err });
-        };
-        defer gpa.free(img.data);
         const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
         sk.gfx.initView(imageView, .{ .texture = .{
-            .image = makeImage(img.width, img.height, 1, img.data),
+            .image = makeImage(resp.extra1, resp.extra2, 1, resp.data),
         } });
         const image = imageCache.getPtr(id(resp.path)).?;
         // 文件尺寸必须与调用方提供的尺寸一致。
-        std.debug.assert(image.size.x == @as(f32, @floatFromInt(img.width)));
-        std.debug.assert(image.size.y == @as(f32, @floatFromInt(img.height)));
+        const width: f32 = @floatFromInt(resp.extra1);
+        const height: f32 = @floatFromInt(resp.extra2);
+        std.debug.assert(image.size.x == width);
+        std.debug.assert(image.size.y == height);
     }
 
     fn makeImage(w: i32, h: i32, layers: i32, data: anytype) sk.gfx.Image {
