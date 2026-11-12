@@ -287,16 +287,17 @@ pub const atlas = struct {
     }
 
     fn handler(index: u64, response: Response) void {
+        const decoded = response.content.image;
         const pageIndex: PageIndex = @bitCast(index);
         const atlasView = imageCache.get(pageIndex.atlasId).?.view;
         const atlasImage = sk.gfx.queryViewImage(atlasView);
         const width = sk.gfx.queryImageWidth(atlasImage);
         const height = sk.gfx.queryImageHeight(atlasImage);
-        std.debug.assert(response.extra1 == width);
-        std.debug.assert(response.extra2 == height);
+        std.debug.assert(decoded.width == width);
+        std.debug.assert(decoded.height == height);
 
         sk.gfx.writeImageUnsealed(.{
-            .src = .{ .data = sk.gfx.asRange(response.data) },
+            .src = .{ .data = sk.gfx.asRange(decoded.data) },
             .dst = .{ .image = atlasImage, .slice = pageIndex.layer },
             // 零值表示从当前图层写到最后一层，这里只写本次加载的图层。
             .size = .{ .num_slices = 1 },
@@ -315,11 +316,7 @@ const IconHandler = fn (u64, Icon) void;
 pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     fetch.load(path, handle, struct {
         fn callback(index: u64, resp: Response) void {
-            handler(index, .{
-                .width = resp.extra1,
-                .height = resp.extra2,
-                .data = @constCast(resp.data),
-            });
+            handler(index, resp.content.image);
         }
     }.callback, .{ .kind = .image });
 }
@@ -364,15 +361,16 @@ pub const view = struct {
     }
 
     fn handler(index: u64, resp: Response) void {
+        const decoded = resp.content.image;
         const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
         sk.gfx.initView(imageView, .{ .texture = .{
-            .image = makeImage(resp.extra1, resp.extra2, 1, resp.data),
+            .image = makeImage(decoded.width, decoded.height, 1, decoded.data),
         } });
         const image = imageCache.getPtr(id(resp.path)).?;
         // 文件尺寸必须与调用方提供的尺寸一致。
-        const width: f32 = @floatFromInt(resp.extra1);
-        const height: f32 = @floatFromInt(resp.extra2);
+        const width: f32 = @floatFromInt(decoded.width);
+        const height: f32 = @floatFromInt(decoded.height);
         std.debug.assert(image.size.x == width);
         std.debug.assert(image.size.y == height);
     }
@@ -411,13 +409,12 @@ pub const sound = struct {
         // 缓存命中直接返回资源，首次加载通过回调交付。
         fetch.load(path, assetId, struct {
             fn callback(index: u64, resp: Response) void {
-                const source = Source.init(gpa, resp.data) catch |err|
-                    panicFmt("sound init failed: {s}: {}", .{ resp.path, err });
+                const source = resp.content.sound;
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
                 handler(loadedId, source);
             }
-        }.callback, .{});
+        }.callback, .{ .kind = .sound });
         return cache.get(assetId).?;
     }
 };
@@ -438,7 +435,8 @@ pub const music = struct {
         fetch.load(path, assetId, struct {
             fn callback(index: u64, resp: Response) void {
                 const rate: u32 = @intCast(sk.audio.sampleRate());
-                const source = Source.init(gpa, resp.data, rate) catch |err|
+                const bytes = resp.content.bytes;
+                const source = Source.init(gpa, bytes, rate) catch |err|
                     panicFmt("music init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;

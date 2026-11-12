@@ -5,6 +5,31 @@
 //! 来源与许可见 src/licenses/vorbis.txt。控制和采样由调用方同步。
 const std = @import("std");
 
+/// 完整解码后的音效数据，持有交错 f32 PCM。
+pub const Sound = struct {
+    samples: []const f32,
+    channels: u8,
+
+    /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
+    /// 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
+    pub fn init(gpa: std.mem.Allocator, data: []const u8) !Sound {
+        var player = try Player.init(gpa, data);
+        defer player.deinit();
+
+        const channels = player.channels;
+        const samples = try gpa.alloc(f32, player.sampleCount * channels);
+        const decoded = player.fillSamples(samples, channels);
+        // 音效必须至少解码出一帧，避免循环播放时无法推进。
+        std.debug.assert(decoded > 0);
+        return .{ .samples = samples, .channels = channels };
+    }
+
+    /// 释放完整解码得到的 PCM；借用方不负责释放。
+    pub fn deinit(self: Sound, gpa: std.mem.Allocator) void {
+        gpa.free(self.samples);
+    }
+};
+
 /// 持有压缩包、解码配置和播放状态；采样阶段不分配内存。
 pub const Player = struct {
     arena: std.heap.ArenaAllocator,

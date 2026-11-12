@@ -168,29 +168,7 @@ pub const Sound = struct {
     index: usize = 0,
 };
 
-pub const SoundSource = struct {
-    samples: []const f32,
-    channels: u8,
-
-    /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
-    /// 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
-    pub fn init(gpa: Allocator, data: []const u8) !SoundSource {
-        var player = try vorbis.Player.init(gpa, data);
-        defer player.deinit();
-
-        const channels = player.channels;
-        const samples = try gpa.alloc(f32, player.sampleCount * channels);
-        const decoded = player.fillSamples(samples, channels);
-        // 音效必须至少解码出一帧，避免循环播放时无法推进。
-        std.debug.assert(decoded > 0);
-        return .{ .samples = samples, .channels = channels };
-    }
-
-    /// 由持有 PCM 的缓存调用；播放槽位仅借用采样，不负责释放。
-    pub fn deinit(self: SoundSource, gpa: Allocator) void {
-        gpa.free(self.samples);
-    }
-};
+pub const SoundSource = vorbis.Sound;
 
 pub var soundVolume: std.atomic.Value(f32) = .init(1);
 var sounds: []Sound = &.{};

@@ -11,6 +11,7 @@ const options = @import("options");
 const platform = @import("platform.zig");
 const web = @import("web.zig");
 const image = @import("image.zig");
+const vorbis = @import("vorbis.zig");
 const oom = @import("core.zig").oom;
 
 pub const Id = u32;
@@ -20,13 +21,15 @@ pub fn id(path: []const u8) Id {
 
 pub const Response = struct {
     path: [:0]const u8,
-    data: []const u8,
-    extra1: i32 = 0,
-    extra2: i32 = 0,
+    content: union(Kind) {
+        bytes: []const u8,
+        image: image.Image,
+        sound: vorbis.Sound,
+    } = .{ .bytes = &.{} },
 };
-pub const Kind = enum { image };
+pub const Kind = enum { bytes, image, sound };
 pub const Option = struct {
-    kind: ?Kind = null,
+    kind: Kind = .bytes,
 };
 const Handler = *const fn (u64, Response) void;
 const Request = struct {
@@ -40,8 +43,17 @@ const Request = struct {
 const Slot = struct {
     state: std.atomic.Value(enum(u8) { idle, todo, done }) = .init(.idle),
     request: Request = undefined,
-    result: anyerror!Response = .{ .path = "", .data = &.{} },
-    needsFree: bool = false,
+    result: anyerror!Response = .{ .path = "" },
+    needsFree: bool = false, // 当前数据是否由槽位负责释放。
+
+    fn freeResult(self: *Slot, response: Response) void {
+        if (!self.needsFree) return;
+        switch (response.content) {
+            .bytes => |data| gpa.free(data),
+            .image => |decoded| gpa.free(decoded.data),
+            .sound => |source| source.deinit(gpa),
+        }
+    }
 };
 
 var gpa: std.mem.Allocator = undefined;
@@ -194,10 +206,12 @@ fn handleSlot(slot: *Slot) void {
         const msg = "assets load failed, path: {s}, error: {}";
         std.debug.panic(msg, .{ path, err });
     };
-    slot.result = .{ .path = "", .data = &.{} };
+    slot.result = .{ .path = "" };
     std.log.info("loaded: {s}", .{path});
     request.handler(request.index, response);
-    if (slot.needsFree) gpa.free(response.data);
+    // 音效缓存接管 PCM；尚未交付的 PCM 仍由 shutdown 释放。
+    if (request.option.kind == .sound) slot.needsFree = false;
+    slot.freeResult(response);
     gpa.free(path);
     slot.state.store(.idle, .release);
 }
@@ -221,9 +235,7 @@ fn shutdown() void {
     for (&slots) |*slot| {
         if (slot.state.load(.acquire) == .idle) continue;
         gpa.free(slot.request.path);
-        if (slot.needsFree) {
-            if (slot.result) |r| gpa.free(r.data) else |_| {}
-        }
+        if (slot.result) |r| slot.freeResult(r) else |_| {}
         slot.* = .{};
     }
     stop.store(false, .release);
@@ -276,34 +288,34 @@ fn runBackground() void {
     }
 }
 
-// 图片解码产生独立像素；原始字节只释放自己分配的部分。
+// 解码产生独立结果；原始字节只释放自己分配的部分。
 fn decode(slot: *Slot, data: []const u8) !Response {
     const request = slot.request;
-    const kind = request.option.kind orelse return .{
-        .path = request.path,
-        .data = data,
-    };
-    switch (kind) {
+    const freeRaw = slot.needsFree and request.option.kind != .bytes;
+    defer if (freeRaw) gpa.free(data);
+    var result: Response = .{ .path = request.path };
+    switch (request.option.kind) {
+        .bytes => result.content = .{ .bytes = data },
         .image => {
-            const freeInput = slot.needsFree;
-            defer if (freeInput) gpa.free(data);
             const decoded = try image.loadIcon(gpa, data);
             slot.needsFree = true;
-            return .{
-                .path = request.path,
-                .data = decoded.data,
-                .extra1 = decoded.width,
-                .extra2 = decoded.height,
-            };
+            result.content = .{ .image = decoded };
+        },
+        .sound => {
+            const source = try vorbis.Sound.init(gpa, data);
+            slot.needsFree = true;
+            result.content = .{ .sound = source };
         },
     }
+    return result;
 }
 
 // 浏览器拿到响应后直接为请求槽位分配缓冲区。
 fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
     const data = gpa.alloc(u8, size) catch @panic("out of memory");
     const slot = &slots[@intCast(lane)];
-    slot.result = .{ .path = slot.request.path, .data = data };
+    slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
+    slot.needsFree = true;
     return data.ptr;
 }
 
@@ -311,7 +323,7 @@ fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
 fn webDone(lane: c_int, status: c_int) callconv(.c) void {
     const slot = &slots[@intCast(lane)];
     slot.result = switch (status) {
-        0 => decode(slot, (slot.result catch unreachable).data),
+        0 => decode(slot, (slot.result catch unreachable).content.bytes),
         1 => error.HttpFailed,
         3 => error.NetworkFailed,
         else => unreachable,
