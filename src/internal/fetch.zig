@@ -1,4 +1,4 @@
-//! 文件加载与图片解码：路径去重、资源包和借用切片。
+//! 文件加载、资源解码与 zlib 解压：路径去重、资源包和借用切片。
 //! 原生后台读取和解码，主线程交付结果；Web 在主线程解码。
 //! 基准随 Sokol 依赖更新；升级时检查上游差异并同步适用修复。
 //! 上游基准（floooh/sokol）：
@@ -23,11 +23,12 @@ pub const Response = struct {
     path: [:0]const u8,
     content: union(Kind) {
         bytes: []const u8,
+        zlib: []const u8, // 解压后的字节，回调结束后释放。
         image: image.Image,
         sound: vorbis.Sound,
     } = .{ .bytes = &.{} },
 };
-pub const Kind = enum { bytes, image, sound };
+pub const Kind = enum { bytes, zlib, image, sound };
 pub const Option = struct {
     kind: Kind = .bytes,
 };
@@ -49,7 +50,7 @@ const Slot = struct {
     fn freeResult(self: *Slot, response: Response) void {
         if (!self.needsFree) return;
         switch (response.content) {
-            .bytes => |data| gpa.free(data),
+            .bytes, .zlib => |data| gpa.free(data),
             .image => |decoded| gpa.free(decoded.data),
             .sound => |source| source.deinit(gpa),
         }
@@ -296,6 +297,15 @@ fn decode(slot: *Slot, data: []const u8) !Response {
     var result: Response = .{ .path = request.path };
     switch (request.option.kind) {
         .bytes => result.content = .{ .bytes = data },
+        .zlib => {
+            var input = std.Io.Reader.fixed(data);
+            const buffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
+            defer gpa.free(buffer);
+            var decoder = std.compress.flate.Decompress.init(&input, .zlib, buffer);
+            const bytes = try decoder.reader.allocRemaining(gpa, .unlimited);
+            slot.needsFree = true;
+            result.content = .{ .zlib = bytes };
+        },
         .image => {
             const decoded = try image.loadIcon(gpa, data);
             slot.needsFree = true;
@@ -336,4 +346,57 @@ comptime {
         @export(&webAlloc, .{ .name = "zhu_fetch_alloc" });
         @export(&webDone, .{ .name = "zhu_fetch_done" });
     }
+}
+
+// 超过解压窗口的数据可检测回溯复制与输出扩容；同时检查借用和持有输入。
+test "zlib decodes borrowed and owned input" {
+    gpa = std.testing.allocator;
+    const compressed = [_]u8{
+        120, 156, 237, 194, 65,  17,  0,   0,   12,  2,   160, 172,
+        106, 255, 14,  171, 177, 7,   28,  233, 162, 170, 170, 170,
+        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
+        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
+        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
+        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
+        170, 170, 170, 170, 170, 170, 250, 233, 1,   199, 25,  189,
+        248,
+    };
+    for ([_]bool{ false, true }) |owned| {
+        const data = if (owned) try gpa.dupe(u8, &compressed) else &compressed;
+        var slot: Slot = .{
+            .request = .{
+                .path = "test.zlib",
+                .data = if (owned) null else data,
+                .index = 0,
+                .handler = struct {
+                    fn receive(_: u64, _: Response) void {}
+                }.receive,
+                .option = .{ .kind = .zlib },
+            },
+            .needsFree = owned,
+        };
+        const response = try decode(&slot, data);
+        defer slot.freeResult(response);
+        try std.testing.expectEqual(@as(usize, 60000), response.content.zlib.len);
+        for (response.content.zlib, 0..) |byte, i| {
+            try std.testing.expectEqual("abc"[i % 3], byte);
+        }
+    }
+}
+
+test "zlib rejects truncated input" {
+    gpa = std.testing.allocator;
+    var slot: Slot = .{
+        .request = .{
+            .path = "bad.zlib",
+            .index = 0,
+            .handler = struct {
+                fn receive(_: u64, _: Response) void {}
+            }.receive,
+            .option = .{ .kind = .zlib },
+        },
+        .needsFree = true,
+    };
+    const data = try gpa.dupe(u8, &.{ 0x78, 0x9c, 0x4b });
+    try std.testing.expectError(error.ReadFailed, decode(&slot, data));
 }
