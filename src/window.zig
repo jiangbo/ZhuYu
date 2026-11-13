@@ -159,6 +159,7 @@ pub fn handleEvent(ev: *const Event) void {
         },
         .MOUSE_SCROLL => mouse.scrollY += ev.scroll_y,
         .TOUCHES_BEGAN, .TOUCHES_MOVED, .TOUCHES_ENDED, .TOUCHES_CANCELLED => {
+            if (!touch.hasTouch) return;
             for (ev.touches[0..@intCast(ev.num_touches)]) |point| {
                 if (!point.changed) continue;
                 touch.moved = true;
@@ -460,8 +461,10 @@ pub const mouse = struct {
 };
 
 pub const touch = struct {
-    // 鼠标槽位紧跟 Sokol 提供的真实触点槽位。
-    const mouseIndex = (sk.app.Event{}).touches.len;
+    const hasTouch = builtin.abi.isAndroid() or
+        builtin.os.tag == .ios or builtin.os.tag == .emscripten;
+    // 桌面仅保留鼠标槽位，其他平台的鼠标槽位紧跟真实触点。
+    const mouseIndex = if (hasTouch) (sk.app.Event{}).touches.len else 0;
 
     pub const Point = struct {
         id: usize, // 真实触点使用系统标识，鼠标固定为 0。
