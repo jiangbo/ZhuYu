@@ -42,15 +42,16 @@ const Request = struct {
 };
 
 const Slot = struct {
-    const State = enum(u8) { idle, load, loaded, decode, done };
-    state: std.atomic.Value(State) = .init(.idle),
+    state: std.atomic.Value(enum(u8) { idle, load, done }) = .init(.idle),
     request: Request = undefined,
-    result: anyerror!Response = .{ .path = "" },
+    result: anyerror!Response = undefined,
+    decoded: bool = false, // 原生端仅后台读写，用于统计未交付的解码结果。
     needsFree: bool = false, // 当前数据是否由槽位负责释放。
 
-    fn freeResult(self: *Slot, response: Response) void {
+    fn freeResult(self: *Slot) void {
         if (!self.needsFree) return;
-        switch (response.content) {
+        defer self.needsFree = false;
+        switch ((self.result catch return).content) {
             .bytes, .zlib => |data| gpa.free(data),
             .image => |decoded| gpa.free(decoded.data),
             .sound => |source| source.deinit(gpa),
@@ -67,9 +68,8 @@ var mapping: ?std.Io.File.MemoryMap = null;
 // 仅主线程访问的等待队列。
 var queue: std.Deque(Request) = .empty;
 var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
-const Backend = if (builtin.os.tag == .emscripten) Web else Native;
+const isWeb = builtin.os.tag == .emscripten;
 const MAX_DECODE = 2;
-var decoding: u32 = 0; // 已批准解码且尚未交付释放的请求，只有主线程访问。
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
@@ -143,7 +143,7 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) vo
     std.log.info("loading {s}", .{path});
     // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
     if (!started) {
-        Backend.start();
+        if (!isWeb) Native.start();
         started = true;
     }
     queue.pushBack(gpa, .{
@@ -158,66 +158,56 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) vo
 // 主线程接收结果并补充请求，回调可以继续提交资源加载。
 pub fn update() void {
     if (!started) return;
-    for (&slots) |*slot| handleDoneSlot(slot);
-    for (&slots, 0..) |*slot, lane| {
-        switch (slot.state.load(.acquire)) {
-            .loaded => {
-                if (decoding >= MAX_DECODE) continue;
-                decoding += 1;
-                slot.state.store(.decode, .release);
-                Backend.submit(slot, lane);
-            },
-            .idle => {
-                const request = queue.popFront() orelse continue;
-                slot.request = request;
-                slot.needsFree = request.data == null;
-                slot.state.store(.load, .release);
-                Backend.submit(slot, lane);
-            },
-            else => {},
-        }
-    }
-}
-
-// 在主线程处理已完成的请求，回调可以继续提交新请求。
-fn handleDoneSlot(slot: *Slot) void {
-    if (slot.state.load(.acquire) != .done) return;
-    const request = slot.request;
-    const path = request.path;
-    const response = slot.result catch |err| {
-        const msg = "assets load failed, path: {s}, error: {}";
-        std.debug.panic(msg, .{ path, err });
-    };
-    slot.result = .{ .path = "" };
-    std.log.info("loaded: {s}", .{path});
-    request.handler(request.index, response);
-    switch (request.option.kind) {
-        .bytes => {},
-        .zlib, .image => decoding -= 1,
-        .sound => {
-            slot.needsFree = false; // 音效由资产管理
-            decoding -= 1;
+    var needWake = false;
+    for (&slots, 0..) |*slot, lane| blk: switch (slot.state.load(.acquire)) {
+        .done => {
+            const request = slot.request;
+            const path = request.path;
+            const response = slot.result catch |err| {
+                const msg = "assets load failed, path: {s}, error: {}";
+                std.debug.panic(msg, .{ path, err });
+            };
+            std.log.info("loaded: {s}", .{path});
+            request.handler(request.index, response);
+            if (request.option.kind == .sound) {
+                slot.needsFree = false; // 音效由资产管理。
+            }
+            slot.freeResult();
+            gpa.free(path);
+            slot.state.store(.idle, .release);
+            needWake = true;
+            continue :blk .idle;
         },
-    }
-    slot.freeResult(response);
-    gpa.free(path);
-    slot.state.store(.idle, .release);
+        .idle => {
+            const request = queue.popFront() orelse continue;
+            slot.request = request;
+            slot.needsFree = false;
+            slot.state.store(.load, .release);
+            needWake = true;
+            if (!isWeb) continue;
+            if (request.data) |data| decodeSlot(slot, data) else //
+            web.zhu_fetch_start(@intCast(lane), request.path.ptr);
+        },
+        else => {},
+    };
+    if (!isWeb and needWake) Native.wake.set(io);
 }
 
 // 先等待读取线程退出，再释放仍在途的路径和缓冲区。
 fn shutdown() void {
     if (!started) return;
-    Backend.stop();
+    if (isWeb) web.zhu_fetch_stop() else Native.stop();
     while (queue.popFront()) |request| gpa.free(request.path);
     queue.deinit(gpa);
     queue = .empty;
     for (&slots) |*slot| {
-        if (slot.state.load(.acquire) == .idle) continue;
-        gpa.free(slot.request.path);
-        if (slot.result) |r| slot.freeResult(r) else |_| {}
+        const state = slot.state.load(.acquire);
+        if (state != .idle) {
+            gpa.free(slot.request.path);
+            slot.freeResult();
+        }
         slot.* = .{};
     }
-    decoding = 0;
     started = false;
 }
 
@@ -234,16 +224,10 @@ pub fn deinit() void {
     }
 }
 
-fn setLoaded(slot: *Slot, data: []const u8) void {
-    slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
-    const bytes = slot.request.option.kind == .bytes;
-    const state: Slot.State = if (bytes) .done else .loaded;
-    slot.state.store(state, .release);
-}
-
-fn decodeSlot(slot: *Slot) void {
-    const raw = slot.result catch unreachable;
-    slot.result = decode(slot, raw.content.bytes);
+// 读取完成后直接解码，再由主线程交付结果。
+fn decodeSlot(slot: *Slot, data: []const u8) void {
+    slot.decoded = slot.request.option.kind != .bytes;
+    slot.result = decode(slot, data);
     slot.state.store(.done, .release);
 }
 
@@ -296,21 +280,26 @@ fn runBackground() void {
         Native.wake.waitUncancelable(io);
         Native.wake.reset();
         if (Native.stopping.load(.acquire)) return;
+        // 主线程只会释放结果，扫描期间数量可以保守地偏大。
+        var decoding: u32 = 0;
+        for (&slots) |*slot| {
+            if (slot.state.load(.acquire) != .done) continue;
+            if (slot.decoded) decoding += 1;
+        }
         for (&slots) |*slot| {
             if (Native.stopping.load(.acquire)) return;
-            switch (slot.state.load(.acquire)) {
-                .load => {
-                    const request = slot.request;
-                    const data = readRequest(request) catch |err| {
-                        slot.result = err;
-                        slot.state.store(.done, .release);
-                        continue;
-                    };
-                    setLoaded(slot, data);
-                },
-                .decode => decodeSlot(slot),
-                else => {},
-            }
+            if (slot.state.load(.acquire) != .load) continue;
+            const needsDecode = slot.request.option.kind != .bytes;
+            if (needsDecode and decoding >= MAX_DECODE) continue;
+            const data = readRequest(slot.request) catch |err| {
+                slot.decoded = false;
+                slot.result = err;
+                slot.state.store(.done, .release);
+                continue;
+            };
+            slot.needsFree = slot.request.data == null;
+            decodeSlot(slot, data);
+            if (needsDecode) decoding += 1;
         }
     }
 }
@@ -336,10 +325,6 @@ const Native = struct {
             std.debug.panic("start asset reader: {}", .{err});
     }
 
-    fn submit(_: *Slot, _: usize) void {
-        wake.set(io);
-    }
-
     fn stop() void {
         stopping.store(true, .release);
         wake.set(io);
@@ -352,52 +337,30 @@ const Native = struct {
     }
 };
 
-// Web 通过浏览器读取文件，在主线程解码。
-const Web = struct {
-    fn start() void {}
+// 浏览器拿到响应后直接为请求槽位分配缓冲区。
+fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
+    const data = gpa.alloc(u8, size) catch @panic("out of memory");
+    const slot = &slots[@intCast(lane)];
+    slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
+    slot.needsFree = true;
+    return data.ptr;
+}
 
-    fn submit(slot: *Slot, lane: usize) void {
-        switch (slot.state.load(.acquire)) {
-            .load => {
-                const request = slot.request;
-                if (request.data) |data| {
-                    setLoaded(slot, data);
-                } else {
-                    web.zhu_fetch_start(@intCast(lane), request.path.ptr);
-                }
-            },
-            .decode => decodeSlot(slot),
-            else => unreachable,
-        }
+// 浏览器下载完成后直接解码，结果等待 update 交付。
+fn webDone(lane: c_int, status: c_int) callconv(.c) void {
+    const slot = &slots[@intCast(lane)];
+    if (status == 0) {
+        const raw = slot.result catch unreachable;
+        return decodeSlot(slot, raw.content.bytes);
     }
-
-    const stop = web.zhu_fetch_stop;
-
-    // 浏览器拿到响应后直接为请求槽位分配缓冲区。
-    fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
-        const data = gpa.alloc(u8, size) catch @panic("out of memory");
-        const slot = &slots[@intCast(lane)];
-        slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
-        slot.needsFree = true;
-        return data.ptr;
-    }
-
-    // 浏览器只交付原始文件，由 update 批准解码。
-    fn webDone(lane: c_int, status: c_int) callconv(.c) void {
-        const slot = &slots[@intCast(lane)];
-        if (status != 0) {
-            if (slot.result) |raw| slot.freeResult(raw) else |_| {}
-            slot.result = if (status == 1) error.HttpFailed else error.NetworkFailed;
-        }
-        const done = status != 0 or slot.request.option.kind == .bytes;
-        const state: Slot.State = if (done) .done else .loaded;
-        slot.state.store(state, .release);
-    }
-};
+    slot.freeResult();
+    slot.result = error.HttpFailed; // 不区分错误类型
+    slot.state.store(.done, .release);
+}
 
 comptime {
-    if (builtin.os.tag == .emscripten) {
-        @export(&Web.webAlloc, .{ .name = "zhu_fetch_alloc" });
-        @export(&Web.webDone, .{ .name = "zhu_fetch_done" });
+    if (isWeb) {
+        @export(&webAlloc, .{ .name = "zhu_fetch_alloc" });
+        @export(&webDone, .{ .name = "zhu_fetch_done" });
     }
 }
