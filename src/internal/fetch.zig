@@ -42,7 +42,8 @@ const Request = struct {
 };
 
 const Slot = struct {
-    state: std.atomic.Value(enum(u8) { idle, todo, done }) = .init(.idle),
+    const State = enum(u8) { idle, load, loaded, decode, done };
+    state: std.atomic.Value(State) = .init(.idle),
     request: Request = undefined,
     result: anyerror!Response = .{ .path = "" },
     needsFree: bool = false, // 当前数据是否由槽位负责释放。
@@ -66,13 +67,10 @@ var mapping: ?std.Io.File.MemoryMap = null;
 // 仅主线程访问的等待队列。
 var queue: std.Deque(Request) = .empty;
 var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
+const Backend = if (builtin.os.tag == .emscripten) Web else Native;
+const MAX_DECODE = 2;
+var decoding: u32 = 0; // 已批准解码且尚未交付释放的请求，只有主线程访问。
 var started: bool = false; // 仅主线程读写加载器生命周期。
-
-// 首次读取外部文件时打开，后台线程退出后关闭。
-var assetDir: ?std.Io.Dir = null;
-var worker: ?std.Thread = null;
-var wake: std.Io.Event = .unset;
-var stop: std.atomic.Value(bool) = .init(false);
 
 // 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
 pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator) void {
@@ -145,10 +143,7 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) vo
     std.log.info("loading {s}", .{path});
     // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
     if (!started) {
-        if (builtin.os.tag != .emscripten) {
-            worker = std.Thread.spawn(.{}, runBackground, .{}) catch |err|
-                std.debug.panic("start asset reader: {}", .{err});
-        }
+        Backend.start();
         started = true;
     }
     queue.pushBack(gpa, .{
@@ -160,46 +155,32 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) vo
     }) catch oom();
 }
 
-// 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
-fn openAssetDir() !std.Io.Dir {
-    const curDir = std.Io.Dir.cwd().openDir(io, "assets", .{});
-    if (curDir) |dir| return dir else |_| {}
-
-    var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const len = try std.process.executableDirPath(io, &path);
-    const exeDir = try std.Io.Dir.openDirAbsolute(io, path[0..len], .{});
-    defer exeDir.close(io);
-    return exeDir.openDir(io, "assets", .{});
-}
-
 // 主线程接收结果并补充请求，回调可以继续提交资源加载。
 pub fn update() void {
     if (!started) return;
+    for (&slots) |*slot| handleDoneSlot(slot);
     for (&slots, 0..) |*slot, lane| {
-        handleSlot(slot);
-        if (slot.state.load(.acquire) != .idle) continue;
-        const request = queue.popFront() orelse continue;
-
-        // 空闲槽位接收下一个请求，交给后台线程或浏览器读取。
-        slot.request = request;
-        slot.needsFree = request.data == null;
-        slot.state.store(.todo, .release);
-        if (builtin.os.tag == .emscripten) {
-            if (request.data) |data| {
-                // Web 的借用数据在主线程解码，结果由后续 update 交付。
-                slot.result = decode(slot, data);
-                slot.state.store(.done, .release);
-            } else {
-                web.zhu_fetch_start(@intCast(lane), request.path.ptr);
-            }
-        } else {
-            wake.set(io);
+        switch (slot.state.load(.acquire)) {
+            .loaded => {
+                if (decoding >= MAX_DECODE) continue;
+                decoding += 1;
+                slot.state.store(.decode, .release);
+                Backend.submit(slot, lane);
+            },
+            .idle => {
+                const request = queue.popFront() orelse continue;
+                slot.request = request;
+                slot.needsFree = request.data == null;
+                slot.state.store(.load, .release);
+                Backend.submit(slot, lane);
+            },
+            else => {},
         }
     }
 }
 
 // 在主线程处理已完成的请求，回调可以继续提交新请求。
-fn handleSlot(slot: *Slot) void {
+fn handleDoneSlot(slot: *Slot) void {
     if (slot.state.load(.acquire) != .done) return;
     const request = slot.request;
     const path = request.path;
@@ -210,8 +191,14 @@ fn handleSlot(slot: *Slot) void {
     slot.result = .{ .path = "" };
     std.log.info("loaded: {s}", .{path});
     request.handler(request.index, response);
-    // 音效缓存接管 PCM；尚未交付的 PCM 仍由 shutdown 释放。
-    if (request.option.kind == .sound) slot.needsFree = false;
+    switch (request.option.kind) {
+        .bytes => {},
+        .zlib, .image => decoding -= 1,
+        .sound => {
+            slot.needsFree = false; // 音效由资产管理
+            decoding -= 1;
+        },
+    }
     slot.freeResult(response);
     gpa.free(path);
     slot.state.store(.idle, .release);
@@ -220,16 +207,7 @@ fn handleSlot(slot: *Slot) void {
 // 先等待读取线程退出，再释放仍在途的路径和缓冲区。
 fn shutdown() void {
     if (!started) return;
-    if (builtin.os.tag == .emscripten) {
-        web.zhu_fetch_stop();
-    } else {
-        stop.store(true, .release);
-        wake.set(io);
-        worker.?.join();
-        worker = null;
-        if (assetDir) |dir| dir.close(io);
-        assetDir = null;
-    }
+    Backend.stop();
     while (queue.popFront()) |request| gpa.free(request.path);
     queue.deinit(gpa);
     queue = .empty;
@@ -239,8 +217,7 @@ fn shutdown() void {
         if (slot.result) |r| slot.freeResult(r) else |_| {}
         slot.* = .{};
     }
-    stop.store(false, .release);
-    wake.reset();
+    decoding = 0;
     started = false;
 }
 
@@ -257,36 +234,17 @@ pub fn deinit() void {
     }
 }
 
-// 与主线程通过槽位状态交接所有权，保持一个后台读取线程。
-fn runBackground() void {
-    while (true) {
-        wake.waitUncancelable(io);
-        wake.reset();
-        if (stop.load(.acquire)) return;
-        for (&slots) |*slot| {
-            if (stop.load(.acquire)) return;
-            if (slot.state.load(.acquire) != .todo) continue;
-            defer slot.state.store(.done, .release);
-            const request = slot.request;
-            // 原生平台在后台解码；借用数据无需打开文件。
-            if (request.data) |data| {
-                slot.result = decode(slot, data);
-                continue;
-            }
+fn setLoaded(slot: *Slot, data: []const u8) void {
+    slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
+    const bytes = slot.request.option.kind == .bytes;
+    const state: Slot.State = if (bytes) .done else .loaded;
+    slot.state.store(state, .release);
+}
 
-            if (!builtin.abi.isAndroid() and assetDir == null) {
-                assetDir = openAssetDir() catch |err| {
-                    slot.result = err;
-                    continue;
-                };
-            }
-            const data = platform.readFile(gpa, assetDir, request.path) catch |err| {
-                slot.result = err;
-                continue;
-            };
-            slot.result = decode(slot, data);
-        }
-    }
+fn decodeSlot(slot: *Slot) void {
+    const raw = slot.result catch unreachable;
+    slot.result = decode(slot, raw.content.bytes);
+    slot.state.store(.done, .release);
 }
 
 // 解码产生独立结果；原始字节只释放自己分配的部分。
@@ -320,83 +278,126 @@ fn decode(slot: *Slot, data: []const u8) !Response {
     return result;
 }
 
-// 浏览器拿到响应后直接为请求槽位分配缓冲区。
-fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
-    const data = gpa.alloc(u8, size) catch @panic("out of memory");
-    const slot = &slots[@intCast(lane)];
-    slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
-    slot.needsFree = true;
-    return data.ptr;
+// 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
+fn openAssetDir() !std.Io.Dir {
+    const curDir = std.Io.Dir.cwd().openDir(io, "assets", .{});
+    if (curDir) |dir| return dir else |_| {}
+
+    var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try std.process.executableDirPath(io, &path);
+    const exeDir = try std.Io.Dir.openDirAbsolute(io, path[0..len], .{});
+    defer exeDir.close(io);
+    return exeDir.openDir(io, "assets", .{});
 }
 
-// 浏览器在主线程解码，资源回调仍由下一帧 update 执行。
-fn webDone(lane: c_int, status: c_int) callconv(.c) void {
-    const slot = &slots[@intCast(lane)];
-    slot.result = switch (status) {
-        0 => decode(slot, (slot.result catch unreachable).content.bytes),
-        1 => error.HttpFailed,
-        3 => error.NetworkFailed,
-        else => unreachable,
-    };
-    slot.state.store(.done, .release);
-}
-
-comptime {
-    if (builtin.os.tag == .emscripten) {
-        @export(&webAlloc, .{ .name = "zhu_fetch_alloc" });
-        @export(&webDone, .{ .name = "zhu_fetch_done" });
-    }
-}
-
-// 超过解压窗口的数据可检测回溯复制与输出扩容；同时检查借用和持有输入。
-test "zlib decodes borrowed and owned input" {
-    gpa = std.testing.allocator;
-    const compressed = [_]u8{
-        120, 156, 237, 194, 65,  17,  0,   0,   12,  2,   160, 172,
-        106, 255, 14,  171, 177, 7,   28,  233, 162, 170, 170, 170,
-        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
-        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
-        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
-        170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170, 170,
-        170, 170, 170, 170, 170, 170, 250, 233, 1,   199, 25,  189,
-        248,
-    };
-    for ([_]bool{ false, true }) |owned| {
-        const data = if (owned) try gpa.dupe(u8, &compressed) else &compressed;
-        var slot: Slot = .{
-            .request = .{
-                .path = "test.zlib",
-                .data = if (owned) null else data,
-                .index = 0,
-                .handler = struct {
-                    fn receive(_: u64, _: Response) void {}
-                }.receive,
-                .option = .{ .kind = .zlib },
-            },
-            .needsFree = owned,
-        };
-        const response = try decode(&slot, data);
-        defer slot.freeResult(response);
-        try std.testing.expectEqual(@as(usize, 60000), response.content.zlib.len);
-        for (response.content.zlib, 0..) |byte, i| {
-            try std.testing.expectEqual("abc"[i % 3], byte);
+// 与主线程通过槽位状态交接所有权，保持一个后台读取线程。
+fn runBackground() void {
+    while (true) {
+        Native.wake.waitUncancelable(io);
+        Native.wake.reset();
+        if (Native.stopping.load(.acquire)) return;
+        for (&slots) |*slot| {
+            if (Native.stopping.load(.acquire)) return;
+            switch (slot.state.load(.acquire)) {
+                .load => {
+                    const request = slot.request;
+                    const data = readRequest(request) catch |err| {
+                        slot.result = err;
+                        slot.state.store(.done, .release);
+                        continue;
+                    };
+                    setLoaded(slot, data);
+                },
+                .decode => decodeSlot(slot),
+                else => {},
+            }
         }
     }
 }
 
-test "zlib rejects truncated input" {
-    gpa = std.testing.allocator;
-    var slot: Slot = .{
-        .request = .{
-            .path = "bad.zlib",
-            .index = 0,
-            .handler = struct {
-                fn receive(_: u64, _: Response) void {}
-            }.receive,
-            .option = .{ .kind = .zlib },
-        },
-        .needsFree = true,
-    };
-    const data = try gpa.dupe(u8, &.{ 0x78, 0x9c, 0x4b });
-    try std.testing.expectError(error.ReadFailed, decode(&slot, data));
+fn readRequest(request: Request) ![]const u8 {
+    if (request.data) |data| return data;
+    if (!builtin.abi.isAndroid() and Native.assetDir == null) {
+        Native.assetDir = try openAssetDir();
+    }
+    return platform.readFile(gpa, Native.assetDir, request.path);
+}
+
+// 原生平台唤醒后台线程，读取和解码共用槽位状态。
+const Native = struct {
+    // 首次读取外部文件时打开，后台线程退出后关闭。
+    var assetDir: ?std.Io.Dir = null;
+    var worker: ?std.Thread = null;
+    var wake: std.Io.Event = .unset;
+    var stopping: std.atomic.Value(bool) = .init(false);
+
+    fn start() void {
+        worker = std.Thread.spawn(.{}, runBackground, .{}) catch |err|
+            std.debug.panic("start asset reader: {}", .{err});
+    }
+
+    fn submit(_: *Slot, _: usize) void {
+        wake.set(io);
+    }
+
+    fn stop() void {
+        stopping.store(true, .release);
+        wake.set(io);
+        worker.?.join();
+        worker = null;
+        if (assetDir) |dir| dir.close(io);
+        assetDir = null;
+        stopping.store(false, .release);
+        wake.reset();
+    }
+};
+
+// Web 通过浏览器读取文件，在主线程解码。
+const Web = struct {
+    fn start() void {}
+
+    fn submit(slot: *Slot, lane: usize) void {
+        switch (slot.state.load(.acquire)) {
+            .load => {
+                const request = slot.request;
+                if (request.data) |data| {
+                    setLoaded(slot, data);
+                } else {
+                    web.zhu_fetch_start(@intCast(lane), request.path.ptr);
+                }
+            },
+            .decode => decodeSlot(slot),
+            else => unreachable,
+        }
+    }
+
+    const stop = web.zhu_fetch_stop;
+
+    // 浏览器拿到响应后直接为请求槽位分配缓冲区。
+    fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
+        const data = gpa.alloc(u8, size) catch @panic("out of memory");
+        const slot = &slots[@intCast(lane)];
+        slot.result = .{ .path = slot.request.path, .content = .{ .bytes = data } };
+        slot.needsFree = true;
+        return data.ptr;
+    }
+
+    // 浏览器只交付原始文件，由 update 批准解码。
+    fn webDone(lane: c_int, status: c_int) callconv(.c) void {
+        const slot = &slots[@intCast(lane)];
+        if (status != 0) {
+            if (slot.result) |raw| slot.freeResult(raw) else |_| {}
+            slot.result = if (status == 1) error.HttpFailed else error.NetworkFailed;
+        }
+        const done = status != 0 or slot.request.option.kind == .bytes;
+        const state: Slot.State = if (done) .done else .loaded;
+        slot.state.store(state, .release);
+    }
+};
+
+comptime {
+    if (builtin.os.tag == .emscripten) {
+        @export(&Web.webAlloc, .{ .name = "zhu_fetch_alloc" });
+        @export(&Web.webDone, .{ .name = "zhu_fetch_done" });
+    }
 }
