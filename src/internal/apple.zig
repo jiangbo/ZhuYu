@@ -6,8 +6,6 @@ const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
 
-var gpa: std.mem.Allocator = undefined;
-
 // 当前平台的用户数据目录，路径写入调用方缓冲区。
 pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     const home = info.environ_map.get("HOME") orelse @panic("HOME not set");
@@ -16,14 +14,12 @@ pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     return zhu.format(buf, "{s}/Library/Application Support/{s}", .{ home, name });
 }
 
-pub fn setup(gpa_: std.mem.Allocator) void {
-    gpa = gpa_;
-}
+pub fn setup(_: std.mem.Allocator) void {}
 
 pub const font = struct {
     var base: *anyopaque = undefined; // 保存所选字体，字号变化时复制。
     var current: ?*anyopaque = null; // 当前像素字号的字体。
-    var alpha: []u8 = &.{}; // 复用单通道覆盖率缓冲区。
+    var colorSpace: ?*anyopaque = null; // 复用设备 RGB 色彩空间。
 
     // 通用名称映射到系统字体，自定义名称交给 CoreText 解析。
     // 返回完整名称的字节数，缓冲不足时返回零。
@@ -51,6 +47,10 @@ pub const font = struct {
                 0, null, 2, 2) orelse @panic("bold font unavailable");
             CFRelease(base);
             base = bold;
+        }
+        if (colorSpace == null) {
+            colorSpace = CGColorSpaceCreateDeviceRGB() orelse
+                @panic("coregraphics: failed to create rgb color space");
         }
         // 从选中的 CoreText 字体读取名称，不使用请求名称。
         const name = CTFontCopyFamilyName(base);
@@ -80,13 +80,13 @@ pub const font = struct {
         };
     }
 
-    // 释放 CoreFoundation 字体对象及像素缓冲区。
+    // 释放 CoreFoundation 字体对象及色彩空间。
     pub fn close() void {
         if (current) |value| CFRelease(value);
         current = null;
+        if (colorSpace) |value| CGColorSpaceRelease(value);
+        colorSpace = null;
         CFRelease(base);
-        gpa.free(alpha);
-        alpha = &.{};
     }
 
     // 单码位使用 CTLine，交给系统处理代理对和字体回退。
@@ -97,10 +97,13 @@ pub const font = struct {
         const text = string(utf8[0..count]);
         defer CFRelease(text);
         // 字典只在创建富文本期间借用键和值，不需要持有回调。
-        const keys = [_]*const anyopaque{kCTFontAttributeName};
-        const values = [_]*const anyopaque{current.?};
+        const keys = [_]*const anyopaque{
+            kCTFontAttributeName,
+            kCTForegroundColorFromContextAttributeName,
+        };
+        const values = [_]*const anyopaque{ current.?, kCFBooleanTrue };
         const attrs = CFDictionaryCreate(null, &keys, //
-            &values, 1, null, null) orelse
+            &values, keys.len, null, null) orelse
             @panic("corefoundation: failed to create font attributes");
         defer CFRelease(attrs);
         const styled = CFAttributedStringCreate(null, text, attrs) orelse
@@ -137,29 +140,17 @@ pub const font = struct {
         const stride = width + 2;
         const len = stride * (height + 2);
         const data = buffer.resize(len * 4);
-        if (alpha.len < len)
-            alpha = gpa.realloc(alpha, len) catch
-                @panic("font: out of memory growing alpha data");
-        @memset(alpha[0..len], 0);
-        // 7 是仅含 Alpha 的位图，不涉及预乘 RGB 或通道顺序。
-        const context = CGBitmapContextCreate(alpha.ptr, //
-            stride, height + 2, 8, stride, null, 7) orelse
+        @memset(data[0 .. len * 4], 0);
+        // 1 是 kCGImageAlphaPremultipliedLast，直接生成预乘 RGBA 数据。
+        const context = CGBitmapContextCreate(data.ptr, //
+            stride, height + 2, 8, stride * 4, colorSpace, 1) orelse
             @panic("font bitmap unavailable");
         defer CGContextRelease(context);
         CGContextSetShouldAntialias(context, true);
         CGContextSetShouldSmoothFonts(context, false);
+        CGContextSetRGBFillColor(context, 1, 1, 1, 1);
         CGContextSetTextPosition(context, 1 - left, 1 - bottom);
         CTLineDraw(line, context);
-        // TODO: 引擎支持预乘 Alpha 后，考虑直接生成 RGBA 数据。
-        @memset(data[0 .. len * 4], 0);
-        // Quartz 的位图首行对应顶部，基线定位仍使用向上的坐标。
-        for (1..height + 1) |y| {
-            for (1..width + 1) |x| {
-                const offset = (y * stride + x) * 4;
-                @memset(data[offset..][0..3], 255);
-                data[offset + 3] = alpha[y * stride + x];
-            }
-        }
         return char;
     }
 };
@@ -196,7 +187,9 @@ extern fn CFAttributedStringCreate(
     *const anyopaque,
     *const anyopaque,
 ) ?*anyopaque;
+extern var kCFBooleanTrue: *const anyopaque;
 extern var kCTFontAttributeName: *const anyopaque;
+extern var kCTForegroundColorFromContextAttributeName: *const anyopaque;
 extern fn CTFontCreateUIFontForLanguage(u32, f64, *const anyopaque) ?*anyopaque;
 extern fn CTFontCreateWithName(*const anyopaque, f64, ?*const anyopaque) ?*anyopaque;
 extern fn CTFontCreateCopyWithSymbolicTraits(
@@ -224,6 +217,8 @@ extern fn CTLineGetTypographicBounds(
     ?*f64,
 ) f64;
 extern fn CTLineDraw(*const anyopaque, *anyopaque) void;
+extern fn CGColorSpaceCreateDeviceRGB() ?*anyopaque;
+extern fn CGColorSpaceRelease(*anyopaque) void;
 extern fn CGBitmapContextCreate(
     [*]u8,
     usize,
@@ -236,6 +231,7 @@ extern fn CGBitmapContextCreate(
 extern fn CGContextRelease(*anyopaque) void;
 extern fn CGContextSetShouldAntialias(*anyopaque, bool) void;
 extern fn CGContextSetShouldSmoothFonts(*anyopaque, bool) void;
+extern fn CGContextSetRGBFillColor(*anyopaque, f64, f64, f64, f64) void;
 extern fn CGContextSetTextPosition(*anyopaque, f64, f64) void;
 
 extern fn CTFontCopyFamilyName(*const anyopaque) *anyopaque;

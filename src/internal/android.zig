@@ -559,8 +559,8 @@ pub const font = struct {
         for (0..@as(usize, @intCast(height))) |y| {
             for (0..@as(usize, @intCast(width))) |x| {
                 const offset = (y + 1) * stride + (x + 1) * 4;
-                @memset(data[offset..][0..3], 255);
-                data[offset + 3] = alpha[(y + 1) * rowBytes + x + 1];
+                const coverage = alpha[(y + 1) * rowBytes + x + 1];
+                @memset(data[offset..][0..4], coverage);
             }
         }
         return char;

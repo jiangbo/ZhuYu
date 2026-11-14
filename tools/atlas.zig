@@ -1,6 +1,6 @@
 //! 图集合并。
 const std = @import("std");
-const zigimg = @import("zigimg");
+const copy = @import("copy.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -157,7 +157,7 @@ fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
 
         const path = try joinRelative(scan.gpa, relative, entry.name);
         const filePath = try std.fs.path.join(scan.gpa, &.{ scan.inputPath, path });
-        const decoded = try decodePng(scan.io, scan.gpa, filePath);
+        const decoded = try copy.decodePng(scan.io, scan.gpa, filePath);
         const id = std.hash.Fnv1a_32.hash(path);
         const result = try scan.ids.getOrPut(scan.gpa, id);
         if (result.found_existing) {
@@ -268,7 +268,8 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
     if (pageCount > 256) return error.AtlasLayerLimitExceeded;
     const imagePaths = try gpa.alloc([]const u8, pageCount);
     for (pages, 0..) |page, index| {
-        const bytes = try encodePng(gpa, .{
+        copy.premultiply(page);
+        const bytes = try copy.encodePng(gpa, .{
             .pixels = page,
             .width = layout.width,
             .height = layout.height,
@@ -343,49 +344,6 @@ fn copyExtruded(page: Page, source: Source, placement: Placement) void {
         const sourceEnd = sourceStart + (width - 1) * 4;
         @memcpy(row[4 + width * 4 ..][0..4], source.pixels[sourceEnd..][0..4]);
     }
-}
-
-const PngImage = struct {
-    width: u32,
-    height: u32,
-    pixels: []u8,
-};
-
-// 读取 PNG 并转换为统一的 RGBA 像素。
-fn decodePng(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !PngImage {
-    var buffer: [64 * 1024]u8 = undefined;
-    var image = try zigimg.Image.Managed.fromFilePath(gpa, io, path, &buffer);
-    defer image.deinit();
-    try image.convert(.rgba32);
-
-    return .{
-        .width = @intCast(image.width),
-        .height = @intCast(image.height),
-        .pixels = try gpa.dupe(u8, image.rawBytes()),
-    };
-}
-
-// 将 RGBA 像素编码为 PNG，尺寸和像素共用一个图片描述。
-fn encodePng(gpa: std.mem.Allocator, source: PngImage) ![]u8 {
-    const pixels = source.pixels;
-    const width = source.width;
-    const height = source.height;
-    if (pixels.len != @as(usize, width) * height * 4) {
-        return error.InvalidPixels;
-    }
-
-    const storage = try zigimg.color.PixelStorage.initRawPixels(pixels, .rgba32);
-    const image = zigimg.Image{
-        .width = width,
-        .height = height,
-        .pixels = storage,
-    };
-    const buffer = try gpa.alloc(u8, pixels.len * 2 + 1024);
-    defer gpa.free(buffer);
-    const encoded = try image.writeToMemory(gpa, buffer, .{ .png = .{
-        .filter_choice = .{ .specified = .none },
-    } });
-    return gpa.dupe(u8, encoded);
 }
 
 // 装箱只需要图片路径与尺寸，路径用于固定排序结果。

@@ -2,6 +2,7 @@ const std = @import("std");
 const text = @import("text").static;
 
 const fontChars = @import("chars.zig");
+const copy = @import("copy.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -52,6 +53,10 @@ pub fn addConvertStep(
         name: []const u8,
     },
 ) void {
+    const zigimgDep = dep.builder.lazyDependency("zigimg", .{
+        .target = b.graph.host,
+        .optimize = .safe,
+    }) orelse return;
     // 描述文件路径保留生成依赖，输出设置通过模块注入转换程序。
     const config = b.addOptions();
     config.addOption(enum { static, system, custom }, "font", .static);
@@ -66,6 +71,7 @@ pub fn addConvertStep(
             .optimize = .safe,
         }),
     });
+    tool.root_module.addImport("zigimg", zigimgDep.module("zigimg"));
     const configModule = config.createModule();
     tool.root_module.addImport("options", configModule);
     tool.root_module.addAnonymousImport("text", .{
@@ -94,7 +100,7 @@ fn createCharset(b: *Build, input: []const u8) !Build.LazyPath {
 
 // 固定生成 BMFont v3 二进制描述和 PNG，匹配字体解析和引擎采样方式。
 // fontDescFormat=2 选择二进制描述，供下方按 v3 块结构读取。
-// RGB 固定为白色，字形覆盖率存入 alpha，绘制时再乘文字颜色。
+// RGB 固定为白色，字形覆盖率存入 alpha，导出时转为预乘 RGBA。
 fn createConfig(b: *Build, options: Options) Build.LazyPath {
     const fontPath = b.root.joinString(b.allocator, options.font) catch
         @panic("Out of memory");
@@ -201,7 +207,9 @@ pub fn main(init: std.process.Init) !void {
         const path = try std.fs.path.join(gpa, &.{
             std.fs.path.dirname(options.source).?, image,
         });
-        const bytes = try cwd.readFileAlloc(io, path, gpa, .unlimited);
+        const decoded = try copy.decodePng(io, gpa, path);
+        copy.premultiply(decoded.pixels);
+        const bytes = try copy.encodePng(gpa, decoded);
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);

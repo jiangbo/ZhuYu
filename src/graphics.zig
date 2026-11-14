@@ -36,7 +36,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
             var c: [8]sk.gfx.ColorTargetState = @splat(.{});
             c[0] = .{ .blend = .{
                 .enabled = true,
-                .src_factor_rgb = .SRC_ALPHA,
+                .src_factor_rgb = .ONE,
                 .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
                 .src_factor_alpha = .ONE,
                 .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
@@ -59,8 +59,13 @@ pub const DrawOption = struct {
     radian: f32 = 0, // 旋转弧度
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
     uvRect: ?zhu.Vector4 = null, // 纹理 UV 区域
-    color: Color = .white, // 乘色
-    addColor: Color = .all(0), // 加色
+    color: Color = .white, // 乘色；Alpha 控制图片本身的不透明度。
+    // 额外增加颜色，让画面变亮；Alpha 控制强度，零表示不加色。
+    // 加色不受 color.a 控制，也不增加对背景的遮挡。
+    // 普通半透明：addColor 保持零，调整 color.a。
+    // 纯加法发光：color.a 设为零，用 addColor 设置颜色和强度。
+    // 图片和加色一起淡出时，需要同时降低 color.a 和 addColor.a。
+    addColor: Color = .all(0),
     filter: ?Filter = null, // null 使用图片自身的采样方式。
     snap: ?bool = null, // null 使用 batch 的默认设置。
 };
@@ -77,7 +82,8 @@ pub const Vertex = extern struct {
     pivot: zhu.Vector2 = .zero, // 固定中心在图片中的归一化位置。
     uvRect: zhu.Vector4, // 纹理 UV 区域
     color: Color = .white, // 乘色，按通道乘纹理。
-    addColor: Color = .all(0), // 加色，乘色后按通道相加。
+    // 加色规则见 DrawOption；自己的 Alpha 控制强度，不受 color.a 控制。
+    addColor: Color = .all(0),
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
 };
 

@@ -188,6 +188,7 @@ pub const audio = @import("tools/audio.zig");
 
 // 资源转换工具在宿主上运行，按需注册游戏项目的构建命令。
 pub const atlas = @import("tools/atlas.zig");
+pub const copy = @import("tools/copy.zig");
 
 pub const tiled = @import("tools/tiled.zig");
 

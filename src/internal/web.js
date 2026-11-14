@@ -89,7 +89,14 @@ mergeInto(LibraryManager.library, {
         context.textBaseline = "alphabetic";
         context.fillStyle = "white";
         context.fillText(text, 1 - left, 1 + top);
-        zhuFont.pixels = context.getImageData(0, 0, copyWidth, copyHeight).data;
+        const pixels = context.getImageData(0, 0, copyWidth, copyHeight).data;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const a = pixels[i + 3];
+            pixels[i] = a;
+            pixels[i + 1] = a;
+            pixels[i + 2] = a;
+        }
+        zhuFont.pixels = pixels;
         if (zhuFont.pixels.length > len) return 1;
         // 扩容可能更换 Wasm 内存视图，拷贝时读取当前视图。
         HEAPU8.set(zhuFont.pixels, out);

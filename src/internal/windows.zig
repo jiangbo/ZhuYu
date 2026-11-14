@@ -280,8 +280,8 @@ pub const font = struct {
             // DirectWrite 位图自顶向下，GetObject 的高度符号不表示方向。
             for (0..width) |x| {
                 const offset = (y + 1) * stride + (x + 1) * 4;
-                @memset(buffer[offset..][0..3], 255);
-                buffer[offset + 3] = data[y * pitch + x * 4];
+                const alpha = data[y * pitch + x * 4];
+                @memset(buffer[offset..][0..4], alpha);
             }
         }
     }

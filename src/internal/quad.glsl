@@ -16,7 +16,7 @@ in vec4 vertex_add_color; // 加色
 in vec2 vertex_skew; // 斜切弧度，分别改变两条局部轴的方向。
 
 out vec4 color;
-out vec4 add_color;
+out vec3 add_color;
 out vec3 uvw;
 #ifdef SAMPLERS
 flat out uint filterMode;
@@ -44,9 +44,11 @@ void main() {
     }
     gl_Position = vec4(clip, 0, 1);
 
-    // 纹理
-    color = vertex_color;
-    add_color = vertex_add_color;
+    // 外部颜色保持普通 RGBA，这里转为预乘颜色。
+    color = vec4(vertex_color.rgb * vertex_color.a, vertex_color.a);
+    // 加色只增加 RGB，不增加遮挡背景的 Alpha，强度由自己的 Alpha 控制。
+    // 不乘 vertex_color.a：它为零时仍能加色，实现只变亮、不遮挡背景的效果。
+    add_color = vertex_add_color.rgb * vertex_add_color.a;
     vec2 uv = vertex_texture.xy + corner * vertex_texture.zw;
     uvw = vec3(uv * textureVec.xy, float(vertex_bytes.x));
 #ifdef SAMPLERS
@@ -66,7 +68,7 @@ layout(binding=0) uniform sampler smp;
 #endif
 
 in vec4 color;
-in vec4 add_color;
+in vec3 add_color;
 in vec3 uvw;
 #ifdef SAMPLERS
 flat in uint filterMode;
@@ -87,7 +89,7 @@ void main() {
 #else
     vec4 sampled = texture(sampler2DArray(tex, smp), uvw);
 #endif
-    frag_color = sampled * color + add_color;
+    frag_color = sampled * color + vec4(add_color * sampled.a, 0.0);
 }
 @end
 
@@ -101,7 +103,7 @@ layout(binding=0) uniform sampler linearSmp;
 #endif
 
 in vec4 color;
-in vec4 add_color;
+in vec3 add_color;
 in vec3 uvw;
 #ifdef SAMPLERS
 flat in uint filterMode;
@@ -120,8 +122,8 @@ void main() {
     vec2 screenSize = vec2(1.0) / fwidth(uvw.xy);
     float screenRange = max(0.5 * dot(unitRange, screenSize), 1.0);
     float opacity = clamp(distance * screenRange + 0.5, 0.0, 1.0);
-    // 先生成字形覆盖率，再应用乘色和加色。
-    frag_color = vec4(vec3(1.0), opacity) * color + add_color;
+    // 先生成预乘字形覆盖率，再应用乘色和加色。
+    frag_color = vec4(opacity) * color + vec4(add_color * opacity, 0.0);
 }
 @end
 
