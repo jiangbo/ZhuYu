@@ -9,7 +9,7 @@ const Init = std.process.Init;
 const assert = std.debug.assert;
 
 // 当前平台的用户数据目录，路径写入调用方缓冲区。
-pub fn storagePath(info: Init, name: []const u8, buf: []u8) []const u8 {
+pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     const base = info.environ_map.get("APPDATA") orelse @panic("APPDATA not set");
     return zhu.format(buf, "{s}\\{s}", .{ base, name });
 }

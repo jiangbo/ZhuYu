@@ -5,6 +5,8 @@ const sk = @import("sokol");
 
 const zhu = @import("../zhu.zig");
 const codec = @import("codec.zig");
+const web = @import("web.zig");
+const android = @import("android.zig");
 
 const Init = std.process.Init;
 const Io = std.Io;
@@ -28,7 +30,7 @@ pub const backend = switch (builtin.os.tag) {
 /// 返回的缓冲区由调用者释放，Web 不支持同步文件读取。
 pub fn readFile(gpa: zhu.Allocator, dir: ?Io.Dir, path: [:0]const u8) ![]u8 {
     if (builtin.os.tag == .emscripten) @panic("web has no file system");
-    if (builtin.abi.isAndroid()) return backend.readAsset(path, gpa);
+    if (builtin.abi.isAndroid()) return android.readAsset(path, gpa);
     const file = try dir.?.openFile(io, path, .{});
     defer file.close(io);
     const size: usize = @intCast(try file.length(io));
@@ -59,37 +61,39 @@ pub const storage = struct {
     }
 
     /// 检查用户数据文件是否存在，路径相对于存储目录。
-    pub fn exists(path: [:0]const u8) bool {
-        if (builtin.os.tag == .emscripten) return backend.storage.exists(path);
+    pub fn exists(path: []const u8) bool {
+        if (builtin.os.tag == .emscripten) return web.storage.exists(path);
         const dir = openOrCreateDir(false) catch return false;
         defer dir.close(io);
         dir.access(io, path, .{}) catch return false;
         return true;
     }
 
-    /// 读取用户数据，并在缓冲区末尾添加零字节。
-    pub fn readBuffer(path: [:0]const u8, buffer: []u8) ![:0]u8 {
+    /// 读取完整用户数据，缓冲不足时返回 BufferTooSmall。
+    pub fn readBuffer(path: []const u8, buffer: []u8) ![]u8 {
         if (builtin.os.tag == .emscripten)
-            return backend.storage.readBuffer(path, buffer);
-        const buf = buffer[0 .. buffer.len - 1];
+            return web.storage.readBuffer(path, buffer);
         const dir = try openOrCreateDir(false);
         defer dir.close(io);
-        const content = try dir.readFile(io, path, buf);
-        return terminateBuffer(buffer, content.len);
+        const file = try dir.openFile(io, path, .{});
+        defer file.close(io);
+        if (try file.length(io) > buffer.len) return error.BufferTooSmall;
+        const len = try file.readPositionalAll(io, buffer, 0);
+        return buffer[0..len];
     }
 
     /// 读取完整用户数据，由调用者释放返回的内存。
-    pub fn readAll(gpa_: Allocator, path: [:0]const u8) ![:0]u8 {
-        if (builtin.os.tag == .emscripten) return backend.storage.readAll(gpa_, path);
+    pub fn readAll(gpa_: Allocator, path: []const u8) ![]u8 {
+        if (builtin.os.tag == .emscripten) return web.storage.readAll(gpa_, path);
         const dir = try openOrCreateDir(false);
         defer dir.close(io);
-        return dir.readFileAllocOptions(io, path, gpa_, .unlimited, .of(u8), 0);
+        return dir.readFileAlloc(io, path, gpa_, .unlimited);
     }
 
     /// 原子替换用户数据，首次写入时创建存储目录和文件所在的子目录。
-    pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
+    pub fn writeAll(path: []const u8, content: []const u8) !void {
         if (builtin.os.tag == .emscripten)
-            return backend.storage.writeAll(path, content);
+            return web.storage.writeAll(path, content);
         const dir = try openOrCreateDir(true);
         defer dir.close(io);
         var atomicFile = try dir.createFileAtomic(io, path, .{
@@ -117,7 +121,7 @@ pub const storage = struct {
     }
 
     /// 按指定类型读取二进制存档，字段顺序和类型必须与写入时一致。
-    pub fn readValue(comptime T: type, path: [:0]const u8) !Loaded(T) {
+    pub fn readValue(comptime T: type, path: []const u8) !Loaded(T) {
         const content = try readAll(gpa, path);
         defer gpa.free(content);
 
@@ -135,7 +139,7 @@ pub const storage = struct {
     /// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
     /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
     /// ArrayList 只保存元素，读取后容量等于元素数量。
-    pub fn writeValue(path: [:0]const u8, value: anytype) !void {
+    pub fn writeValue(path: []const u8, value: anytype) !void {
         if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
         var output = Writer.Allocating.init(gpa);
         defer output.deinit();
@@ -166,7 +170,7 @@ pub const storage = struct {
     };
 
     /// 打开带版本的存档，只解析文件头，由游戏按版本选择读取类型。
-    pub fn openSave(path: [:0]const u8) !Save {
+    pub fn openSave(path: []const u8) !Save {
         if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
         const arena = try gpa.create(ArenaAllocator);
         errdefer gpa.destroy(arena);
@@ -184,18 +188,12 @@ pub const storage = struct {
     }
 
     /// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
-    pub fn writeSave(path: [:0]const u8, version: u32, value: anytype) !void {
+    pub fn writeSave(path: []const u8, version: u32, value: anytype) !void {
         if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
         var output = Writer.Allocating.init(gpa);
         defer output.deinit();
         try codec.encodeVersion(&output.writer, version, value);
         try writeAll(path, output.writer.buffered());
-    }
-
-    // 为读取结果补上零字节，返回的切片仍由原缓冲区持有。
-    fn terminateBuffer(buffer: []u8, len: usize) [:0]u8 {
-        buffer[len] = 0;
-        return buffer[0..len :0];
     }
 };
 
@@ -269,10 +267,7 @@ pub fn setup(info: Init, gpa: zhu.Allocator, dir: ?[]const u8) void {
     backend.setup(gpa);
     if (dir) |name| {
         storage.gpa = gpa;
-        storage.dataPath = if (builtin.os.tag == .emscripten)
-            backend.storage.setup(name)
-        else
-            backend.storagePath(info, name, &storage.pathBuffer);
+        storage.dataPath = backend.dataPath(info, name, &storage.pathBuffer);
     }
     switch (builtin.os.tag) {
         .linux, .macos, .ios => posixTime.tzset(),
@@ -296,15 +291,15 @@ pub fn localTime(value: std.Io.Timestamp) DateTime {
 
 pub fn run(desc: sk.app.Desc, disableIME: bool) void {
     if (builtin.os.tag == .windows and disableIME) {
-        _ = backend.ImmDisableIME(-1);
+        _ = @import("windows.zig").ImmDisableIME(-1);
     }
     if (!builtin.abi.isAndroid()) return sk.app.run(desc);
-    backend.desc = desc;
+    android.desc = desc;
 }
 
 // 浏览器查询主要指针类型，移动平台默认推测没有实体键盘。
 pub fn mayNotHaveKeyboard() bool {
-    if (builtin.os.tag == .emscripten) return backend.zhu_coarse_pointer() != 0;
+    if (builtin.os.tag == .emscripten) return web.zhu_coarse_pointer() != 0;
     return builtin.abi.isAndroid() or builtin.os.tag == .ios;
 }
 

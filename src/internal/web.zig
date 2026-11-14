@@ -9,6 +9,12 @@ const Allocator = std.mem.Allocator;
 
 pub fn setup(_: std.mem.Allocator) void {}
 
+// 应用名称作为浏览器存储键前缀，借用公共层持有的路径缓冲。
+pub fn dataPath(_: std.process.Init, name: []const u8, buf: []u8) []const u8 {
+    storage.dataName = zhu.format(buf, "{s}", .{name});
+    return storage.dataName;
+}
+
 // 秒数以 double 传递，避免 Wasm i64 与 JavaScript BigInt 的转换。
 extern "env" fn zhu_local_time(f64, *DateTime) void;
 
@@ -55,39 +61,30 @@ pub const font = struct {
 
 // 浏览器用户数据存储，内部为文件名添加应用名称前缀。
 pub const storage = struct {
-    var nameBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var dataName: []const u8 = "";
 
-    pub fn setup(name: []const u8) []const u8 {
-        dataName = zhu.format(&nameBuffer, "{s}", .{name});
-        return dataName;
-    }
-
-    pub fn exists(path: [:0]const u8) bool {
+    pub fn exists(path: []const u8) bool {
         var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         return existsKey(key(&buf, path));
     }
 
-    pub fn readBuffer(path: [:0]const u8, buf: []u8) ![:0]u8 {
+    pub fn readBuffer(path: []const u8, buf: []u8) ![]u8 {
         var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const result = try load(key(&keyBuffer, path), buf[0 .. buf.len - 1]);
+        const result = try load(key(&keyBuffer, path), buf);
         return switch (result) {
-            .loaded => |content| blk: {
-                buf[content.len] = 0;
-                break :blk buf[0..content.len :0];
-            },
+            .loaded => |content| content,
             .tooSmall => error.BufferTooSmall,
         };
     }
 
-    pub fn readAll(gpa: Allocator, path: [:0]const u8) ![:0]u8 {
+    pub fn readAll(gpa: Allocator, path: []const u8) ![]u8 {
         var buf: [4096]u8 = undefined;
         var keyBuffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const pathKey = key(&keyBuffer, path);
         return switch (try load(pathKey, &buf)) {
-            .loaded => |content| try gpa.dupeSentinel(u8, content, 0),
+            .loaded => |content| try gpa.dupe(u8, content),
             .tooSmall => |len| blk: {
-                const large = try gpa.allocSentinel(u8, len, 0);
+                const large = try gpa.alloc(u8, len);
                 errdefer gpa.free(large);
                 switch (try load(pathKey, large)) {
                     .loaded => break :blk large,
@@ -97,12 +94,12 @@ pub const storage = struct {
         };
     }
 
-    pub fn writeAll(path: [:0]const u8, content: []const u8) !void {
+    pub fn writeAll(path: []const u8, content: []const u8) !void {
         var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         try save(key(&buf, path), content);
     }
 
-    fn key(buf: []u8, path: [:0]const u8) [:0]u8 {
+    fn key(buf: []u8, path: []const u8) [:0]u8 {
         if (dataName.len == 0) @panic("set a storage name in zhu.setup");
         return zhu.formatZ(buf, "{s}/{s}", .{ dataName, path });
     }

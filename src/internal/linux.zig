@@ -8,7 +8,7 @@ const dynamic = @import("../text.zig").dynamic;
 const Init = std.process.Init;
 
 // 当前平台的用户数据目录，路径写入调用方缓冲区。
-pub fn storagePath(info: Init, name: []const u8, buf: []u8) []const u8 {
+pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     if (info.environ_map.get("XDG_DATA_HOME")) |base|
         return zhu.format(buf, "{s}/{s}", .{ base, name });
     const home = info.environ_map.get("HOME") orelse @panic("HOME not set");

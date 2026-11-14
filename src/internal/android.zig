@@ -246,7 +246,7 @@ pub fn readAsset(path: [:0]const u8, allocator: std.mem.Allocator) ![]u8 {
 }
 
 // 返回系统给出的私有目录绝对路径，路径在进程内一直有效。
-pub fn storagePath(_: Init, _: []const u8, _: []u8) []const u8 {
+pub fn dataPath(_: Init, _: []const u8, _: []u8) []const u8 {
     const activity: *const Activity =
         @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
     return std.mem.span(activity.internalDataPath);
