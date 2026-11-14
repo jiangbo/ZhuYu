@@ -258,33 +258,45 @@ export var __em_js__zhu_coarse_pointer align(1) linksection("em_js") =
         \\}
     ).*;
 
-// 每个槽位只保留一个请求，完成后将结果通知 Wasm。
+// 每个槽位只保留一个请求，网络或 5xx 失败时重试一次，完成后将结果通知 Wasm。
 export var __em_js__zhu_fetch_start align(1) linksection("em_js") =
     (
         \\(int lane, const char *path)<::>{
         \\    const jobs = Module.zhu_fetch_jobs ||= [];
         \\    const job = new AbortController();
+        \\    const url = "assets/" + UTF8ToString(path);
         \\    jobs[lane] = job;
-        \\    fetch("assets/" + UTF8ToString(path), { signal: job.signal })
-        \\    .then(async response => {
-        \\        if (!response.ok) {
-        \\            if (jobs[lane] === job) {
-        \\                jobs[lane] = null;
-        \\                _zhu_fetch_done(lane, 1);
+        \\    (async () => {
+        \\        for (let i = 0; i < 2; i++) {
+        \\            try {
+        \\                const resp = await fetch(url, { signal: job.signal });
+        \\                if (resp.ok) {
+        \\                    const buf = await resp.arrayBuffer();
+        \\                    const data = new Uint8Array(buf);
+        \\                    if (jobs[lane] !== job) return;
+        \\                    jobs[lane] = null;
+        \\                    const out = _zhu_fetch_alloc(lane, data.length);
+        \\                    HEAPU8.set(data, out);
+        \\                    _zhu_fetch_done(lane, 0);
+        \\                    return;
+        \\                }
+        \\                if (resp.status < 500 || i === 1) {
+        \\                    if (jobs[lane] === job) {
+        \\                        jobs[lane] = null;
+        \\                        _zhu_fetch_done(lane, 1);
+        \\                    }
+        \\                    return;
+        \\                }
+        \\            } catch {
+        \\                if (jobs[lane] !== job) return;
+        \\                if (i === 1) {
+        \\                    jobs[lane] = null;
+        \\                    _zhu_fetch_done(lane, 3);
+        \\                    return;
+        \\                }
         \\            }
-        \\            return;
         \\        }
-        \\        const data = new Uint8Array(await response.arrayBuffer());
-        \\        if (jobs[lane] !== job) return;
-        \\        jobs[lane] = null;
-        \\        const out = _zhu_fetch_alloc(lane, data.length);
-        \\        HEAPU8.set(data, out);
-        \\        _zhu_fetch_done(lane, 0);
-        \\    }).catch(() => {
-        \\        if (jobs[lane] !== job) return;
-        \\        jobs[lane] = null;
-        \\        _zhu_fetch_done(lane, 3);
-        \\    });
+        \\    })();
         \\}
     ).*;
 
