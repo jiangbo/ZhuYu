@@ -86,7 +86,7 @@ pub const MusicSource = struct {
 
         const player = try gpa.create(vorbis.Player);
         errdefer gpa.destroy(player);
-        player.* = try vorbis.Player.init(gpa, data);
+        try player.init(gpa, data);
         // 音乐必须包含可播放的帧。
         std.debug.assert(player.sampleCount > 0);
         return .{ .decoder = .{ .vorbis = player } };

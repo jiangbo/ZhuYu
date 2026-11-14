@@ -13,7 +13,8 @@ pub const Sound = struct {
     /// 一次性解码音效并持有 PCM，返回后可以释放原始文件。
     /// 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
     pub fn init(gpa: std.mem.Allocator, data: []const u8) !Sound {
-        var player = try Player.init(gpa, data);
+        var player: Player = undefined;
+        try player.init(gpa, data);
         defer player.deinit();
 
         const channels = player.channels;
@@ -56,10 +57,10 @@ pub const Player = struct {
     discard: usize = 0,
 
     /// 复制音频包并解析头部；返回后调用方可以释放原始文件。
-    pub fn init(allocator: std.mem.Allocator, data: []const u8) !Player {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-        const storage = arena.allocator();
+    pub fn init(self: *Player, allocator: std.mem.Allocator, data: []const u8) !void {
+        self.arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer self.arena.deinit();
+        const storage = self.arena.allocator();
         const stream = try readOgg(storage, data);
         if (stream.packets.len < 3) return error.InvalidVorbis;
         const header = stream.packets[0].data;
@@ -86,8 +87,8 @@ pub const Player = struct {
             !std.mem.eql(u8, setup[1..7], "vorbis"))
             return error.InvalidVorbis;
 
-        var self: Player = .{
-            .arena = arena,
+        self.* = .{
+            .arena = self.arena,
             .sampleRate = rate,
             .channels = channels,
             .sampleCount = stream.samples,
@@ -105,8 +106,6 @@ pub const Player = struct {
             // 一次 Residue 最多处理两声道交错的半块，每个分区至少一个值。
             self.classes[i] = try storage.alloc(u8, size + 256);
         }
-        self.arena = arena;
-        return self;
     }
 
     /// 释放压缩包、配置和工作缓冲；调用前停止音频线程使用它。
@@ -275,7 +274,7 @@ pub const Player = struct {
     /// 解析码本、频谱模型、声道映射和音频块模式。
     fn readSetup(self: *Player, allocator: std.mem.Allocator, bits: *Bits) !void {
         self.books = try allocator.alloc(Book, try bits.read(8) + 1);
-        for (self.books) |*book| book.* = try Book.init(.{
+        for (self.books) |*book| try book.init(.{
             .store = allocator,
             .temp = self.arena.child_allocator,
         }, bits);
@@ -577,7 +576,7 @@ const Book = struct {
     vectors: []f32 = &.{},
 
     // 建立码字和短码表，并把压缩向量展开成直接索引的浮点数组。
-    fn init(memory: BookAlloc, bits: *Bits) !Book {
+    fn init(self: *Book, memory: BookAlloc, bits: *Bits) !void {
         const allocator = memory.store;
         if (try bits.read(24) != 0x564342) return error.InvalidVorbis;
         const dimensions = try bits.read(16);
@@ -608,7 +607,7 @@ const Book = struct {
                 }
             }
         }
-        var self: Book = .{
+        self.* = .{
             .dimensions = dimensions,
             .entries = try allocator.alloc(Entry, present),
         };
@@ -647,7 +646,7 @@ const Book = struct {
         }
         const lookup = try bits.read(4);
         if (lookup > 2) return error.InvalidVorbis;
-        if (lookup == 0) return self;
+        if (lookup == 0) return;
         const minimum = unpackFloat(try bits.read(32));
         const delta = unpackFloat(try bits.read(32));
         const valueBits: u6 = @intCast(try bits.read(4) + 1);
@@ -685,7 +684,6 @@ const Book = struct {
                 if (lookup == 1) symbol = @intCast(symbol / values);
             }
         }
-        return self;
     }
 
     /// 返回稀疏压缩后的条目索引，向量和标量共享查表过程。
