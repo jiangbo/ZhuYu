@@ -413,6 +413,7 @@ pub const key = struct {
     }
 
     // 暂存按键变化，帧末回放后在下一帧生效。
+    // 每帧最多 16 个事件，超限由安全构建的数组边界检查报错。
     pub fn queue(keyCode: Code, down: bool) void {
         events[eventCount] = .{ .code = keyCode, .down = down };
         eventCount += 1;
