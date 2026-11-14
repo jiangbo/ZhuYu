@@ -25,7 +25,7 @@ pub const Response = struct {
         bytes: []const u8,
         zlib: []const u8, // 解压后的字节，回调结束后释放。
         image: image.Image,
-        sound: vorbis.Sound,
+        sound: vorbis.Sound, // 解码后的 PCM，回调时移交所有权。
     } = .{ .bytes = &.{} },
 };
 pub const Kind = enum { bytes, zlib, image, sound };
@@ -45,7 +45,6 @@ const Slot = struct {
     state: std.atomic.Value(enum(u8) { idle, load, done }) = .init(.idle),
     request: Request = undefined,
     result: anyerror!Response = undefined,
-    decoded: bool = false, // 原生端仅后台读写，用于统计未交付的解码结果。
     needsFree: bool = false, // 当前数据是否由槽位负责释放。
 
     fn freeResult(self: *Slot) void {
@@ -67,9 +66,9 @@ var mapping: ?std.Io.File.MemoryMap = null;
 
 // 仅主线程访问的等待队列。
 var queue: std.Deque(Request) = .empty;
-var slots: [4]Slot = @splat(.{}); // 每个槽位拥有独立缓冲区。
 const isWeb = builtin.os.tag == .emscripten;
-const MAX_DECODE = 2;
+// 原生端 2 个槽位控内存；Web 端 4 路下载，交付时再解码。
+var slots: [if (isWeb) 4 else 2]Slot = @splat(.{});
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
@@ -163,6 +162,11 @@ pub fn update() void {
         .done => {
             const request = slot.request;
             const path = request.path;
+            if (isWeb and request.option.kind != .bytes) {
+                if (slot.result) |raw| {
+                    slot.result = decode(slot, raw.content.bytes);
+                } else |_| {}
+            }
             const response = slot.result catch |err| {
                 const msg = "assets load failed, path: {s}, error: {}";
                 std.debug.panic(msg, .{ path, err });
@@ -185,8 +189,10 @@ pub fn update() void {
             slot.state.store(.load, .release);
             needWake = true;
             if (!isWeb) continue;
-            if (request.data) |data| decodeSlot(slot, data) else //
-            web.zhu_fetch_start(@intCast(lane), request.path.ptr);
+            if (request.data) |data| {
+                slot.result = .{ .path = request.path, .content = .{ .bytes = data } };
+                slot.state.store(.done, .release);
+            } else web.zhu_fetch_start(@intCast(lane), request.path.ptr);
         },
         else => {},
     };
@@ -224,42 +230,50 @@ pub fn deinit() void {
     }
 }
 
-// 读取完成后直接解码，再由主线程交付结果。
-fn decodeSlot(slot: *Slot, data: []const u8) void {
-    slot.decoded = slot.request.option.kind != .bytes;
-    slot.result = decode(slot, data);
-    slot.state.store(.done, .release);
+// 与主线程通过槽位状态交接所有权，保持一个后台读取线程。
+fn runBackground() void {
+    while (true) {
+        Native.wake.waitUncancelable(io);
+        Native.wake.reset();
+        if (Native.stopping.load(.acquire)) return;
+        for (&slots) |*slot| {
+            if (Native.stopping.load(.acquire)) return;
+            if (slot.state.load(.acquire) != .load) continue;
+            const data = readRequest(slot.request) catch |err| {
+                slot.result = err;
+                slot.state.store(.done, .release);
+                continue;
+            };
+            slot.needsFree = slot.request.data == null;
+            slot.result = decode(slot, data);
+            slot.state.store(.done, .release);
+        }
+    }
 }
 
 // 解码产生独立结果；原始字节只释放自己分配的部分。
 fn decode(slot: *Slot, data: []const u8) !Response {
-    const request = slot.request;
-    const freeRaw = slot.needsFree and request.option.kind != .bytes;
+    const needsDecode = slot.request.option.kind != .bytes;
+    const freeRaw = slot.needsFree and needsDecode;
     defer if (freeRaw) gpa.free(data);
-    var result: Response = .{ .path = request.path };
-    switch (request.option.kind) {
-        .bytes => result.content = .{ .bytes = data },
-        .zlib => {
-            var input = std.Io.Reader.fixed(data);
-            const buffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
-            defer gpa.free(buffer);
-            var decoder = std.compress.flate.Decompress.init(&input, .zlib, buffer);
-            const bytes = try decoder.reader.allocRemaining(gpa, .unlimited);
-            slot.needsFree = true;
-            result.content = .{ .zlib = bytes };
+    if (needsDecode) slot.needsFree = true;
+    return .{
+        .path = slot.request.path,
+        .content = switch (slot.request.option.kind) {
+            .bytes => .{ .bytes = data },
+            .zlib => .{ .zlib = try decodeZlib(data) },
+            .image => .{ .image = try image.loadIcon(gpa, data) },
+            .sound => .{ .sound = try vorbis.Sound.init(gpa, data) },
         },
-        .image => {
-            const decoded = try image.loadIcon(gpa, data);
-            slot.needsFree = true;
-            result.content = .{ .image = decoded };
-        },
-        .sound => {
-            const source = try vorbis.Sound.init(gpa, data);
-            slot.needsFree = true;
-            result.content = .{ .sound = source };
-        },
-    }
-    return result;
+    };
+}
+
+fn decodeZlib(data: []const u8) ![]const u8 {
+    var input = std.Io.Reader.fixed(data);
+    const buffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
+    defer gpa.free(buffer);
+    var decoder = std.compress.flate.Decompress.init(&input, .zlib, buffer);
+    return decoder.reader.allocRemaining(gpa, .unlimited);
 }
 
 // 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
@@ -272,36 +286,6 @@ fn openAssetDir() !std.Io.Dir {
     const exeDir = try std.Io.Dir.openDirAbsolute(io, path[0..len], .{});
     defer exeDir.close(io);
     return exeDir.openDir(io, "assets", .{});
-}
-
-// 与主线程通过槽位状态交接所有权，保持一个后台读取线程。
-fn runBackground() void {
-    while (true) {
-        Native.wake.waitUncancelable(io);
-        Native.wake.reset();
-        if (Native.stopping.load(.acquire)) return;
-        // 主线程只会释放结果，扫描期间数量可以保守地偏大。
-        var decoding: u32 = 0;
-        for (&slots) |*slot| {
-            if (slot.state.load(.acquire) != .done) continue;
-            if (slot.decoded) decoding += 1;
-        }
-        for (&slots) |*slot| {
-            if (Native.stopping.load(.acquire)) return;
-            if (slot.state.load(.acquire) != .load) continue;
-            const needsDecode = slot.request.option.kind != .bytes;
-            if (needsDecode and decoding >= MAX_DECODE) continue;
-            const data = readRequest(slot.request) catch |err| {
-                slot.decoded = false;
-                slot.result = err;
-                slot.state.store(.done, .release);
-                continue;
-            };
-            slot.needsFree = slot.request.data == null;
-            decodeSlot(slot, data);
-            if (needsDecode) decoding += 1;
-        }
-    }
 }
 
 fn readRequest(request: Request) ![]const u8 {
@@ -346,13 +330,12 @@ fn webAlloc(lane: c_int, size: usize) callconv(.c) [*]u8 {
     return data.ptr;
 }
 
-// 浏览器下载完成后直接解码，结果等待 update 交付。
+// 浏览器下载完成后标记就绪，由 update 在交付前解码并立即释放。
 fn webDone(lane: c_int, status: c_int) callconv(.c) void {
     const slot = &slots[@intCast(lane)];
-    if (status == 0) {
-        const raw = slot.result catch unreachable;
-        return decodeSlot(slot, raw.content.bytes);
-    }
+    defer slot.state.store(.done, .release);
+    if (status == 0) return;
+
     slot.freeResult();
     slot.result = error.HttpFailed; // 不区分错误类型
     slot.state.store(.done, .release);
