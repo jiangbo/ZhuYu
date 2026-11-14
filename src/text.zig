@@ -429,8 +429,8 @@ pub const dynamic = struct {
     // 仅在像素字号变化时清除旧字形并更新字体度量。
     pub fn resize() void {
         std.debug.assert(opened);
-        // 保留小数字号，最小生成 1 像素，避免窗口过小时字号无效。
-        const size = @max(1, fontSize * window.scale.maxAxis());
+        // 生成字号不低于逻辑字号，缩放倍率不超过 1 时复用字形缓存。
+        const size = @max(fontSize, fontSize * window.scale.maxAxis());
         std.debug.assert(size >= 1 and size <= 256);
         if (size == pixelSize) return;
 
