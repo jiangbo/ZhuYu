@@ -50,7 +50,7 @@ var flushed = false;
 pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
-    defaultPipeline = createPipeline(shaderDesc);
+    defaultPipeline = graphics.createPipeline(shaderDesc);
 
     // 调用方提供圆形图片，其中心区域必须为白色。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。
@@ -408,41 +408,4 @@ fn doDraw(
 
     // 绘制
     sk.gfx.draw(0, 4, @intCast(cmd.end - cmd.start));
-}
-
-pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
-    var vertexLayout = sk.gfx.VertexLayoutState{};
-
-    vertexLayout.attrs[0].format = .FLOAT2;
-    vertexLayout.attrs[1].format = .UBYTE4;
-    vertexLayout.attrs[2].format = .FLOAT;
-    vertexLayout.attrs[3].format = .FLOAT2;
-    vertexLayout.attrs[4].format = .FLOAT2;
-    vertexLayout.attrs[5].format = .FLOAT4;
-    vertexLayout.attrs[6].format = .UBYTE4N;
-    vertexLayout.attrs[7].format = .UBYTE4N;
-    vertexLayout.attrs[8].format = .FLOAT2;
-    vertexLayout.buffers[0].step_func = .PER_INSTANCE;
-
-    const shaderHandle = sk.gfx.makeShader(shaderDesc);
-    assets.gpu.addShader(shaderHandle);
-
-    const pipeline = sk.gfx.makePipeline(.{
-        .shader = shaderHandle,
-        .layout = vertexLayout,
-        .primitive_type = .TRIANGLE_STRIP,
-        .colors = init: {
-            var c: [8]sk.gfx.ColorTargetState = @splat(.{});
-            c[0] = .{ .blend = .{
-                .enabled = true,
-                .src_factor_rgb = .SRC_ALPHA,
-                .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
-                .src_factor_alpha = .ONE,
-                .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
-            } };
-            break :init c;
-        },
-    });
-    assets.gpu.addPipeline(pipeline);
-    return pipeline;
 }

@@ -311,7 +311,7 @@ pub const static = struct {
 
         static.init(zon, .{ .filter = .linear, .size = option.size });
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
-        const pipeline = batch.createPipeline(desc);
+        const pipeline = graphics.createPipeline(desc);
         for (images[0..data.images.len]) |image| {
             assets.view.getPtr(image.view).pipeline = pipeline;
         }
