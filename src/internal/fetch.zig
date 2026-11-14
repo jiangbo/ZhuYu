@@ -158,11 +158,14 @@ pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) vo
 pub fn update() void {
     if (!started) return;
     var needWake = false;
+    var decoded = false; // web 限制每帧解码一个资源，避免解码多个帧率不稳。
     for (&slots, 0..) |*slot, lane| blk: switch (slot.state.load(.acquire)) {
         .done => {
             const request = slot.request;
             const path = request.path;
             if (isWeb and request.option.kind != .bytes) {
+                if (decoded) continue;
+                decoded = true;
                 if (slot.result) |raw| {
                     slot.result = decode(slot, raw.content.bytes);
                 } else |_| {}
