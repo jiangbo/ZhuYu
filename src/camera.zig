@@ -125,19 +125,20 @@ pub fn deadFollow(pos: Vector2, deadSize: Vector2) void {
     clampBound();
 }
 
-pub fn smoothFollow(pos: Vector2, smooth: f32) void {
+// speed * delta 为本次跟随比例，delta 使用秒；保留最小移动和临近吸附。
+pub fn smoothFollow(pos: Vector2, speed: f32, delta: f32) void {
     const target = pos.sub(size.div(main.scale).scale(0.5));
     const distance = target.sub(main.position);
+    const smooth = std.math.clamp(speed * delta, 0, 1);
 
-    const clampedSmooth = std.math.clamp(smooth, 0, 1);
     if (@abs(distance.x) < 1) main.position.x = target.x else {
-        var moved = distance.x * clampedSmooth;
+        var moved = distance.x * smooth;
         if (@abs(moved) < 1) moved = zhu.ceilAway(moved);
         main.position.x += moved;
     }
 
     if (@abs(distance.y) < 1) main.position.y = target.y else {
-        var moved = distance.y * clampedSmooth;
+        var moved = distance.y * smooth;
         if (@abs(moved) < 1) moved = zhu.ceilAway(moved);
         main.position.y += moved;
     }
