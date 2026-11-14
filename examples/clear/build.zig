@@ -8,8 +8,6 @@ pub fn build(b: *std.Build) !void {
     const zhuyu = b.dependency("zhuyu", .{
         .target = target,
         .optimize = optimize,
-        .samplers = b.option(bool, "samplers", "Use two samplers") orelse false,
-        .gles3 = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false,
     });
     zhuBuild.installEmsdk(b, zhuyu);
 
