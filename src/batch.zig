@@ -27,7 +27,7 @@ pub const Command = union(enum) {
 pub const TargetCommand = struct { color: Color, pass: RenderPass };
 pub const DrawCommand = struct {
     start: u32 = 0, // 起始顶点索引
-    end: usize = 0, // 结束顶点索引
+    end: ?u32 = null, // 结束顶点索引，null 表示未结束。
     view: graphics.View = .{}, // 纹理视图
     camera: camera.Camera, // 本批次的基准相机快照。
     size: Vector2, // 本批次绘制的逻辑尺寸。
@@ -99,13 +99,13 @@ pub fn useScissor(rect: ?zhu.Rect) void {
 
 // 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
 pub fn endDrawCommand() void {
-    if (currentDraw()) |draw| draw.end = assets.frameStats.vertex;
+    if (currentDraw()) |draw| draw.end = @intCast(assets.frameStats.vertex);
 }
 
 fn currentDraw() ?*DrawCommand {
     if (commands.items.len == 0) return null;
     switch (commands.items[commands.items.len - 1]) {
-        .draw => |*draw| return if (draw.end != 0) null else draw,
+        .draw => |*draw| return if (draw.end == null) draw else null,
         else => return null,
     }
 }
@@ -122,12 +122,10 @@ fn addCommand(image: Image) *DrawCommand {
 }
 
 // 直接提交调用方准备好的顶点，不修改其绘制设置。
-pub fn drawVertices(items: []const Vertex, image: ?Image) void {
-    if (image) |img| {
-        const cmd = currentDraw() orelse addCommand(img);
-        // 自动分批只比较纹理视图，不比较采样器或其它状态。
-        if (cmd.view.id != img.view.id) _ = addCommand(img);
-    }
+pub fn drawVertices(image: Image, items: []const Vertex) void {
+    const cmd = currentDraw() orelse addCommand(image);
+    // 自动分批只比较纹理视图，不比较采样器或其它状态。
+    if (cmd.view.id != image.view.id) _ = addCommand(image);
     assets.gpu.addVertices(items);
 }
 
@@ -407,5 +405,5 @@ fn doDraw(
     sk.gfx.applyBindings(bindings);
 
     // 绘制
-    sk.gfx.draw(0, 4, @intCast(cmd.end - cmd.start));
+    sk.gfx.draw(0, 4, @intCast(cmd.end.? - cmd.start));
 }
