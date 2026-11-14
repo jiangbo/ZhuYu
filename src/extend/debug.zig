@@ -220,7 +220,7 @@ pub fn draw(option: Option) void {
         "文件 {}", .{assetStats.file},
         "图片 {}", .{assetStats.image});
     // 字号按字体类型显示，字库容量包含已经缓存的字形。
-    const fontStats = text.stats;
+    const fontStats = assets.fontStats;
     // 字体名最多显示 18 字节，截断时避开 UTF-8 后续字节。
     var nameLen = @min(fontStats.name.len, 18);
     if (nameLen < fontStats.name.len) {

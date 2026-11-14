@@ -26,6 +26,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     var toolOptions = options;
     toolOptions.font = try b.root.joinString(b.allocator, options.font);
     const config = b.addOptions();
+    config.addOption(enum { static, system, custom }, "font", .static);
     config.addOption(Options, "config", toolOptions);
     config.addOption([]const u21, "codes", codes);
     const tool = b.addExecutable(.{
@@ -36,9 +37,11 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
             .optimize = .safe,
         }),
     });
-    tool.root_module.addOptions("options", config);
+    const configModule = config.createModule();
+    tool.root_module.addImport("options", configModule);
     tool.root_module.addAnonymousImport("text", .{
         .root_source_file = dep.path("src/text.zig"),
+        .imports = &.{.{ .name = "options", .module = configModule }},
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));

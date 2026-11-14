@@ -54,6 +54,7 @@ pub fn addConvertStep(
 ) void {
     // 描述文件路径保留生成依赖，输出设置通过模块注入转换程序。
     const config = b.addOptions();
+    config.addOption(enum { static, system, custom }, "font", .static);
     config.addOptionPath("source", source);
     config.addOption([]const u8, "output", options.output);
     config.addOption([]const u8, "images", options.images);
@@ -65,9 +66,11 @@ pub fn addConvertStep(
             .optimize = .safe,
         }),
     });
-    tool.root_module.addOptions("options", config);
+    const configModule = config.createModule();
+    tool.root_module.addImport("options", configModule);
     tool.root_module.addAnonymousImport("text", .{
         .root_source_file = dep.path("src/text.zig"),
+        .imports = &.{.{ .name = "options", .module = configModule }},
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));

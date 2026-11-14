@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const zhu = @import("../zhu.zig");
-const dynamic = @import("../text.zig").dynamic;
+const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
 
@@ -17,14 +17,14 @@ pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
 
 pub fn setup(_: std.mem.Allocator) void {}
 
-// Linux 系统字体的单例状态，公共图集由 text.dynamic 管理。
+// Linux 系统字体的单例状态，公共图集由 assets.glyph 管理。
 pub const font = struct {
     var library: FT_Library = null; // 当前后端独占的 FreeType 实例。
     var face: FT_Face = null; // 只打开匹配到的一个字体，不做缺字回退。
 
     // 按字体名称、字重和中文偏好匹配一个字体，找不到或打不开就终止。
     // 返回写入的名称字节数；查询不到名称时返回零。
-    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+    pub fn open(option: system.Option, nameBuffer: []u8) usize {
         const config = FcInitLoadConfigAndFonts() orelse
             @panic("font config unavailable");
         defer FcConfigDestroy(config);
@@ -87,7 +87,7 @@ pub const font = struct {
     }
 
     // 以 1/64 点设置字号，并读取基线和行高度量。
-    pub fn resize(size: f32) dynamic.Metrics {
+    pub fn resize(size: f32) system.Metrics {
         // FreeType 的 26.6 定点数有 6 位小数，换算时使用 64。
         // 点制规定每英寸 72 点；选择 72 DPI，使点数直接对应目标像素数。
         const charSize: c_long = @intFromFloat(@round(size * 64));
@@ -103,7 +103,7 @@ pub const font = struct {
     }
 
     // 使用选定字体生成白色 RGBA，缺字暂用该字体的缺字字形。
-    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+    pub fn pixels(code: u32, buffer: *system.Buffer) system.Char {
         const glyph = FT_Get_Char_Index(face, code);
         // FT_LOAD_RENDER 在加载时直接生成位图。
         if (FT_Load_Glyph(face, glyph, 1 << 2) != 0)
@@ -111,7 +111,7 @@ pub const font = struct {
 
         const slot = face.*.glyph.*;
         const bitmap = slot.bitmap;
-        const char = dynamic.Char{
+        const char = system.Char{
             .rect = .{
                 .min = .{
                     .x = @floatFromInt(slot.bitmap_left),
@@ -127,12 +127,12 @@ pub const font = struct {
         const height: usize = bitmap.rows;
         const stride = (width + 2) * 4;
         const len = stride * (height + 2);
-        if (buffer.len < len) return char;
+        const data = buffer.resize(len);
         // 2 是灰度位图，1 是单色位图。
         if (bitmap.pixel_mode != 2 and bitmap.pixel_mode != 1)
             @panic("unsupported font pixel mode");
 
-        @memset(buffer[0..len], 0);
+        @memset(data[0..len], 0);
         const pitch: usize = @abs(bitmap.pitch);
         for (0..height) |y| {
             const row = if (bitmap.pitch < 0) height - 1 - y else y;
@@ -145,8 +145,8 @@ pub const font = struct {
                 else
                     0;
                 const offset = (y + 1) * stride + (x + 1) * 4;
-                @memset(buffer[offset..][0..3], 255);
-                buffer[offset + 3] = alpha;
+                @memset(data[offset..][0..3], 255);
+                data[offset + 3] = alpha;
             }
         }
         return char;

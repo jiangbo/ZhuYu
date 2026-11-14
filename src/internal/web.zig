@@ -3,7 +3,7 @@ const std = @import("std");
 
 const zhu = @import("../zhu.zig");
 const DateTime = @import("platform.zig").DateTime;
-const dynamic = @import("../text.zig").dynamic;
+const system = @import("../text.zig").system;
 
 const Allocator = std.mem.Allocator;
 
@@ -28,7 +28,7 @@ pub fn localTime(seconds: i64) DateTime {
 pub const font = struct {
     // 打开浏览器字体，宿主创建失败时直接终止。
     // 浏览器无法查询实际名称，返回零，由公共层使用 family。
-    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+    pub fn open(option: system.Option, nameBuffer: []u8) usize {
         _ = nameBuffer;
         const weight: u32 = switch (option.weight) {
             .normal => 400,
@@ -45,16 +45,22 @@ pub const font = struct {
     }
 
     // 设置像素字号并读取字体度量，后续像素生成沿用此字号。
-    pub fn resize(size: f32) dynamic.Metrics {
-        var result: dynamic.Metrics = undefined;
+    pub fn resize(size: f32) system.Metrics {
+        var result: system.Metrics = undefined;
         zhu_font_metrics(size, &result);
         return result;
     }
 
-    // 容量不足时只返回字形信息，不写像素，等待扩容后再次调用。
-    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
-        var char: dynamic.Char = undefined;
-        _ = zhu_font_pixels(code, &char, buffer.ptr, @intCast(buffer.len));
+    // 缓冲不足时扩容，再次调用只拷贝已经生成的像素。
+    pub fn pixels(code: u32, buffer: *system.Buffer) system.Char {
+        var char: system.Char = undefined;
+        const data = buffer.data;
+        if (zhu_font_pixels(code, &char, data.ptr, @intCast(data.len)) != 0) {
+            const size = char.rect.size;
+            const len: usize = @intFromFloat((size.x + 2) * (size.y + 2) * 4);
+            const next = buffer.resize(len);
+            _ = zhu_font_pixels(code, &char, next.ptr, @intCast(next.len));
+        }
         return char;
     }
 };
@@ -137,8 +143,8 @@ pub extern "env" fn zhu_coarse_pointer() c_int;
 // 打开、关闭浏览器字体，并读取像素度量和字形数据。
 pub extern "env" fn zhu_font_open([*:0]const u8, u32) c_int;
 pub extern "env" fn zhu_font_close() void;
-pub extern "env" fn zhu_font_metrics(f32, *dynamic.Metrics) void;
-pub extern "env" fn zhu_font_pixels(u32, *dynamic.Char, [*]u8, u32) c_int;
+pub extern "env" fn zhu_font_metrics(f32, *system.Metrics) void;
+pub extern "env" fn zhu_font_pixels(u32, *system.Char, [*]u8, u32) c_int;
 
 // 浏览器请求的发起与取消；请求状态和缓冲区由加载器持有。
 pub extern fn zhu_fetch_start(lane: c_int, path: [*:0]const u8) void;

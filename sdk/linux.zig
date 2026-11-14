@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // 构建入口导出此类型，用于选择统一的字体模式。
-pub const FontMode = enum { bitmap, msdf, system };
+pub const FontMode = enum { static, system, custom };
 
 // 固定头文件用于编译 Sokol，目标架构的占位库只用于最终链接。
 pub fn add(

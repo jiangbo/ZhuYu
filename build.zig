@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     // 初始化和绘制共用同一个编译期字体选择。
-    const font = b.option(FontMode, "font", "Font mode") orelse .bitmap;
+    const font = b.option(FontMode, "font", "Font mode") orelse .static;
     // 仅切换 Linux 桌面后端，Android 和 Web 继续使用各自的默认后端。
     const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
     const append = b.option(bool, "append", "Append asset pack") orelse false;

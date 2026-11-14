@@ -96,7 +96,7 @@ fn windowFrame() callconv(.c) void {
         }
     }
     const delta: f32 = @floatCast(sk.app.frameDuration());
-    if (options.font == .system) text.dynamic.update(delta);
+    if (options.font == .system) text.system.update(delta);
     root.frame(delta);
     endInput();
     resized = false;

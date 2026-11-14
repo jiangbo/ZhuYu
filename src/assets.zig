@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const options = @import("options");
 const sk = @import("sokol");
 
 const zhu = @import("zhu.zig");
@@ -19,6 +20,7 @@ const Path = [:0]const u8;
 var gpa: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
 pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
+pub var fontStats: FontStats = .{}; // 当前字体和字库统计。
 var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
 
 // 配置 IO 和统计分配器，不创建图形资源。
@@ -39,6 +41,7 @@ pub fn init() void {
 pub fn beginDraw() void {
     frameStats = .{};
     gpu.vertices.clearRetainingCapacity();
+    if (options.font != .static) glyph.offset = 0;
 }
 
 // 推进异步加载，并在主线程执行资源回调。
@@ -52,6 +55,8 @@ pub fn deinit() void {
     view.deinit();
     sound.deinit();
     music.deinit();
+    if (options.font != .static) glyph.deinit();
+    fontStats = .{};
     fetch.deinit();
     gpu.deinit();
     sk.gfx.destroySampler(sampler.nearest);
@@ -474,6 +479,14 @@ pub const FrameStats = struct {
     vertex: usize = 0, // 本帧已记录的顶点数量。
 };
 
+// 字体初始化或缓存变化时更新，读取统计不触发字形查询。
+pub const FontStats = struct {
+    name: []const u8 = "",
+    size: f32 = 0,
+    count: usize = 0,
+    capacity: usize = 0,
+};
+
 // 当前资源总量与内存统计；内存峰值从初始化开始累计。
 pub const TotalStats = struct {
     image: usize,
@@ -497,6 +510,163 @@ pub fn queryTotalStats() TotalStats {
         .memoryPeak = counter.max.load(.monotonic),
     };
 }
+
+// 动态字体的基准度量、字形缓存与图集上传。
+pub const glyph = if (options.font == .static) struct {} else struct {
+    pub var size: f32 = 18; // 字形度量对应的逻辑基准字号。
+    pub var lineHeight: f32 = 18; // 默认逻辑行高为一个基准字号。
+    pub const CreateGlyph = *const fn (u32, *Buffer) graphics.Glyph;
+    // 来源填写 image.size 的像素尺寸及逻辑度量，图集区域由缓存补全。
+    pub var createGlyph: CreateGlyph = undefined;
+
+    var atlasImage: Image = .empty;
+    var cache: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = .empty;
+    var upload: sk.gfx.Buffer = .{};
+    var buffer: Buffer = .{};
+    var offset: usize = 0;
+    var layer: i32 = 0;
+    var x: i32 = 1;
+    var y: i32 = 1;
+    var rowHeight: i32 = 0;
+
+    // 像素缓冲由资产模块持有，来源可以按实际字形尺寸扩容并填充。
+    pub const Buffer = struct {
+        data: []u8 = &.{},
+        pub fn resize(self: *Buffer, len: usize) []u8 {
+            if (self.data.len >= len) return self.data[0..len];
+            self.data = gpa.realloc(self.data, len) catch oom();
+            return self.data;
+        }
+    };
+
+    // 绑定图集并初始化字形缓存。
+    pub fn init(atlas_: Image, fontSize: f32, source: CreateGlyph) void {
+        atlasImage = atlas_;
+        createGlyph = source;
+        size, lineHeight = .{ fontSize, fontSize };
+        fontStats = .{ .size = fontSize };
+        const cell: usize = @intFromFloat(@ceil(fontSize) + 2);
+        resize(cell);
+    }
+
+    // 字号变化时重置装箱和缓存，保留图集及已使用的上传区域。
+    pub fn resize(cell: usize) void {
+        if (cell > 0) _ = buffer.resize(cell * cell * 4);
+        layer = atlasImage.layer;
+        x, y, rowHeight = .{ 1, 1, 0 };
+        cache.clearRetainingCapacity();
+        fontStats.count = 0;
+        fontStats.capacity = estimateGlyphCount(cell);
+    }
+
+    fn deinit() void {
+        gpu.destroyBuffer(upload);
+        upload, offset = .{ .{}, 0 };
+        gpa.free(buffer.data);
+        buffer = .{};
+        cache.deinit(gpa);
+        cache, atlasImage = .{ .empty, .empty };
+        size, lineHeight = .{ 18, 18 };
+    }
+
+    // 按字号加两像素边框估算方格容量，只在缓存重建时计算。
+    fn estimateGlyphCount(cell: usize) usize {
+        if (!atlasImage.isValid() or cell == 0) return 0;
+        const texture = sk.gfx.queryViewImage(atlasImage.view);
+        const width: usize = @intCast(sk.gfx.queryImageWidth(texture));
+        const height: usize = @intCast(sk.gfx.queryImageHeight(texture));
+        const layers = sk.gfx.queryImageNumSlices(texture);
+        const slices: usize = @intCast(layers - atlasImage.layer);
+        return (width / cell) * (height / cell) * slices;
+    }
+
+    pub fn findGlyph(code: u32) graphics.Glyph {
+        if (cache.get(code)) |item| return item;
+        // 图集尚未就绪时返回空字形，不生成像素，也不写入缓存。
+        const texture = sk.gfx.queryViewImage(atlasImage.view);
+        if (sk.gfx.queryImageState(texture) != .VALID) {
+            return .{ .image = .{}, .rect = .init(.zero, .zero), .advance = 0 };
+        }
+        var item = createGlyph(code, &buffer);
+        item.image = packImage(buffer.data, item.image.size);
+        cache.put(gpa, code, item) catch oom();
+        fontStats.count = cache.count();
+        return item;
+    }
+
+    // 每个字形包含一像素透明边框，当前层装满后使用下一层。
+    fn packImage(pixels: []const u8, imageSize: Vector2) Image {
+        // 空字形只参与排版，不占用图集和上传缓冲。
+        if (imageSize.x == 0 or imageSize.y == 0) return .empty;
+        std.debug.assert(atlasImage.isValid());
+
+        const width: i32 = @intFromFloat(imageSize.x);
+        const height: i32 = @intFromFloat(imageSize.y);
+        const texture = sk.gfx.queryViewImage(atlasImage.view);
+        const atlasWidth = sk.gfx.queryImageWidth(texture);
+        const atlasHeight = sk.gfx.queryImageHeight(texture);
+        if (x + width + 1 > atlasWidth) {
+            x = 1;
+            y += rowHeight + 2;
+            rowHeight = 0;
+        }
+        if (y + height + 1 > atlasHeight) {
+            if (layer + 1 == sk.gfx.queryImageNumSlices(texture))
+                @panic("font atlas layer limit exceeded");
+            layer += 1;
+            x, y = .{ 1, 1 };
+            rowHeight = 0;
+        }
+
+        const image = Image{
+            .view = atlasImage.view,
+            .layer = @intCast(layer),
+            .filter = atlasImage.filter,
+            .offset = .xy(@floatFromInt(x), @floatFromInt(y)),
+            .size = imageSize,
+        };
+
+        // 每个字形使用独立的上传区域，复制记录由 GPU 模块统一提交。
+        const left, const top = .{ x - 1, y - 1 };
+        const copyWidth, const copyHeight = .{ width + 2, height + 2 };
+        const len: usize = @intCast(copyWidth * copyHeight * 4);
+        std.debug.assert(pixels.len >= len);
+        const cap = sk.gfx.queryBufferSize(upload);
+        if (offset + len > cap) {
+            // 先消费旧缓冲的复制记录，不搬迁已上传的字形数据。
+            gpu.uploadImageUpdates();
+            gpu.destroyBuffer(upload);
+            upload = gpu.makeBuffer(.{
+                .size = @max(@max(cap * 2, len), 64 * 1024),
+                .usage = .{
+                    .staging_buffer = true,
+                    .write_transient = true,
+                    .copy_src = true,
+                },
+                .label = "glyph upload",
+            });
+            offset = 0;
+        }
+        sk.gfx.writeBufferTransient(.{
+            .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
+            .dst = .{ .buffer = upload, .offset = offset },
+        });
+        gpu.addUpdate(.{
+            .src = .{
+                .buffer = upload,
+                .offset = offset,
+                .bytes_per_row = copyWidth * 4,
+                .bytes_per_slice = @intCast(len),
+            },
+            .dst = .{ .image = texture, .x = left, .y = top, .slice = layer },
+            .size = .{ .width = copyWidth, .height = copyHeight, .num_slices = 1 },
+        });
+        offset += len;
+        x += copyWidth;
+        rowHeight = @max(rowHeight, height);
+        return image;
+    }
+};
 
 var counter: core.Counter = undefined;
 

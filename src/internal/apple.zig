@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const zhu = @import("../zhu.zig");
-const dynamic = @import("../text.zig").dynamic;
+const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
 
@@ -27,7 +27,7 @@ pub const font = struct {
 
     // 通用名称映射到系统字体，自定义名称交给 CoreText 解析。
     // 返回完整名称的字节数，缓冲不足时返回零。
-    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+    pub fn open(option: system.Option, nameBuffer: []u8) usize {
         if (std.mem.eql(u8, option.family, "sans-serif")) {
             const language = string("zh-Hans");
             defer CFRelease(language);
@@ -65,7 +65,7 @@ pub const font = struct {
     }
 
     // 字号变化只替换当前字体，原始字体保留到关闭。
-    pub fn resize(size: f32) dynamic.Metrics {
+    pub fn resize(size: f32) system.Metrics {
         if (current) |value| CFRelease(value);
         const value = CTFontCreateCopyWithAttributes(base, //
             size, null, null) orelse @panic("font size unavailable");
@@ -90,7 +90,7 @@ pub const font = struct {
     }
 
     // 单码位使用 CTLine，交给系统处理代理对和字体回退。
-    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+    pub fn pixels(code: u32, buffer: *system.Buffer) system.Char {
         var utf8: [4]u8 = undefined;
         const count = std.unicode.utf8Encode(@intCast(code), &utf8) //
             catch @panic("invalid font code point");
@@ -125,7 +125,7 @@ pub const font = struct {
             @ceil(bounds.origin.x + bounds.size.width) - left,
         );
         const height: usize = @intFromFloat(top - bottom);
-        const char = dynamic.Char{
+        const char = system.Char{
             .rect = .{
                 .min = .xy(@floatCast(left), @floatCast(-top)),
                 .size = .xy(@floatFromInt(width), @floatFromInt(height)),
@@ -136,10 +136,10 @@ pub const font = struct {
         if (width == 0 or height == 0) return char;
         const stride = width + 2;
         const len = stride * (height + 2);
-        if (buffer.len < len * 4) return char;
+        const data = buffer.resize(len * 4);
         if (alpha.len < len)
             alpha = gpa.realloc(alpha, len) catch
-                @panic("font: out of memory growing alpha buffer");
+                @panic("font: out of memory growing alpha data");
         @memset(alpha[0..len], 0);
         // 7 是仅含 Alpha 的位图，不涉及预乘 RGB 或通道顺序。
         const context = CGBitmapContextCreate(alpha.ptr, //
@@ -151,13 +151,13 @@ pub const font = struct {
         CGContextSetTextPosition(context, 1 - left, 1 - bottom);
         CTLineDraw(line, context);
         // TODO: 引擎支持预乘 Alpha 后，考虑直接生成 RGBA 数据。
-        @memset(buffer[0 .. len * 4], 0);
+        @memset(data[0 .. len * 4], 0);
         // Quartz 的位图首行对应顶部，基线定位仍使用向上的坐标。
         for (1..height + 1) |y| {
             for (1..width + 1) |x| {
                 const offset = (y * stride + x) * 4;
-                @memset(buffer[offset..][0..3], 255);
-                buffer[offset + 3] = alpha[y * stride + x];
+                @memset(data[offset..][0..3], 255);
+                data[offset + 3] = alpha[y * stride + x];
             }
         }
         return char;

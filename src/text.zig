@@ -2,7 +2,6 @@ const std = @import("std");
 const options = @import("options");
 const sk = @import("sokol");
 
-const core = @import("internal/core.zig");
 const platform = @import("internal/platform.zig");
 const assets = @import("assets.zig");
 const zhu = @import("zhu.zig");
@@ -15,25 +14,15 @@ const Vector2 = zhu.Vector2;
 const Rect = zhu.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
-// 编译时选定查找实现，排版与绘制共用同一个检索入口。
+
+// 编译时选择内部字形查询实现。
 const font = switch (options.font) {
-    .bitmap, .msdf => static,
-    .system => dynamic,
+    .static => static,
+    .system, .custom => assets.glyph,
 };
 
-var fontScale: f32 = undefined;
-var fontSize: f32 = undefined; // 当前字体的逻辑基准字号。
+var fontScale: f32 = 1;
 
-// 调试面板使用的字体和字库统计。
-pub const Stats = struct {
-    name: []const u8 = "",
-    size: f32 = 0,
-    count: usize = 0,
-    capacity: usize = 0,
-};
-
-// 字体变化时更新，调试面板直接读取，不在每帧查询时计算。
-pub var stats: Stats = .{};
 // 文字绘制是否默认对齐字形顶点到目标像素。
 pub var snap: bool = false;
 
@@ -147,7 +136,7 @@ fn layout(
             continue;
         }
 
-        // 测量和绘制共用字形度量，动态字体首次查找时生成并缓存。
+        // 测量和绘制共用字形度量，字形查询按字体模式分派。
         const glyph = font.findGlyph(code);
         const advance = glyph.advance * scale.x;
         if (width > 0 and width + option.spacing + advance > option.max) {
@@ -209,7 +198,7 @@ pub fn lineHeight(option: Option) f32 {
 }
 
 pub fn sizeToScale(size: f32) Vector2 {
-    return .all(size / (fontSize * fontScale));
+    return .all(size / (font.size * fontScale));
 }
 
 pub fn computeTextCount(text: String) usize {
@@ -236,15 +225,8 @@ pub fn nextIndex(str: []const u8, index: usize) usize {
     return index + (next catch unreachable);
 }
 
-// 构建时选定初始化方法，沿用对应实现的参数签名。
-pub const init = switch (options.font) {
-    .bitmap => static.init,
-    .msdf => static.initMsdf,
-    .system => dynamic.init,
-};
-
 // 预生成字体直接借用有序数组，不建立运行时哈希索引。
-pub const static = struct {
+pub const static = if (options.font == .static) struct {
     // 普通位图字体的初始化配置。
     pub const InitOption = struct {
         filter: graphics.Filter = .nearest, // 位图字体的采样方式。
@@ -267,28 +249,28 @@ pub const static = struct {
     pub const Char = struct { id: u32, rect: zhu.Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
-    var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
-    var data: static.Font = undefined;
+    pub var size: f32 = undefined;
+    pub var lineHeight: f32 = undefined;
+    var pages: []const Page = undefined;
     var images: [8]Image = undefined;
     var invalidGlyph: Entry = undefined;
 
     // 加载图集，并在初始化时缓存默认显示字号的缩放比例。
-    fn init(zon: static.Font, option: InitOption) void {
+    pub fn initBitmap(zon: static.Font, option: InitOption) void {
         std.debug.assert(zon.images.len == zon.pages.len);
         std.debug.assert(zon.images.len <= images.len);
-        data = zon;
-        fontSize = zon.size;
-        static.lineHeight = zon.lineHeight;
+        static.size, static.lineHeight = .{ zon.size, zon.lineHeight };
+        pages = zon.pages;
 
-        if (assets.getImage(assets.id(data.images[0])) == null) {
+        if (assets.getImage(assets.id(zon.images[0])) == null) {
             _ = assets.atlas.load(.{
-                .imagePaths = data.images,
-                .size = data.imageSize,
+                .imagePaths = zon.images,
+                .size = zon.imageSize,
                 .images = &.{},
             }, .{ .filter = option.filter });
         }
 
-        for (data.images, 0..) |path, i| {
+        for (zon.images, 0..) |path, i| {
             const image = assets.getImage(assets.id(path)).?;
             std.debug.assert(image.filter == option.filter);
             images[i] = image;
@@ -297,22 +279,22 @@ pub const static = struct {
         fontScale = (option.size orelse zon.size) / zon.size;
         var count: usize = 0; // 静态字库的字形数量和容量相同。
         for (zon.pages) |page| count += page.chars.len;
-        stats = .{
+        assets.fontStats = .{
             .name = zon.name,
-            .size = fontSize * fontScale,
+            .size = zon.size * fontScale,
             .count = count,
             .capacity = count,
         };
     }
 
     // 加载 MSDF 字体，指定默认显示字号并使用线性采样。
-    fn initMsdf(zon: static.Font, option: MsdfOption) void {
+    pub fn initMsdf(zon: static.Font, option: MsdfOption) void {
         const shader = @import("shader");
 
-        static.init(zon, .{ .filter = .linear, .size = option.size });
+        static.initBitmap(zon, .{ .filter = .linear, .size = option.size });
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
         const pipeline = graphics.createPipeline(desc);
-        for (images[0..data.images.len]) |image| {
+        for (images[0..zon.images.len]) |image| {
             assets.view.getPtr(image.view).pipeline = pipeline;
         }
     }
@@ -330,7 +312,7 @@ pub const static = struct {
 
     // 字符记录一直借用原数组，检索不分配内存。
     fn searchGlyph(code: u32) ?Entry {
-        for (data.pages, 0..) |page, i| {
+        for (pages, 0..) |page, i| {
             if (code < page.min or code > page.max) continue;
             const index = std.sort.binarySearch(Char, page.chars, code, struct {
                 fn compare(a: u32, b: Char) std.math.Order {
@@ -342,80 +324,52 @@ pub const static = struct {
         }
         return null;
     }
-};
+} else struct {};
 
-// 动态字体统一管理字形缓存、图集和平台字体的生命周期。
-pub const dynamic = struct {
+// 系统字体来源，平台对象和窗口缩放策略仅在系统模式存在。
+pub const system = if (options.font == .system) struct {
+    pub const Buffer = assets.glyph.Buffer;
     pub const Option = struct {
-        atlas: graphics.Image, // layer 为首个字形层，后续层均可写。
         family: [:0]const u8 = "sans-serif",
         weight: enum { normal, bold } = .normal, // 普通或加粗字重。
         size: f32 = 18, // 逻辑字号，生成时按当前视口像素比例放大。
-        filter: graphics.Filter = .nearest, // 字形图片的默认采样方式。
         resizeDelay: f32 = 0.4, // 窗口停止变化后等待多少秒再刷新字形。
     };
-
-    var nameBuffer: [1024]u8 = undefined; // 持有平台查询到的 UTF-8 名称。
 
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
     pub const Metrics = extern struct { ascent: f32, descent: f32, height: f32 };
     // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
     pub const Char = extern struct { rect: zhu.Rect, advance: f32 };
 
-    // 直接使用当前平台的字体接口。
     const backend = platform.backend.font;
-
-    // 字形上传及装箱状态，不持有图片纹理。
-    const GlyphState = struct {
-        upload: sk.gfx.Buffer, // 通过 GPU 模块创建和释放的上传缓冲。
-        offset: usize = 0, // 本帧下一个字形的上传偏移。
-        layer: i32 = 0,
-        x: i32 = 1,
-        y: i32 = 1,
-        rowHeight: i32 = 0,
-    };
-
-    var gpa: std.mem.Allocator = undefined;
-
-    pub var lineHeight: f32 = undefined; // 基准字号对应的逻辑行高。
+    var nameBuffer: [1024]u8 = undefined; // 持有平台查询到的 UTF-8 名称。
     var opened: bool = false; // 系统字体是否已经初始化。
-    var fontOption: dynamic.Option = undefined; // 保存初始化配置，使用时直接读取。
+    var option: system.Option = undefined; // 保存初始化配置。
     var resizeWait: ?f32 = null; // 没有等待中的缩放时为 null。
-    var pixelSize: f32 = undefined; // 当前视口对应的字形生成字号。
-    var metrics: Metrics = undefined; // 固定字号对应的基线和行高度量。
-    var glyphState: GlyphState = undefined; // 上传缓冲按需创建并扩容。
-    var glyphs: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = undefined;
-    var pixels: []u8 = undefined; // 单线程生成字形时复用，容量不足才扩容。
+    var pixelSize: f32 = undefined; // 当前字形生成字号。
+    var metrics: system.Metrics = undefined; // 基线和行高度量。
 
     // 初始化所选平台的系统字体和度量，不提前生成字形像素。
-    // 分配器管理字形缓存和公共像素缓冲，平台内部内存由平台管理。
-    pub fn init(gpa_: std.mem.Allocator, option: dynamic.Option) void {
+    // 公共像素缓冲和字形缓存由 assets.glyph 管理，平台内部内存由平台管理。
+    // atlas.layer 为首个字形层，后续层均可写。
+    pub fn init(atlas: Image, config: system.Option) void {
         std.debug.assert(!opened);
-        std.debug.assert(option.resizeDelay >= 0);
-        gpa = gpa_;
-        glyphs = .empty;
-        pixels = &.{};
+        std.debug.assert(config.resizeDelay >= 0);
         // 名称由平台填入；没有取得名称时显示请求的字体族。
-        const len = backend.open(option, &nameBuffer);
-        stats.name = if (len > 0) nameBuffer[0..len] else option.family;
+        const len = backend.open(config, &nameBuffer);
         opened = true;
-        fontSize = option.size;
-        fontOption = option;
-        glyphState = .{
-            .upload = .{},
-            .layer = fontOption.atlas.layer,
-        };
+        option = config;
         resizeWait = null;
-        fontScale = 1;
         pixelSize = 0;
+        assets.glyph.init(atlas, config.size, createGlyph);
+        assets.fontStats.name = if (len > 0) nameBuffer[0..len] else config.family;
         resize();
     }
 
     // 每帧在游戏绘制前更新，连续缩放时重新开始等待。
     pub fn update(delta: f32) void {
         if (!opened) return;
-        glyphState.offset = 0;
-        if (window.resized) resizeWait = fontOption.resizeDelay;
+        if (window.resized) resizeWait = option.resizeDelay;
         if (resizeWait) |wait| {
             if (wait <= 0 or (!window.resized and wait <= delta)) {
                 resizeWait = null;
@@ -430,161 +384,41 @@ pub const dynamic = struct {
     pub fn resize() void {
         std.debug.assert(opened);
         // 生成字号不低于逻辑字号，缩放倍率不超过 1 时复用字形缓存。
-        const size = @max(fontSize, fontSize * window.scale.maxAxis());
+        const size = @max(option.size, option.size * window.scale.maxAxis());
         std.debug.assert(size >= 1 and size <= 256);
         if (size == pixelSize) return;
 
         // 按字号预留常用容量，实际字形超出时再按需扩容。
         const side = @ceil(size) + 2; // 只有像素缓冲区尺寸需要整数。
-        const len: usize = @intFromFloat(side * side * 4);
-        if (pixels.len < len)
-            pixels = gpa.realloc(pixels, len) catch core.oom();
-        // 重置装箱位置，保留上传缓冲及本帧已使用的上传区域。
-        glyphState.layer = fontOption.atlas.layer;
-        glyphState.x, glyphState.y = .{ 1, 1 };
-        glyphState.rowHeight = 0;
-        glyphs.clearRetainingCapacity();
         pixelSize = size;
         std.log.info("font size: {d} px", .{pixelSize});
         metrics = backend.resize(pixelSize);
-        dynamic.lineHeight = metrics.height * fontSize / pixelSize;
-        // 按字号加两像素边框估算方格容量，只在缓存重建时计算。
-        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
-        const width: usize = @intCast(sk.gfx.queryImageWidth(texture));
-        const height: usize = @intCast(sk.gfx.queryImageHeight(texture));
-        const layers: usize = @intCast(sk.gfx.queryImageNumSlices(texture) -
-            fontOption.atlas.layer);
-        const cell: usize = @intFromFloat(side);
-        stats.size = pixelSize;
-        stats.count = 0;
-        stats.capacity = (width / cell) * (height / cell) * layers;
+        const height = metrics.height * option.size / pixelSize;
+        assets.glyph.lineHeight = height;
+        assets.glyph.resize(@intFromFloat(side));
+        assets.fontStats.size = pixelSize;
     }
 
-    // 释放字形上传缓冲、字形索引和系统字体。
+    // 释放字体缓存和系统字体。
     pub fn deinit() void {
         if (!opened) return;
-        assets.gpu.destroyBuffer(glyphState.upload);
-        glyphs.deinit(gpa);
-        gpa.free(pixels);
         backend.close();
-        stats = .{};
+        assets.fontStats = .{};
         opened = false;
     }
 
-    // 按码位查找固定字号的字形，缓存未命中时生成。
-    pub fn findGlyph(code: u32) graphics.Glyph {
-        std.debug.assert(opened);
-        if (glyphs.get(code)) |glyph| return glyph;
-        // 图集尚未就绪时返回空字形，不生成像素，也不写入缓存。
-        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
-        if (sk.gfx.queryImageState(texture) != .VALID) {
-            return .{ .image = .{}, .rect = .init(.zero, .zero), .advance = 0 };
-        }
-        return createGlyph(code);
-    }
-
     // 图集保留实际像素，绘制区域和前进距离归一到逻辑基准字号。
-    fn createGlyph(code: u32) graphics.Glyph {
-        // 容量不足时只返回字形信息，不写像素，等待扩容后再次调用。
-        var char = backend.pixels(code, pixels);
-        const size = char.rect.size;
-        const len: usize = @intFromFloat((size.x + 2) * (size.y + 2) * 4);
-        if (len > pixels.len) {
-            pixels = gpa.realloc(pixels, len) catch core.oom();
-            char = backend.pixels(code, pixels);
-            // 按重试返回的尺寸确认缓冲区已经足够。
-            const next = char.rect.size;
-            const needed: usize = @intFromFloat((next.x + 2) * (next.y + 2) * 4);
-            std.debug.assert(needed == pixels.len);
-        }
-        const factor = fontSize / pixelSize;
-        const glyph = graphics.Glyph{
-            .image = addImage(char.rect.size),
+    pub fn createGlyph(code: u32, buffer: *system.Buffer) graphics.Glyph {
+        std.debug.assert(opened);
+        const char = backend.pixels(code, buffer);
+        const factor = option.size / pixelSize;
+        return .{
+            .image = .{ .size = char.rect.size },
             .rect = .{
                 .min = char.rect.min.addY(metrics.ascent).scale(factor),
                 .size = char.rect.size.scale(factor),
             },
             .advance = char.advance * factor,
         };
-        glyphs.put(gpa, code, glyph) catch core.oom();
-        stats.count = glyphs.count();
-        return glyph;
     }
-
-    // 每个字形包含一像素透明边框，当前层装满后使用下一层。
-    fn addImage(size: zhu.Vector2) graphics.Image {
-        // 空字形只参与排版，不占用图集和上传缓冲。
-        if (size.x == 0 or size.y == 0) return .{};
-
-        const width: i32 = @intFromFloat(size.x);
-        const height: i32 = @intFromFloat(size.y);
-
-        const state = &glyphState;
-        const texture = sk.gfx.queryViewImage(fontOption.atlas.view);
-        const atlasWidth = sk.gfx.queryImageWidth(texture);
-        const atlasHeight = sk.gfx.queryImageHeight(texture);
-        if (state.x + width + 1 > atlasWidth) {
-            state.x = 1;
-            state.y += state.rowHeight + 2;
-            state.rowHeight = 0;
-        }
-        if (state.y + height + 1 > atlasHeight) {
-            if (state.layer + 1 == sk.gfx.queryImageNumSlices(texture))
-                @panic("font atlas layer limit exceeded");
-            state.layer += 1;
-            state.x, state.y = .{ 1, 1 };
-            state.rowHeight = 0;
-        }
-        const image = graphics.Image{
-            .view = fontOption.atlas.view,
-            .layer = @intCast(state.layer),
-            .filter = fontOption.filter,
-            .offset = .xy(@floatFromInt(state.x), @floatFromInt(state.y)),
-            .size = size,
-        };
-
-        // 每个字形使用独立的上传区域，复制记录由 GPU 模块统一提交。
-        const left, const top = .{ state.x - 1, state.y - 1 };
-        const copyWidth, const copyHeight = .{ width + 2, height + 2 };
-        const len: usize = @intCast(copyWidth * copyHeight * 4);
-        const capacity = sk.gfx.queryBufferSize(state.upload);
-        if (state.offset + len > capacity) {
-            // 先消费旧缓冲的复制记录，不搬迁已上传的字形数据。
-            assets.gpu.uploadImageUpdates();
-            assets.gpu.destroyBuffer(state.upload);
-            state.upload = assets.gpu.makeBuffer(.{
-                .size = @max(@max(capacity * 2, len), 64 * 1024),
-                .usage = .{
-                    .staging_buffer = true,
-                    .write_transient = true,
-                    .copy_src = true,
-                },
-                .label = "system font upload",
-            });
-            state.offset = 0;
-        }
-        sk.gfx.writeBufferTransient(.{
-            .src = .{ .data = sk.gfx.asRange(pixels[0..len]) },
-            .dst = .{ .buffer = state.upload, .offset = state.offset },
-        });
-        assets.gpu.addUpdate(.{
-            .src = .{
-                .buffer = state.upload,
-                .offset = state.offset,
-                .bytes_per_row = copyWidth * 4,
-                .bytes_per_slice = @intCast(len),
-            },
-            .dst = .{
-                .image = texture,
-                .x = left,
-                .y = top,
-                .slice = state.layer,
-            },
-            .size = .{ .width = copyWidth, .height = copyHeight, .num_slices = 1 },
-        });
-        state.offset += len;
-        state.x += copyWidth;
-        state.rowHeight = @max(state.rowHeight, height);
-        return image;
-    }
-};
+} else struct {};

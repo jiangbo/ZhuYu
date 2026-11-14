@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const zhu = @import("../zhu.zig");
-const dynamic = @import("../text.zig").dynamic;
+const system = @import("../text.zig").system;
 const DateTime = @import("platform.zig").DateTime;
 
 const Init = std.process.Init;
@@ -73,7 +73,7 @@ pub const font = struct {
 
     // 按名称和字重选择字体，并创建可复用的灰度位图目标。
     // 返回完整名称的字节数，缓冲不足时返回零。
-    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+    pub fn open(option: system.Option, nameBuffer: []u8) usize {
         init();
 
         // 通用名称映射到 Windows 的中文字体，最后才选择西文字体。
@@ -96,7 +96,7 @@ pub const font = struct {
     }
 
     // 设计单位按当前像素字号换算，基线上下距离均返回正值。
-    pub fn resize(size: f32) dynamic.Metrics {
+    pub fn resize(size: f32) system.Metrics {
         fontSize = size;
         const fontMetrics = metrics;
         const factor = size / @as(f32, @floatFromInt(fontMetrics.designUnitsPerEm));
@@ -110,13 +110,13 @@ pub const font = struct {
         };
     }
 
-    // 先测量字形，公共缓冲容量足够时才生成带透明边框的白色 RGBA。
-    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+    // 按测量结果准备缓冲，生成带透明边框的白色 RGBA。
+    pub fn pixels(code: u32, buffer: *system.Buffer) system.Char {
         const glyph = measureGlyph(code, fontSize);
         const rect = glyph.rect;
         const width: u32 = @intCast(rect.right - rect.left);
         const height: u32 = @intCast(rect.bottom - rect.top);
-        const char = dynamic.Char{
+        const char = system.Char{
             .rect = .{
                 .min = .xy(@floatFromInt(rect.left), @floatFromInt(rect.top)),
                 .size = .xy(@floatFromInt(width), @floatFromInt(height)),
@@ -126,9 +126,9 @@ pub const font = struct {
         if (width == 0 or height == 0) return char;
         const stride = (@as(usize, width) + 2) * 4;
         const len = stride * (height + 2);
-        if (buffer.len < len) return char;
+        const data = buffer.resize(len);
 
-        drawGlyph(glyph, buffer);
+        drawGlyph(glyph, data);
         return char;
     }
 

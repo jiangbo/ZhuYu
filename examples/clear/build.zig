@@ -8,7 +8,6 @@ pub fn build(b: *std.Build) !void {
     const zhuyu = b.dependency("zhuyu", .{
         .target = target,
         .optimize = optimize,
-        .font = b.option(zhuBuild.FontMode, "font", "Font mode") orelse .bitmap,
         .samplers = b.option(bool, "samplers", "Use two samplers") orelse false,
         .gles3 = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false,
     });

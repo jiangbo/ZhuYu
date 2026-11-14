@@ -2,7 +2,7 @@ const std = @import("std");
 const root = @import("root");
 const sk = @import("sokol");
 
-const dynamic = @import("../text.zig").dynamic;
+const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
 
@@ -374,7 +374,7 @@ pub const font = struct {
 
     // 打开系统字体，在游戏线程取得 JNI 环境，所有持久对象使用全局引用。
     // 返回写入的名称字节数，旧系统无法查询时返回零。
-    pub fn open(option: dynamic.Option, nameBuffer: []u8) usize {
+    pub fn open(option: system.Option, nameBuffer: []u8) usize {
         const activity: *const Activity =
             @ptrCast(@alignCast(sk.app.androidGetNativeActivity().?));
         vm = @ptrCast(@alignCast(activity.vm.?));
@@ -489,7 +489,7 @@ pub const font = struct {
     }
 
     // Android 的 ascent 为负，公共层统一使用正的基线上方距离。
-    pub fn resize(size: f32) dynamic.Metrics {
+    pub fn resize(size: f32) system.Metrics {
         const e = environment();
         call(e, paint, setSize, &.{.{ .float = size }});
         const height = e.*.CallFloatMethodA(e, paint, //
@@ -507,7 +507,7 @@ pub const font = struct {
     }
 
     // 单个码位编码成 UTF-16，位图覆盖率转换为白色 RGBA。
-    pub fn pixels(code: u32, buffer: []u8) dynamic.Char {
+    pub fn pixels(code: u32, buffer: *system.Buffer) system.Char {
         const e = environment();
         begin(e);
         defer end(e);
@@ -533,7 +533,7 @@ pub const font = struct {
         const advance = jni.CallFloatMethodA(e, paint, //
             measureText, &.{.{ .object = text }});
         check(e);
-        const char = dynamic.Char{
+        const char = system.Char{
             .rect = .{
                 .min = .xy(@floatFromInt(left), @floatFromInt(top)),
                 .size = .xy(@floatFromInt(width), @floatFromInt(height)),
@@ -543,7 +543,7 @@ pub const font = struct {
         if (width == 0 or height == 0) return char;
         const stride: usize = @intCast((width + 2) * 4);
         const len = stride * @as(usize, @intCast(height + 2));
-        if (buffer.len < len) return char;
+        const data = buffer.resize(len);
         grow(e, width + 2, height + 2);
         call(e, bitmap.?, eraseColor, &.{.{ .int = 0 }});
         call(e, canvas.?, drawText, &.{
@@ -555,12 +555,12 @@ pub const font = struct {
         const bytes = object(e, jni.NewDirectByteBuffer(e, alpha.ptr, //
             @intCast(rowBytes * @as(usize, @intCast(bitmapHeight)))));
         call(e, bitmap.?, copyPixels, &.{.{ .object = bytes }});
-        @memset(buffer[0..len], 0);
+        @memset(data[0..len], 0);
         for (0..@as(usize, @intCast(height))) |y| {
             for (0..@as(usize, @intCast(width))) |x| {
                 const offset = (y + 1) * stride + (x + 1) * 4;
-                @memset(buffer[offset..][0..3], 255);
-                buffer[offset + 3] = alpha[(y + 1) * rowBytes + x + 1];
+                @memset(data[offset..][0..3], 255);
+                data[offset + 3] = alpha[(y + 1) * rowBytes + x + 1];
             }
         }
         return char;

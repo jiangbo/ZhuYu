@@ -55,9 +55,15 @@ mergeInto(LibraryManager.library, {
         HEAPF32[(out >> 2) + 2] = Math.max(size, ascent + descent);
     },
 
-    // 先读取字形边界，容量足够时才输出带透明边框的 RGBA。
+    // 缓冲不足时保留像素，扩容后再次调用只拷贝，不重新生成。
     zhu_font_pixels: function(code, info, out, len) {
         const zhuFont = Module.zhu_font;
+        if (zhuFont.pixels) {
+            // 扩容后使用当前 Wasm 内存视图拷贝暂存像素。
+            HEAPU8.set(zhuFont.pixels, out);
+            zhuFont.pixels = null;
+            return 0;
+        }
         const context = zhuFont.context;
         const text = String.fromCodePoint(code);
         const metrics = context.measureText(text);
@@ -75,8 +81,6 @@ mergeInto(LibraryManager.library, {
         // 包含一像素透明边框，Zig 可以将整块数据直接写入上传缓冲。
         const copyWidth = width + 2;
         const copyHeight = height + 2;
-        // 容量不足时不写入像素，等待调用方扩容后再次调用。
-        if (copyWidth * copyHeight * 4 > len) return 1;
 
         // 修改画布尺寸会重置绘图状态，恢复 metrics 已设置的字体和字号。
         zhuFont.canvas.width = copyWidth;
@@ -85,8 +89,11 @@ mergeInto(LibraryManager.library, {
         context.textBaseline = "alphabetic";
         context.fillStyle = "white";
         context.fillText(text, 1 - left, 1 + top);
-        const data = context.getImageData(0, 0, copyWidth, copyHeight).data;
-        HEAPU8.set(data, out);
+        zhuFont.pixels = context.getImageData(0, 0, copyWidth, copyHeight).data;
+        if (zhuFont.pixels.length > len) return 1;
+        // 扩容可能更换 Wasm 内存视图，拷贝时读取当前视图。
+        HEAPU8.set(zhuFont.pixels, out);
+        zhuFont.pixels = null;
         return 0;
     },
 
