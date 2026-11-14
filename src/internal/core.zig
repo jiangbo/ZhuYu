@@ -587,10 +587,11 @@ pub const Rect = extern struct {
         return .{ .x = x, .y = y };
     }
 
-    /// 返回重叠区域
-    pub fn overlapArea(self: Rect, other: Rect) Rect {
+    /// 返回重叠区域，不相交或仅边缘接触时返回 null。
+    pub fn overlapArea(self: Rect, other: Rect) ?Rect {
         const overlapMin = self.min.max(other.min);
         const overlapMax = self.max().min(other.max());
+        if (overlapMin.x >= overlapMax.x or overlapMin.y >= overlapMax.y) return null;
         return Rect.fromMax(overlapMin, overlapMax);
     }
 
