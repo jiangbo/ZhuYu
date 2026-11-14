@@ -52,6 +52,7 @@ const Decode = struct {
     header: Header,
     row: []u8,
     prior: []u8,
+    transparent: ?[3]u8,
 };
 
 // 使用标准 Reader 的缓冲和跨块处理，只提供 IDAT 数据流。
@@ -148,6 +149,18 @@ pub fn load(allocator: Allocator, bytes: []const u8) !Image {
         .header = header,
         .row = try gpa.alloc(u8, header.width * 3),
         .prior = prior,
+        .transparent = if (alpha.len == 0) null else switch (header.color) {
+            .gray => gray: {
+                if (alpha.len != 2) return error.InvalidTransparency;
+                // 当前只支持 8 位采样，取大端 16 位透明色的低 8 位。
+                break :gray .{ alpha[1], alpha[1], alpha[1] };
+            },
+            .rgb => rgbColor: {
+                if (alpha.len != 6) return error.InvalidTransparency;
+                break :rgbColor .{ alpha[1], alpha[3], alpha[5] };
+            },
+            else => null,
+        },
     };
 
     switch (header.color) {
@@ -337,14 +350,18 @@ fn parseRows(decode: *const Decode, palette: []const u8) !void {
                 dest[x * 4 + 0] = row[x * 3 + 0];
                 dest[x * 4 + 1] = row[x * 3 + 1];
                 dest[x * 4 + 2] = row[x * 3 + 2];
-                dest[x * 4 + 3] = 255;
+                const matches = decode.transparent != null and
+                    std.mem.eql(u8, row[x * 3 ..][0..3], &decode.transparent.?);
+                dest[x * 4 + 3] = if (matches) 0 else 255;
             },
             .gray => for (row, 0..) |value, x| {
                 // 灰度表示颜色亮度，不作为字体覆盖率解释。
                 dest[x * 4 + 0] = value;
                 dest[x * 4 + 1] = value;
                 dest[x * 4 + 2] = value;
-                dest[x * 4 + 3] = 255;
+                const matches = decode.transparent != null and
+                    value == decode.transparent.?[0];
+                dest[x * 4 + 3] = if (matches) 0 else 255;
             },
             .indexed, .magic => for (row, 0..) |index, x| {
                 const color = @as(usize, index) * 4;
