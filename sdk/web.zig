@@ -46,21 +46,10 @@ pub fn buildWeb(
         // https://codeberg.org/ziglang/zig/issues/31421
         .use_filesystem = true,
         .shell_file_path = options.shell,
-        // 显式保留 Zig 的 JS 描述和回调，再合入应用的链接参数。
+        .js_libraries = &.{dep.path("src/internal/web.js")},
+        // 显式保留 Zig 导出给 JS 的回调，再合入应用的链接参数。
         .extra_args = try std.mem.concat(b.allocator, []const u8, &.{
             &.{
-                "-Wl,--export=__em_js__zhu_font_open",
-                "-Wl,--export=__em_js__zhu_font_close",
-                "-Wl,--export=__em_js__zhu_font_metrics",
-                "-Wl,--export=__em_js__zhu_font_pixels",
-                "-Wl,--export=__em_js__zhu_coarse_pointer",
-                "-Wl,--export=__em_js__zhu_local_time",
-                "-Wl,--export=__em_js__zhu_fetch_start",
-                "-Wl,--export=__em_js__zhu_fetch_stop",
-                "-Wl,--export=__em_js__zhu_file_exists",
-                "-Wl,--export=__em_js__zhu_file_load",
-                "-Wl,--export=__em_js__zhu_file_save",
-                "-Wl,--export=__em_lib_deps_zhu_storage",
                 "-Wl,--export=zhu_fetch_done",
                 "-Wl,--export=zhu_fetch_alloc",
             },
