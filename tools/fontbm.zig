@@ -15,7 +15,7 @@ pub const Options = struct {
     size: u16,
     maxSize: u32 = 1024, // 自动选择方形页尺寸，多页使用相同宽高。
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
-    antialias: bool = true,
+    antialias: bool = false,
     images: []const u8 = "font", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/font.zon",
 };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zigimg = @import("zigimg");
 const text = @import("text").static;
 
 const fontChars = @import("chars.zig");
@@ -15,7 +16,7 @@ pub const Options = struct {
     exe: []const u8 = "bmfont64",
     size: u16,
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
-    antialias: bool = true,
+    antialias: bool = false,
     images: []const u8 = "font", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/font.zon",
 };
@@ -209,7 +210,7 @@ pub fn main(init: std.process.Init) !void {
         });
         const decoded = try copy.decodePng(io, gpa, path);
         copy.premultiply(decoded.pixels);
-        const bytes = try copy.encodePng(gpa, decoded);
+        const bytes = try encodeFontPng(gpa, decoded);
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);
@@ -242,6 +243,29 @@ pub fn main(init: std.process.Init) !void {
         .pages = pages,
     };
     try writeZon(io, options.output, result);
+}
+
+// 预乘后的二值白色字体使用 1-bit 索引，其余像素保留 RGBA。
+fn encodeFontPng(gpa: std.mem.Allocator, source: copy.PngImage) ![]u8 {
+    const pixels = std.mem.bytesAsSlice([4]u8, source.pixels);
+    for (pixels) |pixel| {
+        const alpha = pixel[3];
+        if ((alpha != 0 and alpha != 255) or
+            pixel[0] != alpha or pixel[1] != alpha or pixel[2] != alpha)
+        {
+            return copy.encodePng(gpa, source);
+        }
+    }
+
+    var image = try zigimg.Image.create(gpa, source.width, source.height, .indexed1);
+    defer image.deinit(gpa);
+    const indexed = image.pixels.indexed1;
+    indexed.palette[0] = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    indexed.palette[1] = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    for (pixels, indexed.indices) |pixel, *index| {
+        index.* = @intCast(pixel[3] / 255);
+    }
+    return copy.encodeImage(gpa, image);
 }
 
 // 二进制字段按 BMFont v3 的块顺序读取，内存由进程 arena 管理。

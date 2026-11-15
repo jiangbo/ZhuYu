@@ -157,7 +157,11 @@ pub fn encodePng(gpa: std.mem.Allocator, source: PngImage) ![]u8 {
         .height = height,
         .pixels = storage,
     };
-    const buffer = try gpa.alloc(u8, pixels.len * 2 + 1024);
+    return encodeImage(gpa, image);
+}
+
+pub fn encodeImage(gpa: std.mem.Allocator, image: zigimg.Image) ![]u8 {
+    const buffer = try gpa.alloc(u8, image.width * image.height * 8 + 1024);
     defer gpa.free(buffer);
     const encoded = try image.writeToMemory(gpa, buffer, .{ .png = .{
         .filter_choice = .{ .specified = .none },
