@@ -520,6 +520,8 @@ pub const Rect = extern struct {
     min: Vector2 = .zero,
     size: Vector2 = .one,
 
+    pub const zero = Rect{ .min = .zero, .size = .zero };
+
     pub fn init(position: Vector2, sizeV: Vector2) Rect {
         return Rect{ .min = position, .size = sizeV };
     }

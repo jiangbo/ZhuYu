@@ -521,12 +521,12 @@ pub const touch = struct {
     }
 };
 
-pub const Bind = struct { action: []const u8, keys: []const key.Code };
+pub const Binding = struct { action: []const u8, keys: []const key.Code };
 /// 接受动作枚举或默认配置列表；枚举方式初始不绑定任何按键。
-pub fn bind(comptime binds: anytype) type {
-    const isEnum = @TypeOf(binds) == type;
-    const defaults = if (isEnum) &.{} else binds;
-    const E = if (isEnum) binds else zhu.enums.fromField(defaults, "action");
+pub fn Bindings(comptime config: anytype) type {
+    const isEnum = @TypeOf(config) == type;
+    const defaults = if (isEnum) &.{} else config;
+    const E = if (isEnum) config else zhu.enums.fromField(defaults, "action");
 
     return struct {
         pub const Action = E;
