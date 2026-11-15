@@ -404,10 +404,10 @@ pub const key = struct {
     // 直接写入统一按键状态，并记录本帧输入变化。
     pub fn set(keyCode: Code, down: bool) void {
         const code: usize = @intCast(@backingInt(keyCode));
+        // 忽略重复按下和没有对应按住状态的释放。
+        if (state.isSet(code) == down) return;
         press.pressed = press.pressed or down;
         press.released = press.released or !down;
-        // 系统重复发送按下事件时，不产生新的按下边沿。
-        if (state.isSet(code) == down) return;
         state.setValue(code, down);
         if (down) pressedState.set(code) else releasedState.set(code);
     }

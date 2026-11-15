@@ -341,7 +341,6 @@ fn webDone(lane: c_int, status: c_int) callconv(.c) void {
 
     slot.freeResult();
     slot.result = error.HttpFailed; // 不区分错误类型
-    slot.state.store(.done, .release);
 }
 
 comptime {
