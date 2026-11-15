@@ -77,6 +77,13 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     camera.state.size = pass.querySize();
 }
 
+// 相机栈为空时，切换后续批次的基准相机。
+pub fn useCamera(view: camera.Camera) void {
+    std.debug.assert(camera.stack.items.len == 0);
+    endDrawCommand();
+    camera.state.camera = view;
+}
+
 // 设置目标像素区域和对应的逻辑尺寸，同时重置裁剪区域。
 pub fn useViewport(rect: zhu.Rect, size: Vector2) void {
     endDrawCommand();
