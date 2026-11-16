@@ -259,7 +259,7 @@ pub const CursorDesc = packed struct(u64) {
         std.debug.assert(@sizeOf(@This()) == @sizeOf(u64));
     }
 };
-pub fn loadCursor(path: [:0]const u8, desc: CursorDesc) void {
+pub fn loadCursor(path: []const u8, desc: CursorDesc) void {
     assets.loadIcon(path, @bitCast(desc), mouseCallback);
 }
 
@@ -274,7 +274,7 @@ fn mouseCallback(handle: u64, icon: assets.Icon) void {
     });
 }
 
-pub fn useCursor(path: [:0]const u8, desc: CursorDesc) void {
+pub fn useCursor(path: []const u8, desc: CursorDesc) void {
     assets.loadIcon(path, @bitCast(desc), struct {
         fn callback(handle: u64, icon: assets.Icon) void {
             mouseCallback(handle, icon);
@@ -284,7 +284,7 @@ pub fn useCursor(path: [:0]const u8, desc: CursorDesc) void {
     }.callback);
 }
 
-pub fn useWindowIcon(path: [:0]const u8) void {
+pub fn useWindowIcon(path: []const u8) void {
     assets.loadIcon(path, 0, struct {
         fn callback(_: u64, icon: assets.Icon) void {
             var desc: sk.app.IconDesc = .{};

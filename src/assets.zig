@@ -15,7 +15,7 @@ const panicFmt = std.debug.panic;
 const Image = graphics.Image;
 const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
-const Path = [:0]const u8;
+const Path = []const u8;
 
 var gpa: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;

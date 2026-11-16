@@ -196,8 +196,8 @@ pub fn MenuT(comptime T: type) type {
         trigger: Trigger = .release,
         navKeys: NavKeys = .{},
         cancelEvent: ?T = null,
-        hoverSound: ?[:0]const u8 = null,
-        clickSound: ?[:0]const u8 = null,
+        hoverSound: ?[]const u8 = null,
+        clickSound: ?[]const u8 = null,
         disabled: []const usize = &.{},
         selected: ?usize = 0,
         pressed: ?usize = null, // 菜单内按下的按钮编号。

@@ -124,11 +124,11 @@ pub const Music = struct {
     loop: bool = true,
 };
 
-pub fn playMusic(path: [:0]const u8) void {
+pub fn playMusic(path: []const u8) void {
     playMusicOption(path, true);
 }
 
-pub fn playMusicOption(path: [:0]const u8, loop: bool) void {
+pub fn playMusicOption(path: []const u8, loop: bool) void {
     if (!sk.audio.isvalid()) return;
     const assetId = assets.id(path);
     const source = assets.music.load(path, musicLoaded);
@@ -173,11 +173,11 @@ pub const SoundSource = vorbis.Sound;
 pub var soundVolume: std.atomic.Value(f32) = .init(1);
 var sounds: []Sound = &.{};
 
-pub fn playSound(path: [:0]const u8) void {
+pub fn playSound(path: []const u8) void {
     _ = playSoundOption(path, .{});
 }
 
-pub fn playSoundOption(path: [:0]const u8, option: Sound.Option) ?usize {
+pub fn playSoundOption(path: []const u8, option: Sound.Option) ?usize {
     if (!sk.audio.isvalid()) return null;
 
     var opt = option;

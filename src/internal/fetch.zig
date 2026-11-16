@@ -117,7 +117,7 @@ pub fn initPack(bytes: []const u8) void {
 }
 
 // 只借用切片，调用方保留数据直到文件回调完成或文件模块销毁。
-pub fn put(path: [:0]const u8, data: []const u8) void {
+pub fn put(path: []const u8, data: []const u8) void {
     const entry = records.getOrPut(gpa, id(path)) catch oom();
     std.debug.assert(!entry.found_existing);
     entry.value_ptr.* = data;
@@ -128,7 +128,7 @@ pub fn count() usize {
 }
 
 // 同一路径只加载一次；所有请求排队，由 update 交付结果。
-pub fn load(path: [:0]const u8, index: u64, handler: Handler, option: Option) void {
+pub fn load(path: []const u8, index: u64, handler: Handler, option: Option) void {
     const fileId = id(path);
     const entry = records.getOrPut(gpa, fileId) catch oom();
     var data: ?[]const u8 = null;
