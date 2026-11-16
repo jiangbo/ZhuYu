@@ -16,6 +16,7 @@ const Image = graphics.Image;
 const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
 const Path = []const u8;
+pub const Pack = fetch.Pack;
 
 var gpa: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
@@ -32,8 +33,8 @@ pub fn setup(io_: std.Io, gpa_: std.mem.Allocator) std.mem.Allocator {
 }
 
 // 在图形环境建立后初始化资源加载和默认采样器。
-pub fn init() void {
-    fetch.init(io, gpa);
+pub fn init(pack: ?Pack) void {
+    fetch.init(io, gpa, pack);
     sampler.init();
 }
 

@@ -19,6 +19,15 @@ pub fn id(path: []const u8) Id {
     return std.hash.Fnv1a_32.hash(path);
 }
 
+pub const Pack = struct {
+    path: []const u8,
+    size: u32,
+    zlib: bool = false,
+    files: []const File,
+
+    pub const File = struct { id: Id, offset: u32, size: u32 };
+};
+
 pub const Response = struct {
     path: [:0]const u8,
     content: union(Kind) {
@@ -36,6 +45,7 @@ const Handler = *const fn (u64, Response) void;
 const Request = struct {
     path: [:0]const u8,
     data: ?[]const u8 = null,
+    packFile: ?Pack.File = null,
     index: u64,
     handler: Handler,
     option: Option,
@@ -65,20 +75,46 @@ var records: std.AutoHashMapUnmanaged(Id, ?[]const u8) = .empty;
 var mapping: ?std.Io.File.MemoryMap = null;
 
 // 仅主线程访问的等待队列。
-var queue: std.Deque(Request) = .empty;
+var queue: std.ArrayList(Request) = .empty;
 const isWeb = builtin.os.tag == .emscripten;
 // 原生端 2 个槽位控内存；Web 端 4 路下载，交付时再解码。
 var slots: [if (isWeb) 4 else 2]Slot = @splat(.{});
+var pack: ?Pack = null;
+var packBytes: ?[]const u8 = null;
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
-pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator) void {
+pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator, pack_: ?Pack) void {
     std.debug.assert(!started);
     io = fileIo;
     gpa = gpa_;
-    if (options.append) initExecutable() catch |err| {
-        std.debug.panic("asset pack init failed: {}", .{err});
+    if (options.append) {
+        std.debug.assert(pack_ == null);
+        return initExecutable() catch |err| {
+            std.debug.panic("asset pack init failed: {}", .{err});
+        };
+    }
+    const cfg = pack_ orelse return;
+    const option: Option = .{ .kind = if (cfg.zlib) .zlib else .bytes };
+    load(cfg.path, 0, packLoaded, option);
+    pack = cfg;
+}
+
+fn packLoaded(_: u64, response: Response) void {
+    const bytes = switch (response.content) {
+        .bytes, .zlib => |data| data,
+        else => unreachable,
     };
+    std.debug.assert(bytes.len == pack.?.size);
+    const files = pack.?.files;
+    records.ensureUnusedCapacity(gpa, @intCast(files.len)) catch oom();
+    for (files) |file| {
+        const entry = records.getOrPutAssumeCapacity(file.id);
+        if (entry.found_existing) {
+            std.debug.assert(entry.value_ptr.* == null);
+        } else entry.value_ptr.* = bytes[file.offset..][0..file.size];
+    }
+    packBytes = bytes;
 }
 
 fn initExecutable() !void {
@@ -116,13 +152,6 @@ pub fn initPack(bytes: []const u8) void {
     std.log.info("loaded asset pack: {} files", .{fileCount});
 }
 
-// 只借用切片，调用方保留数据直到文件回调完成或文件模块销毁。
-pub fn put(path: []const u8, data: []const u8) void {
-    const entry = records.getOrPut(gpa, id(path)) catch oom();
-    std.debug.assert(!entry.found_existing);
-    entry.value_ptr.* = data;
-}
-
 pub fn count() usize {
     return records.count();
 }
@@ -132,12 +161,13 @@ pub fn load(path: []const u8, index: u64, handler: Handler, option: Option) void
     const fileId = id(path);
     const entry = records.getOrPut(gpa, fileId) catch oom();
     var data: ?[]const u8 = null;
+    var packFile: ?Pack.File = null;
     if (entry.found_existing) {
         data = entry.value_ptr.* orelse
             std.debug.panic("asset already requested: {s}", .{path});
     } else if (options.append) {
         std.debug.panic("asset not found in pack: {s}", .{path});
-    }
+    } else packFile = findPackFile(fileId);
     entry.value_ptr.* = null;
     std.log.info("loading {s}", .{path});
     // 首次请求时启动加载器；Web 通过 JS 发起请求，不创建线程。
@@ -145,13 +175,25 @@ pub fn load(path: []const u8, index: u64, handler: Handler, option: Option) void
         if (!isWeb) Native.start();
         started = true;
     }
-    queue.pushBack(gpa, .{
+    queue.append(gpa, .{
         .path = gpa.dupeSentinel(u8, path, 0) catch oom(),
         .data = data,
+        .packFile = packFile,
         .index = index,
         .handler = handler,
         .option = option,
     }) catch oom();
+}
+
+fn findPackFile(fileId: Id) ?Pack.File {
+    const config = pack orelse return null;
+    const files = config.files;
+    const index = std.sort.binarySearch(Pack.File, files, fileId, struct {
+        fn compare(fid: Id, file: Pack.File) std.math.Order {
+            return std.math.order(fid, file.id);
+        }
+    }.compare);
+    return files[index orelse return null];
 }
 
 // 主线程接收结果并补充请求，回调可以继续提交资源加载。
@@ -176,8 +218,8 @@ pub fn update() void {
             };
             std.log.info("loaded: {s}", .{path});
             request.handler(request.index, response);
-            if (request.option.kind == .sound) {
-                slot.needsFree = false; // 音效由资产管理。
+            if (request.option.kind == .sound or request.handler == packLoaded) {
+                slot.needsFree = false; // 音效和包数据移交所有权。
             }
             slot.freeResult();
             gpa.free(path);
@@ -186,7 +228,7 @@ pub fn update() void {
             continue :blk .idle;
         },
         .idle => {
-            const request = queue.popFront() orelse continue;
+            const request = popReadyRequest() orelse continue;
             slot.request = request;
             slot.needsFree = false;
             slot.state.store(.load, .release);
@@ -202,11 +244,23 @@ pub fn update() void {
     if (!isWeb and needWake) Native.wake.set(io);
 }
 
+fn popReadyRequest() ?Request {
+    for (queue.items, 0..) |item, i| {
+        if (item.packFile != null and packBytes == null) continue;
+        var request = queue.orderedRemove(i);
+        if (request.packFile) |file| {
+            request.data = packBytes.?[file.offset..][0..file.size];
+        }
+        return request;
+    }
+    return null;
+}
+
 // 先等待读取线程退出，再释放仍在途的路径和缓冲区。
 fn shutdown() void {
     if (!started) return;
     if (isWeb) web.zhu_fetch_stop() else Native.stop();
-    while (queue.popFront()) |request| gpa.free(request.path);
+    for (queue.items) |request| gpa.free(request.path);
     queue.deinit(gpa);
     queue = .empty;
     for (&slots) |*slot| {
@@ -224,7 +278,8 @@ fn shutdown() void {
 pub fn deinit() void {
     shutdown();
     records.deinit(gpa);
-    records = .empty;
+    if (packBytes) |bytes| gpa.free(bytes);
+    records, packBytes, pack = .{ .empty, null, null };
     if (mapping) |*mapped| {
         const exe = mapped.file;
         mapped.destroy(io);

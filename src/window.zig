@@ -23,6 +23,7 @@ pub const ScaleEnum = enum {
 };
 
 pub const Option = struct {
+    pack: ?assets.Pack = null,
     logicSize: ?zhu.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
@@ -72,7 +73,7 @@ fn windowInit() callconv(.c) void {
         .logger = .{ .func = sk.log.func },
         .allocator = assets.sokolAllocator(sk.gfx.Allocator),
     });
-    assets.init();
+    assets.init(info.pack);
     zhu.random.init(sk.time.now());
     if (@hasDecl(root, "init")) root.init(allocator);
 }
