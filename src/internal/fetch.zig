@@ -22,7 +22,7 @@ pub fn id(path: []const u8) Id {
 pub const Pack = struct {
     path: []const u8,
     size: u32,
-    zlib: bool = false,
+    zlibSize: ?u32 = null,
     files: []const File,
 
     pub const File = struct { id: Id, offset: u32, size: u32 };
@@ -81,6 +81,7 @@ const isWeb = builtin.os.tag == .emscripten;
 var slots: [if (isWeb) 4 else 2]Slot = @splat(.{});
 var pack: ?Pack = null;
 var packBytes: ?[]const u8 = null;
+var zlibBuffer: []u8 = &.{};
 var started: bool = false; // 仅主线程读写加载器生命周期。
 
 // 保存加载配置；append 模式映射包内数据，首次请求时启动后台线程。
@@ -94,10 +95,10 @@ pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator, pack_: ?Pack) void {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
     }
-    const cfg = pack_ orelse return;
-    const option: Option = .{ .kind = if (cfg.zlib) .zlib else .bytes };
-    load(cfg.path, 0, packLoaded, option);
-    pack = cfg;
+    const zlib = (pack_ orelse return).zlibSize != null;
+    const option: Option = .{ .kind = if (zlib) .zlib else .bytes };
+    load(pack_.?.path, 0, packLoaded, option);
+    pack = pack_;
 }
 
 fn packLoaded(_: u64, response: Response) void {
@@ -106,14 +107,7 @@ fn packLoaded(_: u64, response: Response) void {
         else => unreachable,
     };
     std.debug.assert(bytes.len == pack.?.size);
-    const files = pack.?.files;
-    records.ensureUnusedCapacity(gpa, @intCast(files.len)) catch oom();
-    for (files) |file| {
-        const entry = records.getOrPutAssumeCapacity(file.id);
-        if (entry.found_existing) {
-            std.debug.assert(entry.value_ptr.* == null);
-        } else entry.value_ptr.* = bytes[file.offset..][0..file.size];
-    }
+    initPack(bytes);
     packBytes = bytes;
 }
 
@@ -147,7 +141,10 @@ pub fn initPack(bytes: []const u8) void {
         const hash = std.mem.readInt(u32, entry[0..4], .little);
         const offset = start + std.mem.readInt(u32, entry[4..8], .little);
         const length = std.mem.readInt(u32, entry[8..12], .little);
-        records.putAssumeCapacity(hash, bytes[offset..][0..length]);
+        const record = records.getOrPutAssumeCapacity(hash);
+        if (record.found_existing) {
+            std.debug.assert(record.value_ptr.* == null);
+        } else record.value_ptr.* = bytes[offset..][0..length];
     }
     std.log.info("loaded asset pack: {} files", .{fileCount});
 }
@@ -279,7 +276,8 @@ pub fn deinit() void {
     shutdown();
     records.deinit(gpa);
     if (packBytes) |bytes| gpa.free(bytes);
-    records, packBytes, pack = .{ .empty, null, null };
+    gpa.free(zlibBuffer);
+    records, zlibBuffer, packBytes, pack = .{ .empty, &.{}, null, null };
     if (mapping) |*mapped| {
         const exe = mapped.file;
         mapped.destroy(io);
@@ -319,19 +317,31 @@ fn decode(slot: *Slot, data: []const u8) !Response {
         .path = slot.request.path,
         .content = switch (slot.request.option.kind) {
             .bytes => .{ .bytes = data },
-            .zlib => .{ .zlib = try decodeZlib(data) },
+            .zlib => .{ .zlib = try decodeZlib(data, slot.request) },
             .image => .{ .image = try image.loadIcon(gpa, data) },
             .sound => .{ .sound = try vorbis.Sound.init(gpa, data) },
         },
     };
 }
 
-fn decodeZlib(data: []const u8) ![]const u8 {
+fn decodeZlib(data: []const u8, request: Request) ![]const u8 {
+    const cfg = if (request.handler == packLoaded) pack else null;
+    if (cfg) |p| std.debug.assert(data.len == p.zlibSize.?);
+
     var input = std.Io.Reader.fixed(data);
-    const buffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
-    defer gpa.free(buffer);
-    var decoder = std.compress.flate.Decompress.init(&input, .zlib, buffer);
-    return decoder.reader.allocRemaining(gpa, .unlimited);
+    if (zlibBuffer.len == 0) {
+        zlibBuffer = try gpa.alloc(u8, std.compress.flate.max_window_len);
+    }
+    var decoder = std.compress.flate.Decompress.init(&input, .zlib, zlibBuffer);
+    const p = cfg orelse return decoder.reader.allocRemaining(gpa, .unlimited);
+
+    const out = try gpa.alloc(u8, p.size);
+    errdefer gpa.free(out);
+    try decoder.reader.readSliceAll(out);
+    var extra: [1]u8 = undefined;
+    const len = try decoder.reader.readSliceShort(&extra);
+    std.debug.assert(len == 0);
+    return out;
 }
 
 // 优先打开当前目录的 assets，失败时使用可执行文件旁的目录。
