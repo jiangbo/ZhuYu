@@ -19,13 +19,8 @@ pub const Options = struct {
     name: []const u8 = "atlas", // 同一项目可注册多组资源转换。
 };
 
-// 只在注册图集步骤时请求 zigimg，游戏模块不引入图片编码器。
+// 图集工具复用引擎 PNG 读写，不引入第三方图片库。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
-    const zigimgDep = dep.builder.lazyDependency("zigimg", .{
-        .target = b.graph.host,
-        .optimize = .safe,
-    }) orelse return;
-
     const config = b.addOptions();
     const input = b.root.joinString(b.allocator, options.input) catch
         @panic("out of memory");
@@ -48,7 +43,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
         }),
     });
     tool.root_module.addOptions("options", config);
-    tool.root_module.addImport("zigimg", zigimgDep.module("zigimg"));
+    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
 
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
@@ -317,7 +312,7 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
             .pixels = page,
             .width = layout.width,
             .height = layout.height,
-        });
+        }, false);
         // 最终文件内容相同时保持名称不变。
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});

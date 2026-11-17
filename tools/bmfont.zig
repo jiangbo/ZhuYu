@@ -1,6 +1,5 @@
 const std = @import("std");
-const zigimg = @import("zigimg");
-const text = @import("text").static;
+const text = @import("zhu").text;
 
 const fontChars = @import("chars.zig");
 const copy = @import("copy.zig");
@@ -54,13 +53,8 @@ pub fn addConvertStep(
         name: []const u8,
     },
 ) void {
-    const zigimgDep = dep.builder.lazyDependency("zigimg", .{
-        .target = b.graph.host,
-        .optimize = .safe,
-    }) orelse return;
     // 描述文件路径保留生成依赖，输出设置通过模块注入转换程序。
     const config = b.addOptions();
-    config.addOption(enum { static, system, custom }, "font", .static);
     config.addOptionPath("source", source);
     config.addOption([]const u8, "output", options.output);
     config.addOption([]const u8, "images", options.images);
@@ -72,13 +66,9 @@ pub fn addConvertStep(
             .optimize = .safe,
         }),
     });
-    tool.root_module.addImport("zigimg", zigimgDep.module("zigimg"));
+    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
     const configModule = config.createModule();
     tool.root_module.addImport("options", configModule);
-    tool.root_module.addAnonymousImport("text", .{
-        .root_source_file = dep.path("src/text.zig"),
-        .imports = &.{.{ .name = "options", .module = configModule }},
-    });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
     // 转换会更新游戏源码和资源，每次显式生成时都写入。
@@ -253,19 +243,11 @@ fn encodeFontPng(gpa: std.mem.Allocator, source: copy.PngImage) ![]u8 {
         if ((alpha != 0 and alpha != 255) or
             pixel[0] != alpha or pixel[1] != alpha or pixel[2] != alpha)
         {
-            return copy.encodePng(gpa, source);
+            return copy.encodePng(gpa, source, false);
         }
     }
 
-    var image = try zigimg.Image.create(gpa, source.width, source.height, .indexed1);
-    defer image.deinit(gpa);
-    const indexed = image.pixels.indexed1;
-    indexed.palette[0] = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    indexed.palette[1] = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
-    for (pixels, indexed.indices) |pixel, *index| {
-        index.* = @intCast(pixel[3] / 255);
-    }
-    return copy.encodeImage(gpa, image);
+    return copy.encodePng(gpa, source, true);
 }
 
 // 二进制字段按 BMFont v3 的块顺序读取，内存由进程 arena 管理。

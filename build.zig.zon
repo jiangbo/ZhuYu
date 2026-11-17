@@ -34,11 +34,6 @@
             .hash = "N-V-__8AAFi8bgDrstDyBv8GhpM6Q9OGwWK37E0cnmcxdGrm",
             .lazy = true,
         },
-        .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg#734fa919fb15b7917d4eb124f53600348f4ffa30",
-            .hash = "zigimg-0.1.0-8_eo2sBLGACBebrhQZUwRliZNSUyDn6szp99eip_6-Rw",
-            .lazy = true,
-        },
         .sokol = .{
             .url = "git+https://github.com/floooh/sokol-zig#cc3473c17bed471d608e221adf0fdcb5a61163e0",
             .hash = "sokol-0.1.0-pb1HK7kgQwAn3WHvyiRMRsck4OexoWoFrKPTnLAEsJYH",

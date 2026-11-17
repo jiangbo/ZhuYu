@@ -1,7 +1,8 @@
 const std = @import("std");
-const text = @import("text").static;
+const text = @import("zhu").text;
 
 const fontChars = @import("chars.zig");
+const copy = @import("copy.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -26,7 +27,6 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     var toolOptions = options;
     toolOptions.font = try b.root.joinString(b.allocator, options.font);
     const config = b.addOptions();
-    config.addOption(enum { static, system, custom }, "font", .static);
     config.addOption(Options, "config", toolOptions);
     config.addOption([]const u21, "codes", codes);
     const tool = b.addExecutable(.{
@@ -39,10 +39,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     });
     const configModule = config.createModule();
     tool.root_module.addImport("options", configModule);
-    tool.root_module.addAnonymousImport("text", .{
-        .root_source_file = dep.path("src/text.zig"),
-        .imports = &.{.{ .name = "options", .module = configModule }},
-    });
+    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
     run.addFileInput(b.path(options.font));
