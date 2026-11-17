@@ -29,7 +29,7 @@ pub const Item = struct {
     premul: bool = false, // 是否预乘 Alpha（仅支持 PNG）。
 };
 
-// PNG 自动尝试 oxipng 优化，按配置预乘；目录内其他文件原样拷贝。
+// PNG 和 ICO 自动尝试 oxipng 优化，PNG 按配置预乘，其他文件原样拷贝。
 pub fn addStep(b: *Build, dep: *Dependency, items: []const Item) *Build.Step {
     const copy = b.addUpdateSourceFiles();
     var tool: ?*Build.Step.Compile = null;
@@ -77,9 +77,11 @@ fn addFile(
     const dst = item.dst;
     const png = std.ascii.endsWithIgnoreCase(src, ".png") and
         std.ascii.endsWithIgnoreCase(dst, ".png");
-    if (!png) {
-        if (item.premul)
-            std.debug.panic("premul requires PNG paths: {s} -> {s}", .{ src, dst });
+    const ico = std.ascii.endsWithIgnoreCase(src, ".ico") and
+        std.ascii.endsWithIgnoreCase(dst, ".ico");
+    if (item.premul and !png)
+        std.debug.panic("premul requires PNG paths: {s} -> {s}", .{ src, dst });
+    if (!png and !ico) {
         copy.addCopyFileToSource(b.path(src), dst);
         return;
     }
@@ -102,7 +104,7 @@ fn addFile(
     copy.addCopyFileToSource(out, dst);
 }
 
-// 独立运行入口：按配置预乘和优化单张 PNG。
+// 独立运行入口：预乘 PNG，优化 PNG 或 ICO。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.arena.allocator();
@@ -115,21 +117,92 @@ pub fn main(init: std.process.Init) !void {
         } else return error.InvalidArgs;
     }
 
-    var bytes = if (premul) blk: {
-        const decoded = try decodePng(io, gpa, args[1]);
-        premultiply(decoded.pixels);
-        break :blk try encodePng(gpa, decoded, false);
-    } else try std.Io.Dir.cwd().readFileAlloc(io, args[1], gpa, .unlimited);
+    const ico = std.ascii.endsWithIgnoreCase(args[1], ".ico");
+    if (premul and ico) return error.InvalidArgs;
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, args[1], gpa, .unlimited);
     const directory = std.fs.path.dirname(args[2]) orelse ".";
     try std.Io.Dir.cwd().createDirPath(io, directory);
-    if (try optimizePng(io, gpa, directory, bytes)) |optimized| {
-        std.log.info("oxipng {s}: {} -> {} bytes, saved {} bytes", .{
-            args[2], bytes.len, optimized.len, bytes.len -| optimized.len,
+    var bytes = source;
+    if (ico) {
+        bytes = try packIco(io, gpa, directory, source);
+        std.log.info("ICO {s}: {} -> {} bytes, saved {} bytes", .{
+            args[2], source.len, bytes.len, source.len -| bytes.len,
         });
-        bytes = optimized;
-    } else std.log.info("oxipng not found, skipping PNG optimization", .{});
+    } else {
+        if (premul) {
+            const decoded = try image.load(gpa, source);
+            premultiply(decoded.data);
+            bytes = try encodePng(gpa, .{
+                .width = @intCast(decoded.width),
+                .height = @intCast(decoded.height),
+                .pixels = decoded.data,
+            }, false);
+        }
+        if (try optimizePng(io, gpa, directory, bytes)) |optimized| {
+            std.log.info("oxipng {s}: {} -> {} bytes, saved {} bytes", .{
+                args[2], bytes.len, optimized.len, bytes.len -| optimized.len,
+            });
+            bytes = optimized;
+        } else std.log.info("oxipng not found, skipping PNG optimization", .{});
+    }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[2], .data = bytes });
-    std.log.info("copied PNG {s}: {} bytes", .{ args[2], bytes.len });
+    std.log.info("copied {s} {s}: {} bytes", .{
+        if (ico) "ICO" else "PNG", args[2], bytes.len,
+    });
+}
+
+const Allocator = std.mem.Allocator;
+// 保留 ICO 的全部图层；DIB 复用引擎解码器，PNG 保留现有压缩数据。
+fn packIco(io: std.Io, gpa: Allocator, dir: []const u8, src: []const u8) ![]u8 {
+    var reader = std.Io.Reader.fixed(src);
+    if (try reader.takeInt(u16, .little) != 0 or
+        try reader.takeInt(u16, .little) != 1) return error.InvalidIcon;
+    const count = try reader.takeInt(u16, .little);
+    if (count == 0) return error.InvalidIcon;
+    const header = try reader.take(@as(usize, count) * 16);
+    var output: std.ArrayList(u8) = .empty;
+    try output.appendSlice(gpa, src[0 .. 6 + header.len]);
+    var useOxipng = true;
+    for (0..count) |i| {
+        const entry = header[i * 16 ..][0..16];
+        const size = std.mem.readInt(u32, entry[8..12], .little);
+        const offset = std.mem.readInt(u32, entry[12..16], .little);
+        if (size == 0 or offset > src.len or size > src.len - offset)
+            return error.InvalidIcon;
+        var bytes = src[offset..][0..size];
+        if (!std.mem.startsWith(u8, bytes, "\x89PNG\r\n\x1a\n")) {
+            // 单图层 ICO 让现有解码器读取该 DIB，而不是选择最大图层。
+            const single = try gpa.alloc(u8, 22 + bytes.len);
+            @memcpy(single[0..6], src[0..6]);
+            std.mem.writeInt(u16, single[4..6], 1, .little);
+            @memcpy(single[6..22], entry);
+            std.mem.writeInt(u32, single[18..22], 22, .little);
+            @memcpy(single[22..], bytes);
+            const decoded = try image.loadIcon(gpa, single);
+            bytes = try encodePng(gpa, .{
+                .width = @intCast(decoded.width),
+                .height = @intCast(decoded.height),
+                .pixels = decoded.data,
+            }, false);
+        }
+        if (useOxipng) {
+            if (try optimizePng(io, gpa, dir, bytes)) |optimized| {
+                std.log.info("oxipng ICO layer {}: {} -> {} bytes", .{
+                    i, bytes.len, optimized.len,
+                });
+                bytes = optimized;
+            } else {
+                std.log.info("oxipng not found, skipping PNG optimization", .{});
+                useOxipng = false;
+            }
+        }
+        const start: u32 = @intCast(output.items.len);
+        try output.appendSlice(gpa, bytes);
+        const target = output.items[6 + i * 16 ..][0..16];
+        std.mem.writeInt(u32, target[8..12], @intCast(bytes.len), .little);
+        std.mem.writeInt(u32, target[12..16], start, .little);
+    }
+    return output.toOwnedSlice(gpa);
 }
 
 pub const PngImage = struct {
