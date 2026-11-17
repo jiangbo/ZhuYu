@@ -29,7 +29,7 @@ pub const Item = struct {
     premul: bool = false, // 是否预乘 Alpha（仅支持 PNG）。
 };
 
-// 按配置预乘 PNG，其他文件原样拷贝。
+// PNG 自动尝试 oxipng 优化，按配置预乘；目录内其他文件原样拷贝。
 pub fn addStep(b: *Build, dep: *Dependency, items: []const Item) *Build.Step {
     const copy = b.addUpdateSourceFiles();
     var tool: ?*Build.Step.Compile = null;
@@ -75,13 +75,14 @@ fn addFile(
 ) void {
     const src = item.src;
     const dst = item.dst;
-    if (!item.premul) {
+    const png = std.ascii.endsWithIgnoreCase(src, ".png") and
+        std.ascii.endsWithIgnoreCase(dst, ".png");
+    if (!png) {
+        if (item.premul)
+            std.debug.panic("premul requires PNG paths: {s} -> {s}", .{ src, dst });
         copy.addCopyFileToSource(b.path(src), dst);
         return;
     }
-    if (!std.ascii.endsWithIgnoreCase(src, ".png") or
-        !std.ascii.endsWithIgnoreCase(dst, ".png"))
-        std.debug.panic("premul requires PNG paths: {s} -> {s}", .{ src, dst });
     if (tool.* == null) {
         const exe = b.addExecutable(.{
             .name = "zhuyu-copy",
@@ -101,7 +102,7 @@ fn addFile(
     copy.addCopyFileToSource(out, dst);
 }
 
-// 独立运行入口：按配置预乘单张 PNG。
+// 独立运行入口：按配置预乘和优化单张 PNG。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.arena.allocator();
@@ -114,14 +115,21 @@ pub fn main(init: std.process.Init) !void {
         } else return error.InvalidArgs;
     }
 
-    const bytes = if (premul) blk: {
+    var bytes = if (premul) blk: {
         const decoded = try decodePng(io, gpa, args[1]);
         premultiply(decoded.pixels);
         break :blk try encodePng(gpa, decoded, false);
     } else try std.Io.Dir.cwd().readFileAlloc(io, args[1], gpa, .unlimited);
     const directory = std.fs.path.dirname(args[2]) orelse ".";
     try std.Io.Dir.cwd().createDirPath(io, directory);
+    if (try optimizePng(io, gpa, directory, bytes)) |optimized| {
+        std.log.info("oxipng {s}: {} -> {} bytes, saved {} bytes", .{
+            args[2], bytes.len, optimized.len, bytes.len -| optimized.len,
+        });
+        bytes = optimized;
+    } else std.log.info("oxipng not found, skipping PNG optimization", .{});
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[2], .data = bytes });
+    std.log.info("copied PNG {s}: {} bytes", .{ args[2], bytes.len });
 }
 
 pub const PngImage = struct {
@@ -236,4 +244,27 @@ fn appendChunk(
     var crcBytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &crcBytes, crc.final(), .big);
     try result.appendSlice(gpa, &crcBytes);
+}
+// 缺少系统工具时跳过；已安装工具执行失败则显示错误。
+pub fn optimizePng(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    directory: []const u8,
+    bytes: []const u8,
+) !?[]u8 {
+    const cwd = std.Io.Dir.cwd();
+    const path = try std.fs.path.join(gpa, &.{ directory, ".oxipng-input.png" });
+    try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
+    defer cwd.deleteFile(io, path) catch {};
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "oxipng", "-o", "4", "--strip", "safe", "--stdout", path },
+    }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    if (!result.term.success()) {
+        std.log.err("oxipng {f}: {s}", .{ result.term, result.stderr });
+        return error.OxipngFailed;
+    }
+    return result.stdout;
 }
