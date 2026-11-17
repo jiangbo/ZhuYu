@@ -7,10 +7,13 @@ const Dependency = Build.Dependency;
 
 // 输入目录用于计算图片 ID，生成的图片资源与源目录分开。
 pub const Options = struct {
-    input: []const u8 = "raw-assets/atlas",
+    input: []const u8 = "raw-assets",
+    include: []const []const u8 = &.{}, // 相对于 input，为空时全部扫描；格式同 exclude。
+    exclude: []const []const u8 = &.{}, // 相对于 input；文件精确匹配，目录以 / 结尾。
     images: []const u8 = "atlas", // 相对于 assets 的专用输出目录，生成前清空。
     output: []const u8 = "src/zon/atlas.zon",
     maxSize: u32 = 1024,
+    fixed: bool = false, // 固定输出 maxSize × maxSize，关闭时自动确定页尺寸。
     mergeFont: bool = false, // 是否将字体图片路径加入图集。
     font: []const u8 = "src/zon/font.zon", // 开启合入前先生成字体描述。
     name: []const u8 = "atlas", // 同一项目可注册多组资源转换。
@@ -27,9 +30,12 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const input = b.root.joinString(b.allocator, options.input) catch
         @panic("out of memory");
     config.addOption([]const u8, "input", input);
+    config.addOption([]const []const u8, "include", options.include);
+    config.addOption([]const []const u8, "exclude", options.exclude);
     config.addOption([]const u8, "images", options.images);
     config.addOption([]const u8, "output", options.output);
     config.addOption(u32, "max_size", options.maxSize);
+    config.addOption(bool, "fixed", options.fixed);
     config.addOption(bool, "merge_font", options.mergeFont);
     config.addOption([]const u8, "font", options.font);
 
@@ -83,7 +89,7 @@ const Source = struct {
 const Scan = struct {
     io: std.Io,
     gpa: std.mem.Allocator,
-    inputPath: []const u8,
+    options: Options,
     sources: std.ArrayListUnmanaged(Source) = .empty,
     ids: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
 };
@@ -93,9 +99,12 @@ pub fn main(init: std.process.Init) !void {
     const config = @import("options");
     try buildAtlas(init.io, init.arena.allocator(), .{
         .input = config.input,
+        .include = config.include,
+        .exclude = config.exclude,
         .images = config.images,
         .output = config.output,
         .maxSize = config.max_size,
+        .fixed = config.fixed,
         .mergeFont = config.merge_font,
         .font = config.font,
     });
@@ -114,9 +123,9 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     var scan = Scan{
         .io = io,
         .gpa = gpa,
-        .inputPath = options.input,
+        .options = options,
     };
-    try scanDir(&scan, input, "");
+    try scanDir(&scan, input, "", options.include.len == 0);
     if (scan.sources.items.len == 0) return error.NoPngFiles;
 
     const items = try gpa.alloc(PackItem, scan.sources.items.len);
@@ -126,7 +135,7 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
         .height = source.height,
     };
 
-    const layout = try pack(gpa, items, options.maxSize);
+    const layout = try pack(gpa, items, options);
     defer layout.deinit(gpa);
     try writeAtlas(io, gpa, .{
         .directory = outputPath,
@@ -143,20 +152,35 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     });
 }
 
-fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
+fn scanDir(
+    scan: *Scan,
+    dir: std.Io.Dir,
+    relative: []const u8,
+    included: bool,
+) !void {
     var iterator = dir.iterate();
-    while (try iterator.next(scan.io)) |entry| {
-        if (entry.kind == .directory) {
-            const childRelative = try joinRelative(scan.gpa, relative, entry.name);
-            var child = try dir.openDir(scan.io, entry.name, .{ .iterate = true });
-            defer child.close(scan.io);
-            try scanDir(scan, child, childRelative);
-            continue;
-        }
-        if (entry.kind != .file or !isPng(entry.name)) continue;
+    entries: while (try iterator.next(scan.io)) |entry| {
+        const directory = entry.kind == .directory;
+        if (!directory and (entry.kind != .file or !isPng(entry.name))) continue;
 
         const path = try joinRelative(scan.gpa, relative, entry.name);
-        const filePath = try std.fs.path.join(scan.gpa, &.{ scan.inputPath, path });
+        for (scan.options.exclude) |rule| {
+            if (matchRule(path, directory, rule)) continue :entries;
+        }
+        const childIncluded = if (included) true else checkInclude(
+            scan.options.include,
+            path,
+            directory,
+        ) orelse continue :entries;
+
+        if (directory) {
+            var child = try dir.openDir(scan.io, entry.name, .{ .iterate = true });
+            defer child.close(scan.io);
+            try scanDir(scan, child, path, childIncluded);
+            continue;
+        }
+
+        const filePath = try std.fs.path.join(scan.gpa, &.{ scan.options.input, path });
         const decoded = try copy.decodePng(scan.io, scan.gpa, filePath);
         const id = std.hash.Fnv1a_32.hash(path);
         const result = try scan.ids.getOrPut(scan.gpa, id);
@@ -175,6 +199,26 @@ fn scanDir(scan: *Scan, dir: std.Io.Dir, relative: []const u8) !void {
             .pixels = decoded.pixels,
         });
     }
+}
+
+fn matchRule(path: []const u8, directory: bool, rule: []const u8) bool {
+    const dirRule = std.mem.endsWith(u8, rule, "/");
+    if (directory != dirRule) return false;
+    const name = if (dirRule) rule[0 .. rule.len - 1] else rule;
+    return std.mem.eql(u8, path, name);
+}
+
+// 返回 true 表示整棵子树或文件被包含，false 表示仅父目录匹配，null 表示跳过。
+fn checkInclude(rules: []const []const u8, path: []const u8, directory: bool) ?bool {
+    for (rules) |rule| {
+        if (matchRule(path, directory, rule)) return true;
+        if (directory and rule.len > path.len and
+            std.mem.startsWith(u8, rule, path) and rule[path.len] == '/')
+        {
+            return false;
+        }
+    }
+    return null;
 }
 
 fn joinRelative(
@@ -429,9 +473,9 @@ const Candidate = struct {
 };
 
 // 尝试四种排序和放置策略，优先选择页数少、总面积小的结果。
-fn pack(gpa: std.mem.Allocator, items: []const PackItem, maxSize: u32) !Layout {
+fn pack(gpa: std.mem.Allocator, items: []const PackItem, options: Options) !Layout {
     if (items.len == 0) return error.EmptyInput;
-    if (maxSize < 3) return error.InvalidMaxSize;
+    if (options.maxSize < 3) return error.InvalidMaxSize;
 
     const strategies = [_]Strategy{
         .{ .sort = .edge, .fit = .short },
@@ -444,7 +488,7 @@ fn pack(gpa: std.mem.Allocator, items: []const PackItem, maxSize: u32) !Layout {
     errdefer if (best) |result| result.deinit(gpa);
 
     for (strategies) |strategy| {
-        const result = try packWith(gpa, items, maxSize, strategy);
+        const result = try packWith(gpa, items, options, strategy);
         if (best) |current| {
             if (isBetter(result, current)) {
                 current.deinit(gpa);
@@ -471,9 +515,10 @@ fn isBetter(a: Layout, b: Layout) bool {
 fn packWith(
     gpa: std.mem.Allocator,
     items: []const PackItem,
-    maxSize: u32,
+    options: Options,
     strategy: Strategy,
 ) !Layout {
+    const maxSize = options.maxSize;
     const order = try gpa.alloc(usize, items.len);
     defer gpa.free(order);
     for (order, 0..) |*index, i| index.* = i;
@@ -500,7 +545,7 @@ fn packWith(
         if (width > maxSize or height > maxSize) return error.ImageTooLarge;
 
         var candidate = findCandidate(pages.items, width, height, strategy.fit);
-        if (candidate == null) {
+        if (candidate == null and !options.fixed) {
             for (pages.items, 0..) |*page, pageIndex| {
                 if (!try grow(gpa, page, width, height, maxSize)) {
                     continue;
@@ -518,7 +563,9 @@ fn packWith(
         if (candidate == null) {
             try pages.append(gpa, .{});
             const page = &pages.items[pages.items.len - 1];
-            std.debug.assert(try grow(gpa, page, width, height, maxSize));
+            const w = if (options.fixed) maxSize else width;
+            const h = if (options.fixed) maxSize else height;
+            std.debug.assert(try grow(gpa, page, w, h, maxSize));
             candidate = findCandidate(
                 pages.items[pages.items.len - 1 ..],
                 width,
