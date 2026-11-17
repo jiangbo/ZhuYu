@@ -160,6 +160,7 @@ pub fn main(init: std.process.Init) !void {
     try bytes.writeAll("b0b0");
     if (encoder) |*value| try value.finish();
     try writer.flush();
+    std.log.info("packed {} files into {s}", .{ entries.items.len, args[2] });
 
     if (metadata) {
         const files = try allocator.alloc(Metadata.File, entries.items.len);

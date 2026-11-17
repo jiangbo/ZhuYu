@@ -208,6 +208,9 @@ pub fn main(init: std.process.Init) !void {
             .sub_path = destination,
             .data = bytes,
         });
+        std.log.info("font image {s}: {} bytes, {} chars", .{
+            destination, bytes.len, chars.items.len,
+        });
         const resource = try std.fs.path.join(gpa, &.{ options.images, name });
         std.mem.replaceScalar(u8, resource, '\\', '/');
         images[i] = try gpa.dupeSentinel(u8, resource, 0);
@@ -231,6 +234,10 @@ pub fn main(init: std.process.Init) !void {
         .pages = pages,
     };
     try writeZon(io, options.output, result);
+    std.log.info("generated bitmap font {s}: {} chars, {} page(s), {}x{}", .{
+        options.output,       source.chars.len,     pageCount,
+        source.common.scaleW, source.common.scaleH,
+    });
 }
 
 // 预乘后的二值白色字体使用 1-bit 索引，其余像素保留 RGBA。

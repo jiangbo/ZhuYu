@@ -166,6 +166,7 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
         .layout = layout,
     });
 
+    std.log.info("atlas description: {s}", .{options.output});
     std.log.info("packed {} images into {} page(s), size={}x{}", .{
         scan.sources.items.len,
         layout.pageCount,

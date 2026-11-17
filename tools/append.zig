@@ -20,4 +20,5 @@ pub fn main(init: std.process.Init) !void {
         _ = try writer.interface.sendFileAll(&reader, .unlimited);
     }
     try writer.flush();
+    std.log.info("appended assets to executable: {s}", .{args[3]});
 }

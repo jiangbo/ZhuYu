@@ -88,6 +88,7 @@ pub fn main(init: std.process.Init) !void {
 
     // 全部图片生成成功后，再更新资源图片和 ZON 字体描述。
     try saveFont(&ctx, pages);
+    std.log.info("MSDF font description: {s}", .{ctx.options.output});
     std.log.info("generated {} font page(s), size={}x{}", .{
         pages.len, pages[0].font.atlas.width, pages[0].font.atlas.height,
     });
@@ -383,6 +384,7 @@ fn writeImage(ctx: *const Context, image: []const u8) ![:0]const u8 {
         .sub_path = outputPath,
         .data = bytes,
     });
+    std.log.info("MSDF image {s}: {} bytes", .{ outputPath, bytes.len });
 
     std.mem.replaceScalar(u8, resource, '\\', '/');
     return ctx.gpa.dupeSentinel(u8, resource, 0);
