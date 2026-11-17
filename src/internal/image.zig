@@ -305,7 +305,8 @@ fn readHeader(reader: *Reader) !Header {
     if (header.width == 0 or header.height == 0) return error.InvalidHeader;
     if (header.width > 16384) return error.ImageTooLarge;
     if (header.height > 16384) return error.ImageTooLarge;
-    const isPacked = header.bitDepth == 1 and header.color == .indexed;
+    const isPacked = header.color == .indexed and
+        (header.bitDepth == 1 or header.bitDepth == 2 or header.bitDepth == 4);
     if (header.bitDepth != 8 and !isPacked) return error.UnsupportedBitDepth;
     switch (header.color) {
         .gray, .rgb, .rgba, .indexed, .magic => {},
@@ -337,8 +338,9 @@ fn readChunk(reader: *Reader) !ChunkData {
 fn parseRows(decode: *const Decode, palette: []const u8) !void {
     const width = decode.header.width;
     const size: usize = if (decode.header.color == .rgb) 3 else 1;
-    const isPacked = decode.header.bitDepth == 1;
-    const rowBytes = if (isPacked) (width + 7) / 8 else width * size;
+    const depth = decode.header.bitDepth;
+    const rowBytes = if (depth < 8) (width * depth + 7) / 8 else width * size;
+    const mask = @as(u8, 255) >> @intCast(8 - depth);
     var row = decode.row[0..rowBytes];
     var prior = decode.prior[0..rowBytes];
 
@@ -367,8 +369,9 @@ fn parseRows(decode: *const Decode, palette: []const u8) !void {
                 dest[x * 4 + 3] = if (matches) 0 else 255;
             },
             .indexed, .magic => for (0..width) |x| {
-                const index = if (!isPacked) row[x] else //
-                    (row[x / 8] >> @intCast(7 - x % 8)) & 1;
+                const bit = x * depth;
+                const shift: u3 = @intCast(8 - depth - bit % 8);
+                const index = (row[bit / 8] >> shift) & mask;
                 const color = @as(usize, index) * 4;
                 if (color + 4 > palette.len) return error.InvalidPaletteIndex;
                 @memcpy(dest[x * 4 ..][0..4], palette[color..][0..4]);
