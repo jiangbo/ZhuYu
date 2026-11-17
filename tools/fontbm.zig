@@ -10,10 +10,12 @@ const Dependency = Build.Dependency;
 // 字体直接从文件读取，不需要安装字体或提供系统字体名称。
 pub const Options = struct {
     font: []const u8, // 相对于客户端项目的字体文件路径。
-    input: ?[]const u8 = null, // 文件或目录，默认只生成可打印 ASCII。
+    input: ?[]const u8 = null, // 原文文件或目录，额外包含 ASCII 和引擎统计文字。
+    all: bool = false, // 生成字体支持的全部 Unicode 字符，忽略 input。
     exe: []const u8 = "fontbm",
     size: u16,
-    maxSize: u32 = 1024, // 自动选择方形页尺寸，多页使用相同宽高。
+    maxSize: u32 = 1024, // 自动选尺寸的上限；fixed 时为页面尺寸。
+    fixed: bool = false,
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
     antialias: bool = false,
     images: []const u8 = "font", // 相对于 assets 的专用输出目录，生成前清空。
@@ -27,7 +29,10 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
         return error.InvalidFontMaxSize;
     }
 
-    const codes = try fontChars.read(b, options.input);
+    const codes = if (options.all)
+        try fontChars.readFont(b, options.font)
+    else
+        try fontChars.read(b, dep, options.input);
     var content: std.ArrayList(u8) = .empty;
     for (codes) |code| {
         var buffer: [4]u8 = undefined;
@@ -36,9 +41,9 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     }
     const charset = b.addWriteFiles().add("fontbm.txt", content.items);
 
-    // 小字表选择较小页面；字表较大时由 fontbm 按上限分页。
+    // 固定模式只提供一种尺寸，否则允许选择较小页面。
     var sizes: std.ArrayList(u8) = .empty;
-    var size: u32 = 32;
+    var size: u32 = if (options.fixed) options.maxSize else 32;
     while (size < options.maxSize) : (size *= 2) {
         try sizes.appendSlice(b.allocator, b.fmt("{}x{},", .{ size, size }));
     }

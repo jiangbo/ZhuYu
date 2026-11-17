@@ -11,7 +11,7 @@ const Dependency = Build.Dependency;
 pub const Options = struct {
     font: []const u8, // 相对于客户端项目的字体文件路径。
     face: []const u8,
-    input: ?[]const u8 = null, // 文件或目录，按内容收集 UTF-8 文本，默认 ASCII。
+    input: ?[]const u8 = null, // 原文文件或目录，额外包含 ASCII 和引擎统计文字。
     exe: []const u8 = "bmfont64",
     size: u16,
     spacing: u8 = 1, // 图集中字形之间的留白，不是排版字距。
@@ -26,10 +26,8 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     generate.setCwd(b.path("."));
     generate.addFileArg(createConfig(b, options));
     generate.addFileInput(b.path(options.font));
-    if (options.input) |input| {
-        generate.addArg("-t");
-        generate.addFileArg(try createCharset(b, input));
-    }
+    generate.addArg("-t");
+    generate.addFileArg(try createCharset(b, dep, options.input));
     generate.addArg("-o");
     const source = generate.addOutputFileArg("font.fnt");
     // 描述文件和多页图集由同一次命令生成，每次显式执行都更新。
@@ -77,8 +75,8 @@ pub fn addConvertStep(
 }
 
 // BMFont 用 BOM 识别 UTF-8，字表编码与缓存文件由工具自身负责。
-fn createCharset(b: *Build, input: []const u8) !Build.LazyPath {
-    const codes = try fontChars.read(b, input);
+fn createCharset(b: *Build, dep: *Dependency, input: ?[]const u8) !Build.LazyPath {
+    const codes = try fontChars.read(b, dep, input);
     var content: std.ArrayList(u8) = .empty;
     try content.appendSlice(b.allocator, "\xef\xbb\xbf");
     for (codes) |code| {

@@ -10,7 +10,7 @@ const Dependency = Build.Dependency;
 // 游戏配置字体生成，路径以游戏项目为起点。
 pub const Options = struct {
     font: []const u8,
-    input: ?[]const u8 = null, // 文件或目录，按内容收集 UTF-8 文本，默认 ASCII。
+    input: ?[]const u8 = null, // 原文文件或目录，额外包含 ASCII 和引擎统计文字。
     exe: []const u8 = "msdf-atlas-gen",
     size: u16,
     maxSize: u32 = 1024, // 单页自动取尺寸，分页后每页使用此宽高。
@@ -22,7 +22,7 @@ pub const Options = struct {
 // 注册转换程序，收集并排序字符，分页由工具按尺寸上限决定。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     if (options.maxSize == 0) return error.InvalidFontMaxSize;
-    const codes = try fontChars.read(b, options.input);
+    const codes = try fontChars.read(b, dep, options.input);
     // 路径先按游戏项目解析，其余配置保持调用方的字段名。
     var toolOptions = options;
     toolOptions.font = try b.root.joinString(b.allocator, options.font);
