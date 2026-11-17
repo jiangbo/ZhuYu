@@ -10,13 +10,14 @@ pub const Options = struct {
     input: []const u8 = "raw-assets/audio", // 相对于游戏项目，递归扫描。
     output: []const u8 = "assets/audio", // 工具独占的输出目录，每次清空重建。
     rate: u32 = 44100, // MP3/WAV/OGG 的目标采样率，需与游戏输出一致。
+    quality: ?i8 = null, // Vorbis 质量（-1 到 10），为空时使用编码器默认。
     exe: []const u8 = "ffmpeg",
     probe: []const u8 = "ffprobe",
     name: []const u8 = "audio",
 };
 
 // 只在显式执行 audio 时扫描和转码，普通构建不调用 FFmpeg。
-pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const tool = b.addExecutable(.{
         .name = "zhuyu-audio",
         .root_module = b.createModule(.{
@@ -28,9 +29,12 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     const step = b.addRunArtifact(tool);
     step.setCwd(b.path("."));
     for ([_][]const u8{ options.input, options.output }) |path| {
-        step.addArg(try b.root.joinString(b.allocator, path));
+        const absolute = b.root.joinString(b.allocator, path) catch
+            @panic("out of memory");
+        step.addArg(absolute);
     }
     step.addArgs(&.{ b.fmt("{d}", .{options.rate}), options.exe, options.probe });
+    if (options.quality) |q| step.addArg(b.fmt("{d}", .{q}));
     // 每次生成都重新扫描，移除源目录已删除的音频。
     step.has_side_effects = true;
     b.step(options.name, "Convert and copy audio assets").dependOn(&step.step);
@@ -88,11 +92,14 @@ pub fn main(init: std.process.Init) !void {
 
         if (convert) {
             // 固定输出 Vorbis；拒绝覆盖同名资源，不等待终端输入。
-            _ = try run(gpa, io, &.{
-                args[4], "-nostdin",  "-v",   "error",     "-n",   "-i", source,
-                "-map",  "0:a:0",     "-c:a", "libvorbis", "-q:a", "4",  "-ar",
-                args[3], destination,
+            var argv: std.ArrayList([]const u8) = .empty;
+            try argv.appendSlice(gpa, &.{
+                args[4], "-nostdin", "-v",   "error",     "-n",  "-i",    source,
+                "-map",  "0:a:0",    "-c:a", "libvorbis", "-ar", args[3],
             });
+            if (args.len > 6) try argv.appendSlice(gpa, &.{ "-q:a", args[6] });
+            try argv.append(gpa, destination);
+            _ = try run(gpa, io, argv.items);
             converted += 1;
             std.log.info("converted {s} -> {s}", .{ entry.path, relative });
         } else {
