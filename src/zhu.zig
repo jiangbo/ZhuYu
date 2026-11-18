@@ -9,6 +9,7 @@ pub const audio = @import("audio.zig");
 pub const graphics = @import("graphics.zig");
 pub const batch = @import("batch.zig");
 pub const camera = @import("camera.zig");
+pub const math = @import("math.zig");
 pub const text = @import("text.zig");
 pub const codec = @import("internal/codec.zig");
 pub const storage = platform.storage;
@@ -39,16 +40,16 @@ pub const Allocator = std.mem.Allocator;
 
 pub const Timer = core.Timer;
 pub const DateTime = platform.DateTime;
-pub const ease = core.ease;
+pub const ease = math.ease;
 pub const enums = core.enums;
-pub const Vector = core.Vector;
-pub const Vector2 = core.Vector2;
-pub const Vector3 = core.Vector3;
-pub const Vector4 = core.Vector4;
-pub const Rect = core.Rect;
-pub const Circle = core.Circle;
-pub const AxisCapsule = core.AxisCapsule;
-pub const Shape = core.Shape;
+pub const Vector = math.Vector;
+pub const Vector2 = math.Vector2;
+pub const Vector3 = math.Vector3;
+pub const Vector4 = math.Vector4;
+pub const Rect = math.Rect;
+pub const Circle = math.Circle;
+pub const AxisCapsule = math.AxisCapsule;
+pub const Shape = math.Shape;
 pub const random = core.random;
 pub const dateTimeBufferSize = platform.dateTimeBufferSize;
 
@@ -58,9 +59,12 @@ pub const android = struct {
     pub const panic = @import("internal/android.zig").panic;
 };
 
-pub const epsilon = core.epsilon;
+pub const epsilon = math.epsilon;
 
-pub const clamp = std.math.clamp;
+pub const clamp = math.clamp;
+pub const percentInt = math.percentInt;
+pub const sinInt = math.sinInt;
+pub const ceilAway = math.ceilAway;
 pub const loadImage = assets.loadImage;
 pub const loadAtlas = assets.atlas.load;
 pub const getImage = assets.getImageByPath;
@@ -115,23 +119,6 @@ pub fn setup(info: std.process.Init, option: SetupOption) void {
     window.setup(gpa);
 }
 
-pub fn percentInt(a: anytype, b: anytype) f32 {
-    const aa: f32 = @floatFromInt(a);
-    return aa / @as(f32, @floatFromInt(b));
-}
-
-pub fn sinInt(T: type, angle: f32, min: T, max: T) T {
-    const minF: f32 = @floatFromInt(min);
-    const maxF: f32 = @floatFromInt(max);
-    const half = (maxF - minF) * 0.5;
-    const result = minF + half + @sin(angle) * half;
-    return @intFromFloat(@round(result));
-}
-
-pub fn ceilAway(value: f32) f32 {
-    return if (value > 0) @ceil(value) else @floor(value);
-}
-
 pub fn toIndex(T: type, value: anytype) T {
     return switch (@typeInfo(@TypeOf(value))) {
         .@"enum" => @intCast(@backingInt(value)),
@@ -159,6 +146,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(graphics);
     std.testing.refAllDecls(batch);
     std.testing.refAllDecls(camera);
+    std.testing.refAllDecls(math);
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(text);
     std.testing.refAllDecls(extend.debug);
