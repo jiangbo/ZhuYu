@@ -178,7 +178,7 @@ pub fn draw(option: Option) void {
     };
     const gfxStats = sk.gfx.queryStats();
     const frameStats = gfxStats.prev_frame;
-    const totalStats = gfxStats.total;
+    const textureCount = gfxStats.total.images.alive;
     // 获取当前持有的资源总量。
     const assetStats = assets.queryTotalStats();
     // 左右列的格式串与参数成对排列，便于对应面板内容。
@@ -198,18 +198,21 @@ pub fn draw(option: Option) void {
         "画面 {d:.0}%", .{window.viewRect.size.x / camera.size.x * 100});
     // 按有效顶点数统计本帧上传的数据量。
     const vertexBytes = assets.frameStats.vertex * @sizeOf(graphics.Vertex);
-    writeFormatLine(&columns, "图形",
-        "纹理 {}", .{totalStats.images.alive},
-        "顶点 {} KB", .{vertexBytes / 1024});
+    writeFormatLine(&columns, "纹理",
+        "数量 {}", .{textureCount},
+        "显存 ≈{} KB", .{assetStats.textureBytes / 1024});
     writeFormatLine(&columns, "绘制",
         "批次 {}", .{frameStats.num_draw},
-        "命令 {}", .{batch.commands.items.len});
-    writeFormatLine(&columns, "对象",
-        "精灵 {}", .{assets.frameStats.vertex},
-        "文字 {}", .{assets.frameStats.text});
+        "顶点 {} KB", .{vertexBytes / 1024});
+    writeFormatLine(&columns, "命令",
+        "使用 {}/{}", .{batch.commands.items.len, batch.commands.capacity},
+        "最高 {}", .{batch.commandPeak});
     writeFormatLine(&columns, "内存",
         "使用 {} KB", .{assetStats.memoryUsed / 1024},
         "最高 {} KB", .{assetStats.memoryPeak / 1024});
+    writeFormatLine(&columns, "对象",
+        "精灵 {}", .{assets.frameStats.vertex},
+        "文字 {}", .{assets.frameStats.text});
     writeFormatLine(&columns, "鼠标",
         "{d:.1}, {d:.1}", .{ window.mouse.raw.x, window.mouse.raw.y },
         "{d:.1}, {d:.1}", .{ window.mouse.pos.x, window.mouse.pos.y });

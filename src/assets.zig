@@ -127,11 +127,33 @@ pub const sampler = struct {
 pub const gpu = struct {
     // 统一持有缓冲句柄，提前销毁时移除，退出时释放剩余缓冲。
     var buffers: std.AutoHashMapUnmanaged(sk.gfx.Buffer, void) = .empty;
+    var textureBytes: usize = 0; // 纹理存储估算。
     var vertices: std.ArrayList(graphics.Vertex) = .empty; // 本帧顶点数据。
     var pipelines: std.ArrayListUnmanaged(sk.gfx.Pipeline) = .empty;
     var shaders: std.ArrayListUnmanaged(sk.gfx.Shader) = .empty;
     // 待提交的图像复制记录，源缓冲和目标图像必须保持有效直到提交。
     var updates: std.ArrayList(sk.gfx.CopyBufferToImageDesc) = .empty;
+
+    pub fn makeImage(desc: sk.gfx.ImageDesc) sk.gfx.Image {
+        std.debug.assert(desc.num_mipmaps <= 1);
+        const texture = sk.gfx.makeImage(desc);
+        textureBytes += textureSize(texture);
+        return texture;
+    }
+
+    pub fn destroyImage(texture: sk.gfx.Image) void {
+        textureBytes -= textureSize(texture);
+        sk.gfx.destroyImage(texture);
+    }
+
+    fn textureSize(texture: sk.gfx.Image) usize {
+        if (sk.gfx.queryImageState(texture) != .VALID) return 0;
+        const desc = sk.gfx.queryImageDesc(texture);
+        const format = desc.pixel_format;
+        const pitch = sk.gfx.querySurfacePitch(format, desc.width, desc.height, 1);
+        const size = @as(i64, pitch) * desc.num_slices * desc.sample_count;
+        return @intCast(size);
+    }
 
     // 创建由资产模块管理的缓冲。
     pub fn makeBuffer(desc: sk.gfx.BufferDesc) sk.gfx.Buffer {
@@ -205,6 +227,7 @@ pub const gpu = struct {
     }
 
     fn deinit() void {
+        textureBytes = 0;
         updates.deinit(gpa);
         updates = .empty;
         vertices.deinit(gpa);
@@ -249,7 +272,7 @@ pub const atlas = struct {
         }
 
         const atlasView = sk.gfx.makeView(.{
-            .texture = .{ .image = sk.gfx.makeImage(.{
+            .texture = .{ .image = gpu.makeImage(.{
                 .usage = .{ .write_unsealed = true, .copy_dst = option.pages > 0 },
                 .width = @intFromFloat(source.size.x),
                 .height = @intFromFloat(source.size.y),
@@ -382,7 +405,12 @@ pub const view = struct {
         const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
         sk.gfx.initView(imageView, .{ .texture = .{
-            .image = makeImage(decoded.width, decoded.height, 1, decoded.data),
+            .image = gpu.makeImage(.{
+                .width = decoded.width,
+                .height = decoded.height,
+                .type = .ARRAY,
+                .data = sk.gfx.asRange(decoded.data),
+            }),
         } });
         const image = imageCache.getPtr(id(resp.path)).?;
         // 文件尺寸必须与调用方提供的尺寸一致。
@@ -390,16 +418,6 @@ pub const view = struct {
         const height: f32 = @floatFromInt(decoded.height);
         std.debug.assert(image.size.x == width);
         std.debug.assert(image.size.y == height);
-    }
-
-    fn makeImage(w: i32, h: i32, layers: i32, data: anytype) sk.gfx.Image {
-        return sk.gfx.makeImage(.{
-            .width = w,
-            .height = h,
-            .type = .ARRAY,
-            .num_slices = layers,
-            .data = sk.gfx.asRange(data),
-        });
     }
 };
 
@@ -494,6 +512,7 @@ pub const TotalStats = struct {
     file: usize,
     sound: usize,
     music: usize,
+    textureBytes: usize, // 纹理存储的估算字节数。
     vertexCapacity: usize, // 当前 CPU 顶点暂存区可容纳的顶点数量。
     memoryUsed: usize, // 当前分配的字节数。
     memoryPeak: usize, // 初始化以来分配字节数的峰值。
@@ -506,6 +525,7 @@ pub fn queryTotalStats() TotalStats {
         .file = fetch.count(),
         .sound = sound.cache.count(),
         .music = music.cache.count(),
+        .textureBytes = gpu.textureBytes,
         .vertexCapacity = gpu.vertices.capacity,
         .memoryUsed = counter.used.load(.monotonic),
         .memoryPeak = counter.max.load(.monotonic),

@@ -454,12 +454,12 @@ pub const RenderTarget = struct {
         const texture = sk.gfx.queryViewImage(self.image.view);
         sk.gfx.destroyView(self.pass.attachments.colors[0]);
         assets.view.destroy(self.image.view);
-        sk.gfx.destroyImage(texture);
+        assets.gpu.destroyImage(texture);
     }
 };
 
 pub fn createRenderTarget(size: zhu.Vector2, filter: Filter) RenderTarget {
-    const colorImage = sk.gfx.makeImage(.{
+    const colorImage = assets.gpu.makeImage(.{
         .usage = .{ .color_attachment = true },
         .width = @intFromFloat(size.x),
         .height = @intFromFloat(size.y),

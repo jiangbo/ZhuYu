@@ -40,6 +40,8 @@ pub var snap: bool = false;
 
 // 命令借用调用方提供的固定缓冲区。
 pub var commands: std.ArrayList(Command) = .empty;
+// 初始化以来，完整帧的命令数峰值。
+pub var commandPeak: usize = 0;
 
 // 满时提供更大的列表，保留原有命令及顺序。缓冲区仍由调用方管理。
 pub var onFull: ?*const fn ([]Command) std.ArrayList(Command) = null;
@@ -52,6 +54,7 @@ var flushed = false;
 // image 用于圆形等基础图形；不绘制基础图形时可传 null。
 pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
+    commandPeak = 0;
     const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
     defaultPipeline = graphics.createPipeline(shaderDesc);
 
@@ -371,6 +374,7 @@ pub fn endDraw() void {
     if (!flushed) flush();
     graphics.endPass();
     graphics.commit();
+    commandPeak = @max(commandPeak, commands.items.len);
 }
 
 // 提交一个绘制批次，并更新当前流水线。
