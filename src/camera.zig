@@ -47,7 +47,8 @@ pub const Camera = struct {
 
 // 当前绘制坐标状态，由 batch 在开始绘制、切换目标和视口时更新。
 pub const State = struct {
-    camera: Camera, // 本帧的基准相机，批次记录时保存快照。
+    camera: Camera, // 当前批次的基准相机，记录时保存快照。
+    snap: bool, // 当前批次是否将投影平移对齐到实际像素。
     size: Vector2, // 当前绘制的逻辑尺寸。
     viewRect: zhu.Rect, // 当前绘制使用的实际像素视口。
 };
@@ -63,8 +64,7 @@ pub fn queryPixelScale() Vector2 {
 var buffer: [8]Camera = undefined;
 pub var stack: std.ArrayList(Camera) = .initBuffer(&buffer);
 pub var main: Camera = .window;
-// 仅在渲染时将相机平移对齐到实际像素。
-// TODO：支持切换渲染相机时，重新考虑此设置的归属和实现。
+// 主相机的默认投影取整设置，由 beginDraw 保存到当前绘制状态。
 pub var snap: bool = false;
 pub var size: Vector2 = undefined; // 默认游戏逻辑尺寸，不随窗口像素尺寸变化。
 pub var bound: Vector2 = undefined;

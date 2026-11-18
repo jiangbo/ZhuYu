@@ -30,6 +30,7 @@ pub const DrawCommand = struct {
     end: ?u32 = null, // 结束顶点索引，null 表示未结束。
     view: graphics.View = .{}, // 纹理视图
     camera: camera.Camera, // 本批次的基准相机快照。
+    snap: bool, // 是否将投影平移对齐到实际像素。
     size: Vector2, // 本批次绘制的逻辑尺寸。
 };
 
@@ -70,7 +71,7 @@ pub fn beginDraw(color: Color, pass: RenderPass) void {
     assets.beginDraw();
     commands.clearRetainingCapacity();
     flushed = false;
-    camera.state.camera = camera.main;
+    camera.state.camera, camera.state.snap = .{ camera.main, camera.snap };
     useTarget(color, pass);
 }
 
@@ -81,11 +82,11 @@ pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     camera.state.size = pass.querySize();
 }
 
-// 相机栈为空时，切换后续批次的基准相机。
-pub fn useCamera(view: camera.Camera) void {
+// 相机栈为空时，切换后续批次的基准相机和投影取整设置。
+pub fn useCamera(view: camera.Camera, cameraSnap: bool) void {
     std.debug.assert(camera.stack.items.len == 0);
     endDrawCommand();
-    camera.state.camera = view;
+    camera.state.camera, camera.state.snap = .{ view, cameraSnap };
 }
 
 // 设置目标像素区域和对应的逻辑尺寸，同时重置裁剪区域。
@@ -114,6 +115,7 @@ pub fn endDrawCommand() void {
 }
 
 fn currentDraw() ?*DrawCommand {
+    std.debug.assert(!flushed);
     if (commands.items.len == 0) return null;
     switch (commands.items[commands.items.len - 1]) {
         .draw => |*draw| return if (draw.end == null) draw else null,
@@ -141,6 +143,7 @@ fn addCommand(image: Image) *DrawCommand {
         .start = @intCast(assets.frameStats.vertex),
         .view = image.view,
         .camera = camera.state.camera,
+        .snap = camera.state.snap,
         .size = camera.state.size,
     } });
     return currentDraw().?;
@@ -401,7 +404,7 @@ fn doDraw(
     const size = graphics.queryViewSize(cmd.view);
     const scale = cmd.camera.scale.mul(.xy(2, -2)).div(cmd.size);
     var offset = cmd.camera.position.mul(scale).neg();
-    if (camera.snap) {
+    if (cmd.snap) {
         // 在实际视口像素中取整平移量，不修改相机的逻辑位置。
         const half = pixels.scale(0.5);
         offset = offset.mul(half).round().div(half);
