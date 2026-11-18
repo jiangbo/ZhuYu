@@ -41,11 +41,14 @@ pub var snap: bool = false;
 // 命令借用调用方提供的固定缓冲区。
 pub var commands: std.ArrayList(Command) = .empty;
 
+// 满时提供更大的列表，保留原有命令及顺序。缓冲区仍由调用方管理。
+pub var onFull: ?*const fn ([]Command) std.ArrayList(Command) = null;
+
 var vertexBuffer: sk.gfx.Buffer = .{}; // 上传后用于绘制的顶点缓冲。
 var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
 var flushed = false;
 
-// 命令缓冲区由调用方持有，必须保持有效且容量足够。
+// 命令缓冲区由调用方持有，使用期间必须保持有效。
 // image 用于圆形等基础图形；不绘制基础图形时可传 null。
 pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
@@ -70,9 +73,7 @@ pub fn beginDraw(color: Color, pass: RenderPass) void {
 
 pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     endDrawCommand();
-    commands.appendAssumeCapacity(.{
-        .target = .{ .color = color, .pass = pass },
-    });
+    appendCommand(.{ .target = .{ .color = color, .pass = pass } });
     camera.state.viewRect = pass.queryViewport();
     camera.state.size = pass.querySize();
 }
@@ -89,7 +90,7 @@ pub fn useViewport(rect: zhu.Rect, size: Vector2) void {
     endDrawCommand();
     camera.state.viewRect = rect;
     camera.state.size = size;
-    commands.appendAssumeCapacity(.{ .viewport = rect });
+    appendCommand(.{ .viewport = rect });
 }
 
 // 裁剪使用当前视口的逻辑坐标，不受相机影响；null 恢复完整视口。
@@ -101,7 +102,7 @@ pub fn useScissor(rect: ?zhu.Rect) void {
         clip.min = clip.min.add(area.min.mul(scale));
         clip.size = area.size.mul(scale);
     }
-    commands.appendAssumeCapacity(.{ .scissor = clip });
+    appendCommand(.{ .scissor = clip });
 }
 
 // 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
@@ -117,9 +118,23 @@ fn currentDraw() ?*DrawCommand {
     }
 }
 
+fn appendCommand(cmd: Command) void {
+    commands.appendBounded(cmd) catch {
+        const len = commands.items.len;
+        const grow = onFull orelse
+            std.debug.panic("commands full (capacity {d})", .{len});
+        commands = grow(commands.items);
+        if (commands.items.len != len or commands.capacity <= len) {
+            const msg = "onFull must keep {d} commands and increase capacity";
+            std.debug.panic(msg, .{len});
+        }
+        commands.appendAssumeCapacity(cmd);
+    };
+}
+
 fn addCommand(image: Image) *DrawCommand {
     endDrawCommand();
-    commands.appendAssumeCapacity(.{ .draw = .{
+    appendCommand(.{ .draw = .{
         .start = @intCast(assets.frameStats.vertex),
         .view = image.view,
         .camera = camera.state.camera,
