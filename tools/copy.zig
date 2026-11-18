@@ -29,11 +29,13 @@ pub const Item = struct {
     premul: bool = false, // 是否预乘 Alpha（仅支持 PNG）。
 };
 
+pub const Options = struct { items: []const Item, name: []const u8 = "copy" };
+
 // PNG 和 ICO 自动尝试 oxipng 优化，PNG 按配置预乘，其他文件原样拷贝。
-pub fn addStep(b: *Build, dep: *Dependency, items: []const Item) *Build.Step {
+pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
     const copy = b.addUpdateSourceFiles();
     var tool: ?*Build.Step.Compile = null;
-    for (items) |item| {
+    for (options.items) |item| {
         var dir = b.root.openDir(
             b.graph.io,
             item.src,
@@ -63,7 +65,7 @@ pub fn addStep(b: *Build, dep: *Dependency, items: []const Item) *Build.Step {
             });
         }
     }
-    return &copy.step;
+    b.step(options.name, "Copy standalone assets").dependOn(&copy.step);
 }
 
 fn addFile(
