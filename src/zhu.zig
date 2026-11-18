@@ -19,6 +19,22 @@ const platform = @import("internal/platform.zig");
 pub const key = window.key;
 pub const mouse = window.mouse;
 
+pub const music = struct {
+    pub const play = audio.playMusic;
+    pub const playOption = audio.playMusicOption;
+    pub const pause = audio.pauseMusic;
+    pub const unpause = audio.resumeMusic;
+    pub const @"resume" = audio.resumeMusic;
+    pub const stop = audio.stopMusic;
+    pub const getState = audio.getMusicState;
+};
+
+pub const sound = struct {
+    pub const play = audio.playSound;
+    pub const playOption = audio.playSoundOption;
+    pub const stopAll = audio.stopSounds;
+};
+
 pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
     pub const widget = @import("extend/widget.zig");

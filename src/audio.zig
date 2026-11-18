@@ -33,7 +33,7 @@ pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
 
 pub fn deinit() void {
     if (!sk.audio.isvalid()) return;
-    setMusicState(.stopped);
+    stopMusic(0);
     stopSounds();
     sk.audio.shutdown();
 }
@@ -57,9 +57,15 @@ pub fn changeSoundVolume(amount: f32) void {
 }
 
 pub var musicVolume: std.atomic.Value(f32) = .init(1);
-var music: Music = .{ .state = .stopped };
+var music: struct {
+    pending: ?MusicRequest = null, // 等待音源或切换时机的最新请求。
+    current: ?Music = null, // 当前曲目，停止后仍保留。
+    fading: ?Music = null, // 交叉淡化期间仍在播放的旧曲。
+    stopping: ?Fade = null, // 停止时，对新旧曲混合后的输出一起淡出。
+    paused: bool = false, // 冻结两首曲目的播放位置和淡化进度。
+} = .{};
 
-pub const StateEnum = enum { playing, paused, stopped };
+pub const MusicState = enum { pending, playing, paused, stopped };
 
 /// 统一管理音乐解码器，格式选择和编译期开关只在此处处理。
 pub const MusicSource = struct {
@@ -117,42 +123,166 @@ pub const MusicSource = struct {
     }
 };
 
-pub const Music = struct {
-    source: ?MusicSource = null,
-    assetId: ?assets.Id = null,
-    state: StateEnum = .playing,
+const Music = struct {
+    source: MusicSource,
+    assetId: assets.Id,
+    playing: bool = true,
     loop: bool = true,
+    fade: ?Fade = null,
+};
+
+// 请求只保存时长（帧数），开始淡化时才创建可递减的进度。
+const MusicRequest = struct {
+    source: ?MusicSource,
+    assetId: assets.Id,
+    loop: bool,
+    fadeIn: u64,
+    fadeOut: u64,
+    immediate: bool,
+};
+
+// 总帧数用于计算增益，剩余帧数随混音推进。
+const Fade = struct { frames: u64, remaining: u64 };
+pub const MusicOption = struct {
+    loop: bool = true,
+    fadeIn: f32 = 0, // 新曲淡入时长，单位为秒。
+    fadeOut: f32 = 0, // 切歌时旧曲的淡出时长，单位为秒。
+    immediate: bool = false, // 新曲就绪即接管，跳过旧曲淡出。
 };
 
 pub fn playMusic(path: []const u8) void {
-    playMusicOption(path, true);
+    playMusicOption(path, .{});
 }
 
-pub fn playMusicOption(path: []const u8, loop: bool) void {
+/// 新曲就绪后切换，重播正在播放的同曲时直接从头播放。
+pub fn playMusicOption(path: []const u8, option: MusicOption) void {
     if (!sk.audio.isvalid()) return;
+    const fadeIn = fadeFrames(option.fadeIn);
+    const fadeOut = if (option.immediate) 0 else fadeFrames(option.fadeOut);
+
     const assetId = assets.id(path);
     const source = assets.music.load(path, musicLoaded);
 
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
 
-    if (source) |value| value.reset();
-    music = .{ .source = source, .assetId = assetId, .loop = loop };
+    if (music.paused and !option.immediate) finishMusic();
+    music.pending = .{
+        .source = source,
+        .assetId = assetId,
+        .loop = option.loop,
+        .fadeIn = fadeIn,
+        .fadeOut = fadeOut,
+        .immediate = option.immediate,
+    };
+    if (option.immediate) startPendingMusic();
 }
 
 fn musicLoaded(assetId: assets.Id, source: MusicSource) void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
-    if (music.assetId != assetId) return;
-
-    source.reset();
-    music.source = source;
+    if (music.pending) |*request| {
+        if (request.assetId != assetId) return;
+        request.source = source;
+        if (request.immediate) startPendingMusic();
+    }
 }
 
-pub fn setMusicState(state: StateEnum) void {
+fn startPendingMusic() void {
+    const request = music.pending orelse return;
+    const source = request.source orelse return;
+    if (request.immediate) {
+        finishMusic();
+    } else if (music.stopping != null) return;
+
+    const current = music.current;
+    const id = request.assetId;
+    // 播放中的同曲共用一个解码器，直接复位重播。
+    const same = if (current) |track| track.playing and track.assetId == id else false;
+    const fade = !same and (request.fadeIn != 0 or request.fadeOut != 0);
+    const entering = if (current) |track| track.fade != null else false;
+    // 上一次淡入或淡出仍在进行时，新的渐变请求继续等待。
+    if (fade and (entering or music.fading != null)) return;
+
+    music.fading = null;
+    if (current) |track| {
+        if (fade and request.fadeOut != 0 and track.playing) {
+            music.fading = track;
+            music.fading.?.fade = newFade(request.fadeOut);
+        }
+    }
+    source.reset();
+    music.current = .{
+        .source = source,
+        .assetId = id,
+        .loop = request.loop,
+        .fade = if (fade and request.fadeIn != 0) newFade(request.fadeIn) else null,
+    };
+    music.pending = null;
+}
+
+pub fn pauseMusic() void {
+    setMusicPaused(true);
+}
+
+pub fn resumeMusic() void {
+    setMusicPaused(false);
+}
+
+fn setMusicPaused(value: bool) void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
-    music.state = state;
+    const state = musicState();
+    music.paused = value and state != null and state != .stopped;
+}
+
+/// 取消待播请求，淡化时长以秒为单位。
+pub fn stopMusic(fade: f32) void {
+    const frames = if (fade == 0) 0 else fadeFrames(fade);
+    mutex.lockUncancelable(assets.io);
+    defer mutex.unlock(assets.io);
+    music.pending = null;
+    if (frames != 0 and musicState() == .playing) {
+        if (music.stopping == null) music.stopping = newFade(frames);
+    } else finishMusic();
+}
+
+/// 返回整个音乐播放流程的状态快照。
+pub fn getMusicState() ?MusicState {
+    mutex.lockUncancelable(assets.io);
+    defer mutex.unlock(assets.io);
+    return musicState();
+}
+
+fn musicState() ?MusicState {
+    if (music.paused) return .paused;
+    if (music.current) |track| {
+        if (track.playing or music.fading != null or music.stopping != null) {
+            return .playing;
+        }
+    }
+    if (music.pending != null) return .pending;
+    return if (music.current != null) .stopped else null;
+}
+
+fn finishMusic() void {
+    if (music.current) |*track| {
+        track.playing = false;
+        track.fade = null;
+    }
+    music.fading = null;
+    music.stopping = null;
+    music.paused = false;
+}
+
+fn fadeFrames(seconds: f32) u64 {
+    std.debug.assert(seconds >= 0 and std.math.isFinite(seconds));
+    const rate: f64 = @floatFromInt(sk.audio.sampleRate());
+    return @intFromFloat(@round(rate * seconds));
+}
+
+fn newFade(frames: u64) Fade {
+    return .{ .frames = frames, .remaining = frames };
 }
 
 pub const Sound = struct {
@@ -226,25 +356,98 @@ export fn audioCallback(b: [*c]f32, frames: i32, channels: i32) void {
     mutex.lockUncancelable(assets.io);
     defer mutex.unlock(assets.io);
 
-    if (music.state == .playing) fillMusic(buffer, channels);
+    fillMusic(buffer, @intCast(channels));
     fillSound(buffer);
 }
 
-fn fillMusic(buffer: []f32, channels: i32) void {
-    const source = music.source orelse return;
-    // 先处理音乐，目前只支持播放一个音乐。
-    const volume = musicVolume.load(.acquire);
-    var len: usize = 0; // 存储填充的长度
-    // 因为有可能循环播放，所以循环添加，直到缓冲区填满。
-    while (music.state == .playing) {
-        const count = source.fillSamples(buffer[len..], channels);
-        len += @as(usize, @intCast(count * channels));
-
-        if (len == buffer.len) break;
-        if (music.loop) source.reset() else music.state = .stopped;
+fn fillMusic(buffer: []f32, channels: usize) void {
+    if (music.paused) return;
+    if (music.stopping) |*fade| {
+        const frames: usize = @intCast(@min(fade.remaining, buffer.len / channels));
+        const len = frames * channels;
+        mixMusic(buffer[0..len], channels);
+        for (0..frames) |frame| {
+            const gain = fadeGain(fade.*, frame);
+            const offset = frame * channels;
+            for (buffer[offset..][0..channels]) |*sample| sample.* *= gain;
+        }
+        fade.remaining -= frames;
+        if (fade.remaining == 0) finishMusic();
+        // 淡出完成后，可用缓冲区剩余帧播放新曲。
+        if (len < buffer.len) mixMusic(buffer[len..], channels);
+        return;
     }
-    // 填充音乐完成，设置音乐的音量
-    for (buffer[0..len]) |*sample| sample.* *= volume;
+    mixMusic(buffer, channels);
+}
+
+fn fadeGain(fade: Fade, frame: usize) f32 {
+    const total: f32 = @floatFromInt(fade.frames);
+    const remaining: f32 = @floatFromInt(fade.remaining - frame);
+    return remaining / total;
+}
+
+fn mixMusic(buffer: []f32, channels: usize) void {
+    const volume = musicVolume.load(.acquire);
+    var scratch: [512]f32 = undefined;
+    var rest = buffer;
+    while (rest.len != 0) {
+        startPendingMusic();
+        const track = if (music.current) |*value| value else return;
+        const previous = if (music.fading) |*old| old else null;
+        const incoming = if (track.fade) |fade| fade.remaining else 0;
+        const outgoing = if (previous) |old| old.fade.?.remaining else 0;
+        const transition = @max(incoming, outgoing);
+        if (transition == 0) {
+            const len = readMusic(track, rest, channels);
+            for (rest[0..len]) |*sample| sample.* *= volume;
+            return;
+        }
+
+        const limit = @min(rest.len, scratch.len) / channels;
+        const frames: usize = @intCast(@min(transition, limit));
+        const len = frames * channels;
+        const next = rest[0..len];
+        _ = readMusic(track, next, channels);
+        applyTrackFade(track, next, channels, false);
+
+        if (previous) |old| {
+            const oldFrames: usize = @intCast(@min(outgoing, frames));
+            const tail = scratch[0 .. oldFrames * channels];
+            @memset(tail, 0);
+            _ = readMusic(old, tail, channels);
+            applyTrackFade(old, tail, channels, true);
+            for (next[0..tail.len], tail) |*sample, fading| sample.* += fading;
+            if (old.fade == null) music.fading = null;
+        }
+        for (next) |*sample| sample.* *= volume;
+        rest = rest[len..];
+    }
+}
+
+fn applyTrackFade(track: *Music, buffer: []f32, channels: usize, out: bool) void {
+    const fade = if (track.fade) |*value| value else return;
+    const frames: usize = @intCast(@min(fade.remaining, buffer.len / channels));
+    for (0..frames) |frame| {
+        const remaining = fadeGain(fade.*, frame);
+        const gain = if (out) remaining else 1 - remaining;
+        const offset = frame * channels;
+        for (buffer[offset..][0..channels]) |*sample| sample.* *= gain;
+    }
+    fade.remaining -= frames;
+    if (fade.remaining == 0 or !track.playing) track.fade = null;
+}
+
+fn readMusic(track: *Music, buffer: []f32, channels: usize) usize {
+    const source = track.source;
+    const countChannels: i32 = @intCast(channels);
+    var len: usize = 0;
+    while (track.playing) {
+        const frames = source.fillSamples(buffer[len..], countChannels);
+        len += @as(usize, @intCast(frames)) * channels;
+        if (len == buffer.len) break;
+        if (track.loop) source.reset() else track.playing = false;
+    }
+    return len;
 }
 
 fn fillSound(buffer: []f32) void {
