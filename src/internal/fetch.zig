@@ -32,14 +32,17 @@ pub const Response = struct {
     path: [:0]const u8,
     content: union(Kind) {
         bytes: []const u8,
-        zlib: []const u8, // 解压后的字节，回调结束后释放。
+        zlib: []const u8,
         image: image.Image,
-        sound: vorbis.Sound, // 解码后的 PCM，回调时移交所有权。
+        sound: vorbis.Sound,
     } = .{ .bytes = &.{} },
 };
 pub const Kind = enum { bytes, zlib, image, sound };
 pub const Option = struct {
     kind: Kind = .bytes,
+    // 成功回调结束后释放自己拥有的结果；false 时由接收方负责释放。
+    // 包内 bytes 仍是借用数据，由资源包管理。
+    free: bool = true,
 };
 const Handler = *const fn (u64, Response) void;
 const Request = struct {
@@ -95,10 +98,12 @@ pub fn init(fileIo: std.Io, gpa_: std.mem.Allocator, pack_: ?Pack) void {
             std.debug.panic("asset pack init failed: {}", .{err});
         };
     }
-    const zlib = (pack_ orelse return).zlibSize != null;
-    const option: Option = .{ .kind = if (zlib) .zlib else .bytes };
-    load(pack_.?.path, 0, packLoaded, option);
-    pack = pack_;
+    const cfg = pack_ orelse return;
+    load(cfg.path, 0, packLoaded, .{
+        .kind = if (cfg.zlibSize != null) .zlib else .bytes,
+        .free = false,
+    });
+    pack = cfg;
 }
 
 fn packLoaded(_: u64, response: Response) void {
@@ -215,10 +220,7 @@ pub fn update() void {
             };
             std.log.info("loaded: {s}", .{path});
             request.handler(request.index, response);
-            if (request.option.kind == .sound or request.handler == packLoaded) {
-                slot.needsFree = false; // 音效和包数据移交所有权。
-            }
-            slot.freeResult();
+            if (request.option.free) slot.freeResult();
             gpa.free(path);
             slot.state.store(.idle, .release);
             needWake = true;

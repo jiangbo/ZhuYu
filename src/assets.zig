@@ -449,7 +449,7 @@ pub const sound = struct {
                 cache.getPtr(loadedId).?.* = source;
                 handler(loadedId, source);
             }
-        }.callback, .{ .kind = .sound });
+        }.callback, .{ .kind = .sound, .free = false });
         return cache.get(assetId).?;
     }
 };
