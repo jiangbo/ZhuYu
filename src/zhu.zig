@@ -40,6 +40,7 @@ pub const extend = struct {
     pub const widget = @import("extend/widget.zig");
     pub const bag = @import("extend/bag.zig");
     pub const touch = @import("extend/touch.zig");
+    pub const grid = @import("extend/grid.zig");
     pub const tiled = @import("extend/tiled.zig");
 };
 
@@ -171,5 +172,6 @@ test "compile zhu modules" {
     std.testing.refAllDecls(storage);
     std.testing.refAllDecls(extend.touch);
     std.testing.refAllDecls(extend.touch.stick);
+    std.testing.refAllDecls(extend.grid);
     std.testing.refAllDecls(extend.tiled);
 }
