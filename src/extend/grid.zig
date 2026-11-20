@@ -364,42 +364,28 @@ pub fn OwnerGrid(comptime Id: type, comptime empty: Id) type {
 /// 静态网格索引，按格子返回候选矩形下标的连续切片。
 pub const StaticIndex = struct {
     offsets: []u32,
+    /// 完整分配的编号缓冲区，建表后 offsets 的最后一项表示有效数量。
     ids: []u32,
 
     /// 按 rects 的下标建立静态网格索引，忽略宽或高为 0 的空矩形。
+    /// 同格内按下标升序排列。
     /// 不保存矩形数据；矩形移动、扩大或 rects 重排后需重建索引。
     pub fn build(gpa: Allocator, grid: Grid, rects: []const Rect) !StaticIndex {
-        // 1. 分配格子偏移表，多留一位存总长度。
-        const count = grid.count();
-        const offsets = try gpa.alloc(u32, count + 1);
+        const offsets = try gpa.alloc(u32, grid.count() + 1);
         errdefer gpa.free(offsets);
         @memset(offsets, 0);
-
-        // 2. 统计每个格子被多少个矩形覆盖。
         for (rects) |rect| {
-            var iter = grid.indicesInRect(rect);
-            while (iter.next()) |index| offsets[index] += 1;
+            var cells = grid.indicesInRect(rect);
+            while (cells.next()) |index| offsets[index] += 1;
         }
-
-        // 3. 前缀累加，原地算出每个格子的结束位置。
-        var total: u32 = 0;
-        for (offsets[0..count]) |*end| {
-            total += end.*;
-            end.* = total;
-        }
-        offsets[count] = total;
-
-        // 4. 从每格末尾往前填入下标；倒序遍历 rects 使同格内保持升序。
+        const total = startOffsets(offsets);
         const ids = try gpa.alloc(u32, total);
-        var i = rects.len;
-        while (i > 0) {
-            i -= 1;
-            var iter = grid.indicesInRect(rects[i]);
-            while (iter.next()) |index| {
-                offsets[index] -= 1;
-                ids[offsets[index]] = @intCast(i);
-            }
+        for (rects, 0..) |rect, id| {
+            fillRectIds(grid, rect, @intCast(id), offsets, ids);
         }
+        // 填表后游标是各格的结束位置，右移一项恢复起始位置。
+        std.mem.copyBackwards(u32, offsets[1..], offsets[0 .. offsets.len - 1]);
+        offsets[0] = 0;
         return .{ .offsets = offsets, .ids = ids };
     }
 
@@ -409,134 +395,103 @@ pub const StaticIndex = struct {
         self.* = undefined;
     }
 
-    /// 返回指定格子的候选矩形下标，按升序排列，不进行精确相交检测。
+    /// 返回指定格子的候选编号，不进行精确相交检测。
     /// 跨格查询可能重复返回同一下标，切片有效期到索引释放为止。
     pub fn idsAt(self: StaticIndex, index: usize) []const u32 {
         return self.ids[self.offsets[index]..self.offsets[index + 1]];
     }
 };
 
-pub fn Scan(comptime T: type) type {
-    return struct {
-        dest: f32 = 0,
-        touch: f32 = 0,
-        state: State = .{},
+/// 按 clear、countRect、prepare、add、finish 的顺序重建网格索引。
+/// 两遍遍历须提供相同的矩形；不保存矩形，各次调用使用同一分配器。
+pub const DynamicIndex = struct {
+    grid: Grid,
+    index: StaticIndex,
+    phase: Phase = .counting,
 
-        const State = struct {
-            data: []const T = &.{},
-            index: i32 = 0,
-            remaining: u32 = 0,
-            step: i32 = 1,
-        };
+    const Phase = enum { counting, filling, ready };
 
-        pub fn reversed(self: @This()) @This() {
-            var scan = self;
-            if (scan.state.remaining > 0) {
-                const last: i32 = @intCast(scan.state.remaining - 1);
-                scan.state.index += last * scan.state.step;
-                scan.state.step = -scan.state.step;
-            }
-            return scan;
+    /// 为固定网格分配偏移表，初始即可计数；空表也需 prepare、finish 后查询。
+    pub fn init(gpa: Allocator, grid: Grid) !DynamicIndex {
+        const offsets = try gpa.alloc(u32, grid.count() + 1);
+        @memset(offsets, 0);
+        return .{ .grid = grid, .index = .{ .offsets = offsets, .ids = &.{} } };
+    }
+
+    pub fn deinit(self: *DynamicIndex, gpa: Allocator) void {
+        self.index.deinit(gpa);
+        self.* = undefined;
+    }
+
+    /// 开始新一轮，清空计数和查询结果，保留编号容量。
+    pub fn clear(self: *DynamicIndex) void {
+        @memset(self.index.offsets, 0);
+        self.phase = .counting;
+    }
+
+    /// 第一遍只统计每格数量。宽高非负，空矩形忽略，范围按网格裁剪。
+    pub fn countRect(self: *DynamicIndex, rect: Rect) void {
+        std.debug.assert(self.phase == .counting);
+        var cells = self.grid.indicesInRect(rect);
+        while (cells.next()) |index| self.index.offsets[index] += 1;
+    }
+
+    /// 计数完成后准备填表空间，仅容量不足时扩容，每轮成功调用一次。
+    /// 失败时保留计数和已有容量，可以直接重试，但不能查询。
+    pub fn prepare(self: *DynamicIndex, gpa: Allocator) !void {
+        std.debug.assert(self.phase == .counting);
+        const index = &self.index;
+        var total: u32 = 0;
+        for (index.offsets) |count| total += count;
+        if (total > index.ids.len) {
+            var ids = std.ArrayList(u32).fromOwnedSlice(index.ids);
+            ids.items.len = 0;
+            try ids.ensureTotalCapacity(gpa, total);
+            index.ids = ids.allocatedSlice();
         }
+        _ = startOffsets(index.offsets);
+        self.phase = .filling;
+    }
 
-        pub fn next(self: *@This()) ?T {
-            if (self.state.remaining == 0) return null;
+    /// prepare 成功后进行第二遍登记，直接写入调用方 ID，不分配内存。
+    pub fn add(self: *DynamicIndex, id: u32, rect: Rect) void {
+        std.debug.assert(self.phase == .filling);
+        fillRectIds(self.grid, rect, id, self.index.offsets, self.index.ids);
+    }
 
-            const index = self.state.index;
-            self.state.index += self.state.step;
-            self.state.remaining -= 1;
+    /// 全部 ID 填入后结束本轮构建，此后才能查询。
+    pub fn finish(self: *DynamicIndex) void {
+        std.debug.assert(self.phase == .filling);
+        const offsets = self.index.offsets;
+        // 填表后游标是各格的结束位置，右移一项恢复起始位置。
+        std.mem.copyBackwards(u32, offsets[1..], offsets[0 .. offsets.len - 1]);
+        offsets[0] = 0;
+        self.phase = .ready;
+    }
 
-            std.debug.assert(index >= 0);
-            const i: usize = @intCast(index);
-            std.debug.assert(i < self.state.data.len);
-            return self.state.data[i];
-        }
-    };
+    /// 仅在 finish 后查询，按 add 顺序返回候选 ID，不做精确检测。
+    /// 跨格或重复登记可能返回重复 ID；下次 clear 或释放后切片失效。
+    pub fn idsAt(self: DynamicIndex, index: usize) []const u32 {
+        std.debug.assert(self.phase == .ready);
+        return self.index.idsAt(index);
+    }
+};
+
+// 将每格数量变成起始位置，最后一项保存编号总数。
+fn startOffsets(offsets: []u32) u32 {
+    var total: u32 = 0;
+    for (offsets) |*offset| {
+        const count = offset.*;
+        offset.* = total;
+        total += count;
+    }
+    return total;
 }
 
-pub fn Field(comptime T: type) type {
-    return struct {
-        grid: Grid,
-        data: []const T = &.{},
-
-        const Self = @This();
-        pub const TileScan = Scan(T);
-
-        const Range = struct { first: i32 = 0, count: u32 = 0 };
-
-        pub fn tileAt(self: *const Self, cell: Cell) ?T {
-            const index = self.grid.cellToIndex(cell) orelse return null;
-            return self.data[index];
-        }
-
-        /// 扫描 X 轴移动后的前沿瓦片，返回顺序固定为从上到下
-        pub fn scanX(self: *const Self, rect: Rect, dx: f32) TileScan {
-            const dest = rect.min.x + dx;
-            if (dx == 0) return .{ .dest = dest };
-
-            const size: f32 = @floatFromInt(self.grid.cell);
-            const r0: i32 = @intFromFloat(@floor(rect.min.y / size));
-            const bottom = rect.min.y + rect.size.y;
-            const r1: i32 = @intFromFloat(@ceil(bottom / size) - 1);
-            const rows = clipRange(r0, r1, self.grid.height);
-
-            var cellX = @floor(dest / size);
-            if (dx > 0) cellX = @ceil((dest + rect.size.x) / size) - 1;
-            const col: i32 = @intFromFloat(cellX);
-
-            var touch = (cellX + 1) * size;
-            if (dx > 0) touch = cellX * size - rect.size.x;
-
-            const outside = col < 0 or col >= self.grid.width;
-            if (outside) return .{ .dest = dest, .touch = touch };
-
-            const width = self.grid.width;
-            return .{ .dest = dest, .touch = touch, .state = .{
-                .data = self.data,
-                .index = rows.first * width + col,
-                .remaining = rows.count,
-                .step = width,
-            } };
-        }
-
-        /// 扫描 Y 轴移动后的前沿瓦片，返回顺序固定为从左到右
-        pub fn scanY(self: *const Self, rect: Rect, dy: f32) TileScan {
-            const dest = rect.min.y + dy;
-            if (dy == 0) return .{ .dest = dest };
-
-            const size: f32 = @floatFromInt(self.grid.cell);
-            const c0: i32 = @intFromFloat(@floor(rect.min.x / size));
-            const right = rect.min.x + rect.size.x;
-            const c1: i32 = @intFromFloat(@ceil(right / size) - 1);
-            const cols = clipRange(c0, c1, self.grid.width);
-
-            var cellY = @floor(dest / size);
-            if (dy > 0) cellY = @ceil((dest + rect.size.y) / size) - 1;
-            const row: i32 = @intFromFloat(cellY);
-
-            var touch = (cellY + 1) * size;
-            if (dy > 0) touch = cellY * size - rect.size.y;
-
-            const outside = row < 0 or row >= self.grid.height;
-            if (outside) return .{ .dest = dest, .touch = touch };
-
-            const width = self.grid.width;
-            return .{ .dest = dest, .touch = touch, .state = .{
-                .data = self.data,
-                .index = row * width + cols.first,
-                .remaining = cols.count,
-            } };
-        }
-
-        fn clipRange(first: i32, last: i32, limit: i32) Range {
-            const clippedFirst = @max(first, 0);
-            const clippedLast = @min(last, limit - 1);
-            if (clippedFirst > clippedLast) return .{};
-
-            return .{
-                .first = clippedFirst,
-                .count = @intCast(clippedLast - clippedFirst + 1),
-            };
-        }
-    };
+fn fillRectIds(grid: Grid, rect: Rect, id: u32, offsets: []u32, ids: []u32) void {
+    var cells = grid.indicesInRect(rect);
+    while (cells.next()) |index| {
+        ids[offsets[index]] = id;
+        offsets[index] += 1;
+    }
 }
