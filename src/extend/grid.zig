@@ -325,6 +325,42 @@ pub const RectIter = struct {
     }
 };
 
+/// 每格保留首个对象 ID，empty 是不能用于登记的空值。
+/// 借用调用方的固定缓冲区，不分配内存；格子下标由 Grid 提供。
+pub fn OwnerGrid(comptime Id: type, comptime empty: Id) type {
+    return struct {
+        ids: []Id,
+
+        const Self = @This();
+
+        /// 清空并借用 ids；长度应为配套 Grid 的 count，存储由调用方管理。
+        pub fn init(ids: []Id) Self {
+            var self = Self{ .ids = ids };
+            self.clear();
+            return self;
+        }
+
+        pub fn clear(self: *Self) void {
+            @memset(self.ids, empty);
+        }
+
+        /// 空格写入 id 并返回 null；已占用时返回首个 ID，不覆盖它。
+        /// 重复登记同一个 ID 也返回该 ID，共格关系由调用方处理。
+        pub fn claim(self: *Self, index: usize, id: Id) ?Id {
+            std.debug.assert(id != empty);
+            if (self.get(index)) |owner| return owner;
+            self.ids[index] = id;
+            return null;
+        }
+
+        /// 返回指定格子的首个 ID，空格返回 null。
+        pub fn get(self: Self, index: usize) ?Id {
+            const id = self.ids[index];
+            return if (id == empty) null else id;
+        }
+    };
+}
+
 /// 静态网格索引，按格子返回候选矩形下标的连续切片。
 pub const StaticIndex = struct {
     offsets: []u32,
