@@ -101,6 +101,18 @@ pub const Grid = struct {
         return self.indicesInCells(rawMin, Cell.fromVector(last));
     }
 
+    /// 遍历 rect 沿 move 平移的包围范围，返回候选格子下标。
+    /// 宽高必须非负；包含仅接触边界的格子，并按地图边界裁剪。
+    pub fn indicesInSweep(self: Grid, rect: Rect, move: Vector2) IndexIter {
+        std.debug.assert(rect.size.x >= 0 and rect.size.y >= 0);
+        const end = rect.move(move);
+        const min = rect.min.min(end.min);
+        const max = rect.max().max(end.max());
+        const first = min.div(self.cellSize()).ceil().sub(.one);
+        const last = self.worldToCell(max);
+        return self.indicesInCells(Cell.fromVector(first), last);
+    }
+
     // 按网格边界裁剪，min 和 max 均包含在遍历范围内。
     fn indicesInCells(self: Grid, min: Cell, max: Cell) IndexIter {
         const first = Cell{ .x = @max(min.x, 0), .y = @max(min.y, 0) };
@@ -254,17 +266,9 @@ pub const SolidMask = struct {
     /// 允许沿边滑动和相切；初始重叠时允许朝最近的边界退开。
     /// 网格外不阻挡；只查询接触，不修改形状或计算滑墙位移。
     pub fn sweep(self: SolidMask, body: Shape, move: Vector2) ?Contact {
-        const bounds = body.toRect();
-        const end = bounds.move(move);
-        const min = bounds.min.min(end.min);
-        const max = bounds.max().max(end.max());
-        // 闭区间包含两端相邻格，保证正反方向的终点接触都进入候选。
-        const first = min.div(self.grid.cellSize()).ceil().sub(.one);
-        const last = self.grid.worldToCell(max);
-
         const isRect = std.meta.activeTag(body) == .rect;
         var best: ?Contact = null;
-        var iter = self.grid.indicesInCells(Cell.fromVector(first), last);
+        var iter = self.grid.indicesInSweep(body.toRect(), move);
         while (iter.next()) |index| {
             if (!self.bits.isSet(index)) continue;
             const tile = Shape{ .rect = self.grid.indexToRect(index) };
