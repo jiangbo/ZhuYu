@@ -10,8 +10,28 @@ pub const Cell = struct {
     x: i32,
     y: i32,
 
-    pub fn xy(x: i32, y: i32) Cell {
-        return .{ .x = x, .y = y };
+    /// 各分量向零截断，不进行网格坐标换算。
+    pub fn fromVector(v: Vector2) Cell {
+        return .{ .x = @intFromFloat(v.x), .y = @intFromFloat(v.y) };
+    }
+};
+
+pub const IndexIter = struct {
+    width: i32 = 0,
+    min: Cell = .{ .x = 0, .y = 0 },
+    max: Cell = .{ .x = -1, .y = -1 },
+    current: Cell = .{ .x = 0, .y = 0 },
+
+    pub fn next(self: *IndexIter) ?usize {
+        if (self.current.y > self.max.y) return null;
+
+        const i = self.current.y * self.width + self.current.x;
+        self.current.x += 1;
+        if (self.current.x > self.max.x) {
+            self.current.x = self.min.x;
+            self.current.y += 1;
+        }
+        return @intCast(i);
     }
 };
 
@@ -39,8 +59,7 @@ pub const Grid = struct {
     }
 
     pub fn worldToCell(self: Grid, world: Vector2) Cell {
-        const grid = world.div(self.cellSize()).floor();
-        return .xy(@intFromFloat(grid.x), @intFromFloat(grid.y));
+        return Cell.fromVector(world.div(self.cellSize()).floor());
     }
 
     pub fn worldToIndex(self: Grid, world: Vector2) ?usize {
@@ -70,43 +89,29 @@ pub const Grid = struct {
         return .init(self.indexToWorld(index), self.cellSize());
     }
 
-    pub const IndexIter = struct {
-        width: i32 = 0,
-        min: Cell = .xy(0, 0),
-        max: Cell = .xy(-1, -1),
-        current: Cell = .xy(0, 0),
-
-        pub fn next(self: *IndexIter) ?usize {
-            if (self.current.y > self.max.y) return null;
-
-            const i = self.current.y * self.width + self.current.x;
-            self.current.x += 1;
-            if (self.current.x > self.max.x) {
-                self.current.x = self.min.x;
-                self.current.y += 1;
-            }
-            return @intCast(i);
-        }
-    };
-
     /// 遍历矩形 [min, max) 覆盖的格子下标，按地图边界裁剪。
+    /// 宽高必须非负；宽或高为 0 时返回空迭代器。
     pub fn indicesInRect(self: Grid, rect: Rect) IndexIter {
-        std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
+        std.debug.assert(rect.size.x >= 0 and rect.size.y >= 0);
+        if (rect.size.x == 0 or rect.size.y == 0) return .{};
+        return self.indicesInBounds(rect.min, rect.max());
+    }
 
-        const rawMin = self.worldToCell(rect.min);
-        const last = rect.max().div(self.cellSize()).ceil().sub(.one);
-        const rawMax = Cell.xy(@intFromFloat(last.x), @intFromFloat(last.y));
+    fn indicesInBounds(self: Grid, min: Vector2, max: Vector2) IndexIter {
+        const rawMin = self.worldToCell(min);
+        const last = max.div(self.cellSize()).ceil().sub(.one);
+        const rawMax = Cell.fromVector(last);
 
-        const min = Cell.xy(@max(rawMin.x, 0), @max(rawMin.y, 0));
+        const first = Cell{ .x = @max(rawMin.x, 0), .y = @max(rawMin.y, 0) };
         const maxX = @min(rawMax.x, self.width - 1);
         const maxY = @min(rawMax.y, self.height - 1);
-        if (min.x > maxX or min.y > maxY) return .{};
+        if (first.x > maxX or first.y > maxY) return .{};
 
         return .{
             .width = self.width,
-            .min = min,
-            .max = .xy(maxX, maxY),
-            .current = min,
+            .min = first,
+            .max = .{ .x = maxX, .y = maxY },
+            .current = first,
         };
     }
 };
@@ -116,7 +121,7 @@ pub const StaticIndex = struct {
     offsets: []u32,
     ids: []u32,
 
-    /// 按 rects 的下标建立静态网格索引，忽略宽高非正的空矩形。
+    /// 按 rects 的下标建立静态网格索引，忽略宽或高为 0 的空矩形。
     pub fn build(gpa: Allocator, grid: Grid, rects: []const Rect) !StaticIndex {
         // 1. 分配格子偏移表，多留一位存总长度。
         const count = grid.count();
@@ -126,7 +131,6 @@ pub const StaticIndex = struct {
 
         // 2. 统计每个格子被多少个矩形覆盖。
         for (rects) |rect| {
-            if (rect.size.x <= 0 or rect.size.y <= 0) continue;
             var iter = grid.indicesInRect(rect);
             while (iter.next()) |index| offsets[index] += 1;
         }
@@ -144,9 +148,7 @@ pub const StaticIndex = struct {
         var i = rects.len;
         while (i > 0) {
             i -= 1;
-            const rect = rects[i];
-            if (rect.size.x <= 0 or rect.size.y <= 0) continue;
-            var iter = grid.indicesInRect(rect);
+            var iter = grid.indicesInRect(rects[i]);
             while (iter.next()) |index| {
                 offsets[index] -= 1;
                 ids[offsets[index]] = @intCast(i);
