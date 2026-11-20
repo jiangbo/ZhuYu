@@ -424,6 +424,30 @@ pub const Rect = extern struct {
         if (minX <= minY) return .xy(if (left <= right) -left else right, 0);
         return .xy(0, if (up <= down) -up else down);
     }
+
+    /// 查询从 start 到 start + offset 的线段，起点在形状内或边界上时返回 0。
+    pub fn rayCast(self: Rect, start: Vector2, offset: Vector2) ?f32 {
+        const end = self.max();
+        const hit = castRect(start, offset, self.min, end, true) orelse return null;
+        return hit.fraction;
+    }
+
+    /// self 沿 offset 平移，other 固定。
+    /// 允许沿边滑动和相切。重叠时允许朝最近的边界退开。
+    pub fn sweep(self: Rect, other: anytype, offset: Vector2) ?Hit {
+        const T = @TypeOf(other);
+        if (T == Rect) {
+            // 目标向左上扩张后，只需扫移动矩形的左上角。
+            const min = other.min.sub(self.size);
+            return castRect(self.min, offset, min, other.max(), false);
+        }
+        if (T == Circle) {
+            // 交换移动方和目标后，位移和返回的法线都反向。
+            const hit = other.sweep(self, offset.neg()) orelse return null;
+            return .{ .fraction = hit.fraction, .normal = hit.normal.neg() };
+        }
+        @compileError("unsupported Rect.sweep type");
+    }
 };
 
 pub const Circle = struct {
@@ -480,7 +504,7 @@ pub const Circle = struct {
 
     fn separateRect(self: Circle, other: Rect) ?Vector2 {
         const radius = self.radius;
-        const closest = self.center.clamp(other.min, other.max());
+        const closest = other.closestPoint(self.center);
         const gap = self.center.sub(closest);
         const dist2 = gap.length2();
         if (dist2 > 0) {
@@ -500,6 +524,24 @@ pub const Circle = struct {
             return .xy(if (left <= right) -(left + radius) else right + radius, 0);
         }
         return .xy(0, if (up <= down) -(up + radius) else down + radius);
+    }
+
+    /// 查询从 start 到 start + offset 的线段，起点在形状内或边界上时返回 0。
+    pub fn rayCast(self: Circle, start: Vector2, offset: Vector2) ?f32 {
+        const hit = castCircle(start, offset, self, true) orelse return null;
+        return hit.fraction;
+    }
+
+    /// self 沿 offset 平移，other 固定。
+    /// 允许沿边滑动和相切。重叠时允许朝最近的边界退开。
+    pub fn sweep(self: Circle, other: anytype, offset: Vector2) ?Hit {
+        const T = @TypeOf(other);
+        if (T == Rect) return castRoundRect(self, offset, other);
+        if (T == Circle) {
+            const target = Circle.init(other.center, self.radius + other.radius);
+            return castCircle(self.center, offset, target, false);
+        }
+        @compileError("unsupported Circle.sweep type");
     }
 };
 
@@ -603,12 +645,11 @@ pub const Shape = union(enum) {
         };
     }
 
-    pub fn intersect(self: Shape, other: anytype) bool {
-        const isShape = (@TypeOf(other) == Shape);
+    pub fn intersect(self: Shape, other: Shape) bool {
         return switch (self) {
-            inline else => |a| if (isShape) switch (other) {
+            inline else => |a| switch (other) {
                 inline else => |b| a.intersect(b),
-            } else a.intersect(other),
+            },
         };
     }
 
@@ -621,182 +662,172 @@ pub const Shape = union(enum) {
         };
     }
 
-    pub const Hit = struct {
-        /// 首次接触占请求位移的比例，范围为 [0, 1]。
-        fraction: f32,
-        /// 从目标表面垂直朝外的单位向量。
-        normal: Vector2,
-    };
-
     /// 查询从 start 到 start + offset 的线段。
     /// 起点在形状内或边界上时返回 0。
     pub fn rayCast(self: Shape, start: Vector2, offset: Vector2) ?f32 {
-        const hit = switch (self) {
-            .rect => |r| castRect(start, offset, r.min, r.max(), true),
-            .circle => |c| castCircle(start, offset, c, true),
-        } orelse return null;
-        return hit.fraction;
+        return switch (self) {
+            inline else => |shape| shape.rayCast(start, offset),
+        };
     }
 
     /// self 沿 offset 平移，other 固定。
     /// 允许沿边滑动和相切。重叠时允许朝最近的边界退开。
     pub fn sweep(self: Shape, other: Shape, offset: Vector2) ?Hit {
         return switch (self) {
-            .rect => |a| switch (other) {
-                // 目标向左上扩张后，只需扫移动矩形的左上角。
-                .rect => |b| castRect(a.min, offset, b.min.sub(a.size), b.max(), false),
-                .circle => |b| {
-                    // 交换移动方和目标后，位移和返回的法线都反向。
-                    const hit = castRoundRect(b, offset.neg(), a) orelse return null;
-                    return .{ .fraction = hit.fraction, .normal = hit.normal.neg() };
-                },
-            },
-            .circle => |a| switch (other) {
-                .rect => |b| castRoundRect(a, offset, b),
-                .circle => |b| {
-                    const target = Circle.init(b.center, a.radius + b.radius);
-                    return castCircle(a.center, offset, target, false);
-                },
+            inline else => |a| switch (other) {
+                inline else => |b| a.sweep(b, offset),
             },
         };
-    }
-
-    // 求线段在矩形两轴区间内的共同时间范围。
-    fn castRect(
-        start: Vector2,
-        offset: Vector2,
-        min: Vector2,
-        max: Vector2,
-        comptime touch: bool,
-    ) ?Hit {
-        const within = start.x >= min.x and start.x <= max.x and
-            start.y >= min.y and start.y <= max.y;
-        if (touch and within) return .{ .fraction = 0, .normal = .zero };
-
-        const inside = start.x > min.x and start.x < max.x and
-            start.y > min.y and start.y < max.y;
-        if (inside) return overlapHit(exitNormal(start, offset, min, max), offset);
-
-        // 点必须同时落在两轴的范围内，所以取两个区间的交集。
-        var enter, var exit = .{ -std.math.inf(f64), std.math.inf(f64) };
-        var normal = Vector2.zero;
-        inline for (.{ "x", "y" }) |axis| check_axis: {
-            const origin: f64 = @field(start, axis);
-            const delta: f64 = @field(offset, axis);
-            const low: f64 = @field(min, axis);
-            const high: f64 = @field(max, axis);
-            // 这一轴没有位移，只需确认起点在范围内。
-            if (delta == 0) {
-                if (origin < low or origin > high) return null;
-                if (!touch and (origin == low or origin == high)) return null;
-                break :check_axis;
-            }
-
-            const a = (low - origin) / delta;
-            const b = (high - origin) / delta;
-            const near = @min(a, b);
-            // 较晚进入的一轴决定接触面，同时进入时选 X 轴。
-            if (near > enter) {
-                enter = near;
-                normal = .zero;
-                @field(normal, axis) = if (delta > 0) -1 else 1;
-            }
-            exit = @min(exit, @max(a, b));
-        }
-        if (enter < 0 or enter > 1 or enter > exit) return null;
-        if (!touch and enter == exit) return null;
-        return .{ .fraction = @floatCast(enter), .normal = normal };
-    }
-
-    fn castCircle(start: Vector2, offset: Vector2, circle: Circle, touch: bool) ?Hit {
-        const x = @as(f64, start.x) - circle.center.x;
-        const y = @as(f64, start.y) - circle.center.y;
-        const dx: f64, const dy: f64 = .{ offset.x, offset.y };
-        const radius: f64 = circle.radius;
-        const distance2 = x * x + y * y;
-        const outside = distance2 - radius * radius;
-        if (touch and outside <= 0) return .{ .fraction = 0, .normal = .zero };
-
-        const along = x * dx + y * dy;
-        if (outside < 0) {
-            if (along >= 0) return null;
-            const distance = @sqrt(distance2);
-            return .{
-                .fraction = 0,
-                .normal = .xy(@floatCast(x / distance), @floatCast(y / distance)),
-            };
-        }
-        if (along >= 0) return null;
-
-        const length2 = dx * dx + dy * dy;
-        const cross = x * dy - y * dx;
-        const disc = radius * radius * length2 - cross * cross;
-        if (disc < 0 or (!touch and disc == 0)) return null;
-
-        // 用等价的根式，避免起点贴近圆时两项相减丢失精度。
-        const fraction = outside / (-along + @sqrt(disc));
-        if (fraction > 1) return null;
-        const normal: Vector2 = if (radius == 0) .zero else .xy(
-            @floatCast((x + dx * fraction) / radius),
-            @floatCast((y + dy * fraction) / radius),
-        );
-        return .{ .fraction = @floatCast(fraction), .normal = normal };
-    }
-
-    fn castRoundRect(circle: Circle, offset: Vector2, rect: Rect) ?Hit {
-        const start = circle.center;
-        const min, const max = .{ rect.min, rect.max() };
-        const radius = circle.radius;
-        if (radius == 0) return castRect(start, offset, min, max, false);
-
-        const gap = start.sub(rect.closestPoint(start));
-        const distance2 = gap.length2();
-        if (distance2 < radius * radius) {
-            const pad = Vector2.all(radius);
-            const normal = if (distance2 > 0)
-                gap.scale(1 / @sqrt(distance2))
-            else
-                exitNormal(start, offset, min.sub(pad), max.add(pad));
-            return overlapHit(normal, offset);
-        }
-
-        // 扩出的圆角矩形是两条矩形带与四个角圆的并集。
-        const hits = [_]?Hit{
-            castRect(start, offset, min.addX(-radius), max.addX(radius), false),
-            castRect(start, offset, min.addY(-radius), max.addY(radius), false),
-            castCircle(start, offset, .init(min, radius), false),
-            castCircle(start, offset, .init(.xy(min.x, max.y), radius), false),
-            castCircle(start, offset, .init(.xy(max.x, min.y), radius), false),
-            castCircle(start, offset, .init(max, radius), false),
-        };
-        var first: ?Hit = null;
-        for (hits) |candidate| {
-            const hit = candidate orelse continue;
-            if (first == null or hit.fraction < first.?.fraction) first = hit;
-        }
-        return first;
-    }
-
-    fn exitNormal(start: Vector2, offset: Vector2, min: Vector2, max: Vector2) Vector2 {
-        const low, const high = .{ start.sub(min), max.sub(start) };
-        const nearest = @min(low.x, low.y, high.x, high.y);
-        // 等距时取和位移最接近的外法线。
-        var normal = Vector2.zero;
-        var best = -std.math.inf(f32);
-        for ([_]f32{ low.x, low.y, high.x, high.y }, [_]Vector2{
-            .xy(-1, 0), .xy(0, -1), .xy(1, 0), .xy(0, 1),
-        }) |distance, side| {
-            const along = offset.dot(side);
-            if (distance == nearest and along > best) {
-                best = along;
-                normal = side;
-            }
-        }
-        return normal;
-    }
-
-    fn overlapHit(normal: Vector2, offset: Vector2) ?Hit {
-        if (offset.dot(normal) >= 0) return null;
-        return .{ .fraction = 0, .normal = normal };
     }
 };
+
+pub const Hit = struct {
+    /// 首次接触占请求位移的比例，范围为 [0, 1]。
+    fraction: f32,
+    /// 从目标表面垂直朝外的单位向量。
+    normal: Vector2,
+};
+
+// 求线段在矩形两轴区间内的共同时间范围。
+fn castRect(
+    start: Vector2,
+    offset: Vector2,
+    min: Vector2,
+    max: Vector2,
+    comptime touch: bool,
+) ?Hit {
+    const within = start.x >= min.x and start.x <= max.x and
+        start.y >= min.y and start.y <= max.y;
+    if (touch and within) return .{ .fraction = 0, .normal = .zero };
+
+    const inside = start.x > min.x and start.x < max.x and
+        start.y > min.y and start.y < max.y;
+    if (inside) return overlapHit(exitNormal(start, offset, min, max), offset);
+
+    // 点必须同时落在两轴的范围内，所以取两个区间的交集。
+    var enter, var exit = .{ -std.math.inf(f64), std.math.inf(f64) };
+    var normal = Vector2.zero;
+    inline for (.{ "x", "y" }) |axis| check_axis: {
+        const origin: f64 = @field(start, axis);
+        const delta: f64 = @field(offset, axis);
+        const low: f64 = @field(min, axis);
+        const high: f64 = @field(max, axis);
+        // 这一轴没有位移，只需确认起点在范围内。
+        if (delta == 0) {
+            if (origin < low or origin > high) return null;
+            if (!touch and (origin == low or origin == high)) return null;
+            break :check_axis;
+        }
+
+        const a = (low - origin) / delta;
+        const b = (high - origin) / delta;
+        const near = @min(a, b);
+        const sign: f32 = if (delta > 0) -1 else 1;
+        // 较晚进入的一轴决定接触面，同时进入角点时合成对角法线。
+        if (near > enter) {
+            enter = near;
+            normal = .zero;
+            @field(normal, axis) = sign;
+        } else if (near == enter) @field(normal, axis) = sign;
+
+        exit = @min(exit, @max(a, b));
+    }
+    if (enter < 0 or enter > 1 or enter > exit) return null;
+    if (!touch and enter == exit) return null;
+    if (normal.x != 0 and normal.y != 0) normal = normal.scale(std.math.sqrt1_2);
+    return .{ .fraction = @floatCast(enter), .normal = normal };
+}
+
+fn castCircle(start: Vector2, offset: Vector2, circle: Circle, touch: bool) ?Hit {
+    const x = @as(f64, start.x) - circle.center.x;
+    const y = @as(f64, start.y) - circle.center.y;
+    const dx: f64, const dy: f64 = .{ offset.x, offset.y };
+    const radius: f64 = circle.radius;
+    const distance2 = x * x + y * y;
+    const outside = distance2 - radius * radius;
+    if (touch and outside <= 0) return .{ .fraction = 0, .normal = .zero };
+
+    const along = x * dx + y * dy;
+    if (outside < 0) {
+        if (along >= 0) return null;
+        const distance = @sqrt(distance2);
+        return .{
+            .fraction = 0,
+            .normal = .xy(@floatCast(x / distance), @floatCast(y / distance)),
+        };
+    }
+    if (along >= 0) return null;
+
+    const length2 = dx * dx + dy * dy;
+    const cross = x * dy - y * dx;
+    const disc = radius * radius * length2 - cross * cross;
+    if (disc < 0 or (!touch and disc == 0)) return null;
+
+    // 用等价的根式，避免起点贴近圆时两项相减丢失精度。
+    const fraction = outside / (-along + @sqrt(disc));
+    if (fraction > 1) return null;
+    const normal: Vector2 = if (radius == 0) .zero else .xy(
+        @floatCast((x + dx * fraction) / radius),
+        @floatCast((y + dy * fraction) / radius),
+    );
+    return .{ .fraction = @floatCast(fraction), .normal = normal };
+}
+
+fn castRoundRect(circle: Circle, offset: Vector2, rect: Rect) ?Hit {
+    const start = circle.center;
+    const min, const max = .{ rect.min, rect.max() };
+    const radius = circle.radius;
+    if (radius == 0) return castRect(start, offset, min, max, false);
+
+    const gap = start.sub(rect.closestPoint(start));
+    const distance2 = gap.length2();
+    if (distance2 < radius * radius) {
+        const pad = Vector2.all(radius);
+        const normal = if (distance2 > 0)
+            gap.scale(1 / @sqrt(distance2))
+        else
+            exitNormal(start, offset, min.sub(pad), max.add(pad));
+        return overlapHit(normal, offset);
+    }
+
+    // 扩出的圆角矩形是两条矩形带与四个角圆的并集。
+    var first = castRect(start, offset, min.addX(-radius), max.addX(radius), false);
+    if (castRect(start, offset, min.addY(-radius), max.addY(radius), false)) |hit| {
+        if (first == null or hit.fraction < first.?.fraction) first = hit;
+    }
+
+    const corners = [_]Vector2{ min, .xy(min.x, max.y), .xy(max.x, min.y), max };
+    for (corners) |corner| {
+        const cap = Circle.init(corner, radius);
+        const hit = castCircle(start, offset, cap, false) orelse continue;
+        if (first == null or hit.fraction < first.?.fraction) first = hit;
+    }
+    const hit = first orelse return null;
+    // 按原矩形计算接触法线，矩形带的角点属于圆弧与直边的连接处。
+    const point = start.add(offset.scale(hit.fraction));
+    const normal = point.sub(rect.closestPoint(point)).normalize();
+    return .{ .fraction = hit.fraction, .normal = normal };
+}
+
+fn exitNormal(start: Vector2, offset: Vector2, min: Vector2, max: Vector2) Vector2 {
+    const low, const high = .{ start.sub(min), max.sub(start) };
+    const nearest = @min(low.x, low.y, high.x, high.y);
+    // 等距时取和位移最接近的外法线。
+    var normal = Vector2.zero;
+    var best = -std.math.inf(f32);
+    for ([_]f32{ low.x, low.y, high.x, high.y }, [_]Vector2{
+        .xy(-1, 0), .xy(0, -1), .xy(1, 0), .xy(0, 1),
+    }) |distance, side| {
+        const along = offset.dot(side);
+        if (distance == nearest and along > best) {
+            best = along;
+            normal = side;
+        }
+    }
+    return normal;
+}
+
+fn overlapHit(normal: Vector2, offset: Vector2) ?Hit {
+    if (offset.dot(normal) >= 0) return null;
+    return .{ .fraction = 0, .normal = normal };
+}
