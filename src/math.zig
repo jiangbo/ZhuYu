@@ -403,6 +403,27 @@ pub const Rect = extern struct {
         return self.intersect(r1) or self.intersect(c1) or
             self.intersect(c2);
     }
+
+    /// 返回把 self 推出 other 的最短位移；不重叠或相切时返回 null。
+    pub fn separate(self: Rect, other: anytype) ?Vector2 {
+        const T = @TypeOf(other);
+        if (T == Rect) return self.separateRect(other);
+        if (T == Circle) return if (other.separate(self)) |push| push.neg() else null;
+        @compileError("unsupported Rect.separate type");
+    }
+
+    fn separateRect(self: Rect, other: Rect) ?Vector2 {
+        const left = self.max().x - other.min.x;
+        const right = other.max().x - self.min.x;
+        const up = self.max().y - other.min.y;
+        const down = other.max().y - self.min.y;
+        if (left <= 0 or right <= 0 or up <= 0 or down <= 0) return null;
+
+        const minX = @min(left, right);
+        const minY = @min(up, down);
+        if (minX <= minY) return .xy(if (left <= right) -left else right, 0);
+        return .xy(0, if (up <= down) -up else down);
+    }
 };
 
 pub const Circle = struct {
@@ -436,6 +457,49 @@ pub const Circle = struct {
         };
         if (T == AxisCapsule) return other.intersect(self);
         @compileError("unsupported Circle.intersect type");
+    }
+
+    /// 返回把 self 推出 other 的最短位移；不重叠或相切时返回 null。
+    pub fn separate(self: Circle, other: anytype) ?Vector2 {
+        const T = @TypeOf(other);
+        if (T == Rect) return self.separateRect(other);
+        if (T == Circle) return self.separateCircle(other);
+        @compileError("unsupported Circle.separate type");
+    }
+
+    fn separateCircle(self: Circle, other: Circle) ?Vector2 {
+        const gap = self.center.sub(other.center);
+        const sum = self.radius + other.radius;
+        const dist2 = gap.length2();
+        if (dist2 >= sum * sum) return null;
+        if (dist2 == 0) return .xy(sum, 0);
+
+        const dist = @sqrt(dist2);
+        return gap.scale((sum - dist) / dist);
+    }
+
+    fn separateRect(self: Circle, other: Rect) ?Vector2 {
+        const radius = self.radius;
+        const closest = self.center.clamp(other.min, other.max());
+        const gap = self.center.sub(closest);
+        const dist2 = gap.length2();
+        if (dist2 > 0) {
+            if (dist2 >= radius * radius) return null;
+            const dist = @sqrt(dist2);
+            return gap.scale((radius - dist) / dist);
+        }
+
+        // 圆心落在矩形内部或边上，沿最近的边加上半径推出。
+        const left = self.center.x - other.min.x;
+        const right = other.max().x - self.center.x;
+        const up = self.center.y - other.min.y;
+        const down = other.max().y - self.center.y;
+        const minX = @min(left, right);
+        const minY = @min(up, down);
+        if (minX <= minY) {
+            return .xy(if (left <= right) -(left + radius) else right + radius, 0);
+        }
+        return .xy(0, if (up <= down) -(up + radius) else down + radius);
     }
 };
 
@@ -545,6 +609,15 @@ pub const Shape = union(enum) {
             inline else => |a| if (isShape) switch (other) {
                 inline else => |b| a.intersect(b),
             } else a.intersect(other),
+        };
+    }
+
+    /// 返回把 self 推出 other 的最短位移；不重叠或相切时返回 null。
+    pub fn separate(self: Shape, other: Shape) ?Vector2 {
+        return switch (self) {
+            inline else => |a| switch (other) {
+                inline else => |b| a.separate(b),
+            },
         };
     }
 
