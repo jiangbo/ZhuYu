@@ -2,6 +2,7 @@ const std = @import("std");
 
 const math = @import("../math.zig");
 
+const Allocator = std.mem.Allocator;
 const Vector2 = math.Vector2;
 const Rect = math.Rect;
 
@@ -37,19 +38,19 @@ pub const Grid = struct {
         return self.cellSize().scale(0.5);
     }
 
-    pub fn cellToIndex(self: Grid, cell: Cell) ?usize {
-        if (cell.x < 0 or cell.y < 0) return null;
-        if (cell.x >= self.width or cell.y >= self.height) return null;
-        return @intCast(cell.y * self.width + cell.x);
+    pub fn worldToCell(self: Grid, world: Vector2) Cell {
+        const grid = world.div(self.cellSize()).floor();
+        return .xy(@intFromFloat(grid.x), @intFromFloat(grid.y));
     }
 
     pub fn worldToIndex(self: Grid, world: Vector2) ?usize {
         return self.cellToIndex(self.worldToCell(world));
     }
 
-    pub fn worldToCell(self: Grid, world: Vector2) Cell {
-        const grid = world.div(self.cellSize()).floor();
-        return .xy(@intFromFloat(grid.x), @intFromFloat(grid.y));
+    pub fn cellToIndex(self: Grid, cell: Cell) ?usize {
+        if (cell.x < 0 or cell.y < 0) return null;
+        if (cell.x >= self.width or cell.y >= self.height) return null;
+        return @intCast(cell.y * self.width + cell.x);
     }
 
     pub fn cellToWorld(self: Grid, cell: Cell) Vector2 {
@@ -69,13 +70,13 @@ pub const Grid = struct {
         return .init(self.indexToWorld(index), self.cellSize());
     }
 
-    pub const CellRectIter = struct {
+    pub const IndexIter = struct {
         width: i32 = 0,
         min: Cell = .xy(0, 0),
         max: Cell = .xy(-1, -1),
         current: Cell = .xy(0, 0),
 
-        pub fn next(self: *CellRectIter) ?usize {
+        pub fn next(self: *IndexIter) ?usize {
             if (self.current.y > self.max.y) return null;
 
             const i = self.current.y * self.width + self.current.x;
@@ -88,8 +89,8 @@ pub const Grid = struct {
         }
     };
 
-    /// 遍历矩形 [min, max) 覆盖的格子，按地图边界裁剪。
-    pub fn cellsInRect(self: Grid, rect: Rect) CellRectIter {
+    /// 遍历矩形 [min, max) 覆盖的格子下标，按地图边界裁剪。
+    pub fn indicesInRect(self: Grid, rect: Rect) IndexIter {
         std.debug.assert(rect.size.y > 0 and rect.size.x > 0);
 
         const rawMin = self.worldToCell(rect.min);
@@ -107,6 +108,62 @@ pub const Grid = struct {
             .max = .xy(maxX, maxY),
             .current = min,
         };
+    }
+};
+
+/// 静态网格索引，按格子返回矩形下标的连续切片。
+pub const StaticIndex = struct {
+    offsets: []u32,
+    ids: []u32,
+
+    /// 按 rects 的下标建立静态网格索引，忽略宽高非正的空矩形。
+    pub fn build(gpa: Allocator, grid: Grid, rects: []const Rect) !StaticIndex {
+        // 1. 分配格子偏移表，多留一位存总长度。
+        const count = grid.count();
+        const offsets = try gpa.alloc(u32, count + 1);
+        errdefer gpa.free(offsets);
+        @memset(offsets, 0);
+
+        // 2. 统计每个格子被多少个矩形覆盖。
+        for (rects) |rect| {
+            if (rect.size.x <= 0 or rect.size.y <= 0) continue;
+            var iter = grid.indicesInRect(rect);
+            while (iter.next()) |index| offsets[index] += 1;
+        }
+
+        // 3. 前缀累加，原地算出每个格子的结束位置。
+        var total: u32 = 0;
+        for (offsets[0..count]) |*end| {
+            total += end.*;
+            end.* = total;
+        }
+        offsets[count] = total;
+
+        // 4. 从每格末尾往前填入下标；倒序遍历 rects 使同格内保持升序。
+        const ids = try gpa.alloc(u32, total);
+        var i = rects.len;
+        while (i > 0) {
+            i -= 1;
+            const rect = rects[i];
+            if (rect.size.x <= 0 or rect.size.y <= 0) continue;
+            var iter = grid.indicesInRect(rect);
+            while (iter.next()) |index| {
+                offsets[index] -= 1;
+                ids[offsets[index]] = @intCast(i);
+            }
+        }
+        return .{ .offsets = offsets, .ids = ids };
+    }
+
+    pub fn deinit(self: *StaticIndex, gpa: Allocator) void {
+        gpa.free(self.ids);
+        gpa.free(self.offsets);
+        self.* = undefined;
+    }
+
+    /// 返回指定格子内的全部矩形下标。
+    pub fn idsAt(self: StaticIndex, index: usize) []const u32 {
+        return self.ids[self.offsets[index]..self.offsets[index + 1]];
     }
 };
 
