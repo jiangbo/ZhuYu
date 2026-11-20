@@ -149,6 +149,14 @@ pub const SolidMask = struct {
         return self.bits.isSet(index);
     }
 
+    /// 逐个取出合并后的世界坐标矩形，不进行分配。
+    /// 结果互不重叠且完整覆盖实心区域，半格等精度由 grid.cell 决定。
+    /// 每次 next 清除返回区域的实心位，遍历完成后位图为空。
+    /// 迭代期间保持 self 有效，不通过其它途径修改网格或位图。
+    pub fn takeRects(self: *SolidMask) RectIter {
+        return .{ .mask = self };
+    }
+
     /// 检查形状是否与任意实心瓦片重叠，相切不算。
     pub fn overlaps(self: SolidMask, body: Shape) bool {
         var iter = self.grid.indicesInRect(body.toRect());
@@ -271,6 +279,49 @@ pub const SolidMask = struct {
             }
         }
         return best;
+    }
+};
+
+/// 按行扫描，先向右确定宽度，再向下扩展；不保证矩形数量最少。
+pub const RectIter = struct {
+    mask: *SolidMask,
+    index: usize = 0,
+
+    pub fn next(self: *RectIter) ?Rect {
+        const mask = self.mask;
+        const grid = mask.grid;
+        const count = grid.count();
+        while (self.index < count) : (self.index += 1) {
+            if (mask.bits.isSet(self.index)) break;
+        }
+        if (self.index == count) return null;
+
+        const width: usize = @intCast(grid.width);
+        const start = self.index;
+        const rowEnd = start - start % width + width;
+        var end = start + 1;
+        while (end < rowEnd and mask.bits.isSet(end)) : (end += 1) {}
+        const span = end - start;
+
+        // 后续行必须覆盖相同宽度，遇到空格就结束扩展，保留缺口。
+        var bottom = start + width;
+        rows: while (bottom < count) : (bottom += width) {
+            for (bottom..bottom + span) |i| {
+                if (!mask.bits.isSet(i)) break :rows;
+            }
+        }
+
+        // 只消费本次返回的区域，中途停止时其余实心位仍然保留。
+        var row = start;
+        while (row < bottom) : (row += width) {
+            mask.bits.setRangeValue(.{ .start = row, .end = row + span }, false);
+        }
+        const size = grid.cellToWorld(.{
+            .x = @intCast(span),
+            .y = @intCast((bottom - start) / width),
+        });
+        self.index = end;
+        return .init(grid.indexToWorld(start), size);
     }
 };
 
