@@ -3,8 +3,10 @@ const std = @import("std");
 const math = @import("../math.zig");
 
 const Allocator = std.mem.Allocator;
+const BitSet = std.DynamicBitSetUnmanaged;
 const Vector2 = math.Vector2;
 const Rect = math.Rect;
+const Shape = math.Shape;
 
 pub const Cell = struct {
     x: i32,
@@ -94,17 +96,16 @@ pub const Grid = struct {
     pub fn indicesInRect(self: Grid, rect: Rect) IndexIter {
         std.debug.assert(rect.size.x >= 0 and rect.size.y >= 0);
         if (rect.size.x == 0 or rect.size.y == 0) return .{};
-        return self.indicesInBounds(rect.min, rect.max());
+        const rawMin = self.worldToCell(rect.min);
+        const last = rect.max().div(self.cellSize()).ceil().sub(.one);
+        return self.indicesInCells(rawMin, Cell.fromVector(last));
     }
 
-    fn indicesInBounds(self: Grid, min: Vector2, max: Vector2) IndexIter {
-        const rawMin = self.worldToCell(min);
-        const last = max.div(self.cellSize()).ceil().sub(.one);
-        const rawMax = Cell.fromVector(last);
-
-        const first = Cell{ .x = @max(rawMin.x, 0), .y = @max(rawMin.y, 0) };
-        const maxX = @min(rawMax.x, self.width - 1);
-        const maxY = @min(rawMax.y, self.height - 1);
+    // 按网格边界裁剪，min 和 max 均包含在遍历范围内。
+    fn indicesInCells(self: Grid, min: Cell, max: Cell) IndexIter {
+        const first = Cell{ .x = @max(min.x, 0), .y = @max(min.y, 0) };
+        const maxX = @min(max.x, self.width - 1);
+        const maxY = @min(max.y, self.height - 1);
         if (first.x > maxX or first.y > maxY) return .{};
 
         return .{
@@ -116,12 +117,170 @@ pub const Grid = struct {
     }
 };
 
-/// 静态网格索引，按格子返回矩形下标的连续切片。
+/// 瓦片对齐的静态阻挡位图，支持查询与连续 2D 滑墙移动。
+pub const SolidMask = struct {
+    grid: Grid,
+    bits: BitSet,
+
+    pub fn init(gpa: Allocator, grid: Grid) !SolidMask {
+        return .{ .grid = grid, .bits = try .initEmpty(gpa, grid.count()) };
+    }
+
+    pub fn deinit(self: *SolidMask, gpa: Allocator) void {
+        self.bits.deinit(gpa);
+        self.* = undefined;
+    }
+
+    pub fn clear(self: *SolidMask) void {
+        self.bits.unsetAll();
+    }
+
+    pub fn set(self: *SolidMask, index: usize, blocked: bool) void {
+        self.bits.setValue(index, blocked);
+    }
+
+    /// 设置 rect 覆盖到的整格，按网格边界裁剪。
+    pub fn setCellsInRect(self: *SolidMask, rect: Rect, blocked: bool) void {
+        var iter = self.grid.indicesInRect(rect);
+        while (iter.next()) |index| self.bits.setValue(index, blocked);
+    }
+
+    pub fn isBlocked(self: SolidMask, index: usize) bool {
+        return self.bits.isSet(index);
+    }
+
+    /// 检查形状是否与任意实心瓦片重叠，相切不算。
+    pub fn overlaps(self: SolidMask, body: Shape) bool {
+        var iter = self.grid.indicesInRect(body.toRect());
+        while (iter.next()) |index| {
+            if (!self.bits.isSet(index)) continue;
+            switch (body) {
+                .rect => return true,
+                .circle => |circle| {
+                    const tile = self.grid.indexToRect(index);
+                    if (circle.separate(tile) != null) return true;
+                },
+            }
+        }
+        return false;
+    }
+
+    /// 按实心瓦片做连续 2D 滑墙移动，返回实际位移。
+    /// 剩余位移不超过 math.epsilon 时结束；狭缝中连续微小推进视为阻挡，
+    /// 可能舍弃本帧仍较大的剩余位移，避免反复接触而无法结束。
+    pub fn slide(self: SolidMask, body: Shape, move: Vector2) Vector2 {
+        const epsilon2 = math.epsilon * math.epsilon;
+        var moved = Vector2.zero;
+        var rem = move;
+        var prev: ?Vector2 = null;
+        var stalled = false;
+        while (rem.length2() > epsilon2) {
+            const found = self.sweep(body.move(moved), rem) orelse {
+                moved = moved.add(rem);
+                break;
+            };
+            const advance = rem.scale(found.fraction);
+            const small = advance.length2() <= epsilon2;
+            // 首次微小推进仍调整滑动方向并重查，保证贴墙时可以滑动。
+            // 连续两次推进都不超过 math.epsilon 时，结束本帧移动。
+            if (stalled and small) break;
+            moved = moved.add(advance);
+            rem = rem.scale(1 - found.fraction);
+            switch (body) {
+                .rect => {
+                    // 墙面决定滑动方向。只有孤立角点时才用角点的两个轴。
+                    const isCorner = found.faces.x == 0 and found.faces.y == 0;
+                    const axes = if (isCorner) found.normal else found.faces;
+                    if (rem.x * axes.x < 0) rem.x = 0;
+                    if (rem.y * axes.y < 0) rem.y = 0;
+                },
+                .circle => {
+                    rem = slideAlong(rem, found.normal);
+                    // 旧法线只约束同一位置上的连续接触。
+                    if (prev) |normal| {
+                        const inward = rem.dot(normal) < -math.epsilon;
+                        if (found.fraction == 0 and inward) break;
+                    }
+                    prev = found.normal;
+                },
+            }
+            stalled = small;
+        }
+        return moved;
+    }
+
+    // 将位移投影到法线切面，并保证转回 f32 后不朝法线内侧偏斜。
+    fn slideAlong(rem: Vector2, normal: Vector2) Vector2 {
+        const nx: f64 = normal.x;
+        const ny: f64 = normal.y;
+        const dot = @as(f64, rem.x) * nx + @as(f64, rem.y) * ny;
+        if (dot >= 0) return rem;
+
+        // 用实际法线长度投影，避免把近似单位向量当作精确单位向量。
+        const along = dot / (nx * nx + ny * ny);
+        const x: f32 = @floatCast(rem.x - nx * along);
+        const y: f32 = @floatCast(rem.y - ny * along);
+        if (@as(f64, x) * nx + @as(f64, y) * ny >= 0) return .xy(x, y);
+
+        // 转回 f32 后若仍朝内，沿法线较大的分量向外舍入。
+        const inf = std.math.inf(f32);
+        if (@abs(nx) >= @abs(ny)) {
+            const fixed: f32 = @floatCast(-@as(f64, y) * ny / nx);
+            return .xy(std.math.nextAfter(f32, fixed, if (nx > 0) inf else -inf), y);
+        }
+        const fixed: f32 = @floatCast(-@as(f64, x) * nx / ny);
+        return .xy(x, std.math.nextAfter(f32, fixed, if (ny > 0) inf else -inf));
+    }
+
+    pub const Contact = struct {
+        /// 首次阻挡接触占请求位移的比例，范围为 [0, 1]，包含终点接触。
+        fraction: f32,
+        /// 从瓦片朝外的单位法线；同时命中时取按行遍历遇到的第一个。
+        normal: Vector2,
+        /// 矩形同时接触的轴向面，各分量为 -1、0 或 1，不是单位向量。
+        /// 圆形或仅接触矩形角点时为零，此时使用 normal。
+        faces: Vector2 = .zero,
+    };
+
+    /// body 沿 move 平移，返回实心瓦片的最早阻挡接触，无命中时返回 null。
+    /// 允许沿边滑动和相切；初始重叠时允许朝最近的边界退开。
+    /// 网格外不阻挡；只查询接触，不修改形状或计算滑墙位移。
+    pub fn sweep(self: SolidMask, body: Shape, move: Vector2) ?Contact {
+        const bounds = body.toRect();
+        const end = bounds.move(move);
+        const min = bounds.min.min(end.min);
+        const max = bounds.max().max(end.max());
+        // 闭区间包含两端相邻格，保证正反方向的终点接触都进入候选。
+        const first = min.div(self.grid.cellSize()).ceil().sub(.one);
+        const last = self.grid.worldToCell(max);
+
+        const isRect = std.meta.activeTag(body) == .rect;
+        var best: ?Contact = null;
+        var iter = self.grid.indicesInCells(Cell.fromVector(first), last);
+        while (iter.next()) |index| {
+            if (!self.bits.isSet(index)) continue;
+            const tile = Shape{ .rect = self.grid.indexToRect(index) };
+            const found = body.sweep(tile, move) orelse continue;
+            if (best == null or found.fraction < best.?.fraction) {
+                best = .{ .fraction = found.fraction, .normal = found.normal };
+            }
+            if (isRect and found.fraction == best.?.fraction) {
+                const faces = &best.?.faces;
+                if (found.normal.x == 0) faces.y = found.normal.y;
+                if (found.normal.y == 0) faces.x = found.normal.x;
+            }
+        }
+        return best;
+    }
+};
+
+/// 静态网格索引，按格子返回候选矩形下标的连续切片。
 pub const StaticIndex = struct {
     offsets: []u32,
     ids: []u32,
 
     /// 按 rects 的下标建立静态网格索引，忽略宽或高为 0 的空矩形。
+    /// 不保存矩形数据；矩形移动、扩大或 rects 重排后需重建索引。
     pub fn build(gpa: Allocator, grid: Grid, rects: []const Rect) !StaticIndex {
         // 1. 分配格子偏移表，多留一位存总长度。
         const count = grid.count();
@@ -163,7 +322,8 @@ pub const StaticIndex = struct {
         self.* = undefined;
     }
 
-    /// 返回指定格子内的全部矩形下标。
+    /// 返回指定格子的候选矩形下标，按升序排列，不进行精确相交检测。
+    /// 跨格查询可能重复返回同一下标，切片有效期到索引释放为止。
     pub fn idsAt(self: StaticIndex, index: usize) []const u32 {
         return self.ids[self.offsets[index]..self.offsets[index + 1]];
     }
