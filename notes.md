@@ -101,3 +101,100 @@
 - 约束：实例保持不超过 64 字节；若需要枚举，可复用现有对齐字节，
   不增加四角分别配置；不以模式数量或源码运算次数直接推断实际性能。
 - 边界：位置对齐无法消除非整数缩放造成的纹素宽窄不均。
+
+## 11. Zig 缓存按时间清理后构建失败
+
+- 需求：`/tmp` 持续清理旧文件；有效缓存继续复用，被淘汰的产物按需重新生成，
+  不要求每次构建都清空缓存或重新生成所有资源。
+- 本机配置：`ZIG_LOCAL_CACHE_DIR=/tmp/zig-cache`；
+  `/etc/tmpfiles.d/tmp.conf` 使用 `D /tmp 1777 root root 2d`，每天按时间清理。
+- 原版验证（2026-11-21，Zig 0.17.1）：删除缓存产物、保留记录后，`Run`、
+  `WriteFile`、`Options`、`ConfigHeader`、`ObjCopy`、`TranslateC` 仍报告缓存命中，
+  随后因 `FileNotFound` 失败；Zig 可执行文件和 C 静态库的最终产物可以重新生成。
+  这些结果来自各类型的最小验证，不代表已检查所有编译中间产物。
+- 原因：部分生成步骤只校验输入和缓存记录，没有确认输出仍存在；按文件时间
+  清理可能删除产物而保留记录。问题不只涉及 shader，也涉及音效包及生成配置。
+- 上游跟踪：[Zig #30193](https://codeberg.org/ziglang/zig/issues/30193)，
+  截至 2026-11-21 仍开放。[2026-01-22 的评论][zig-cache-clean-report]
+  已报告按访问时间清理缓存后构建失败，并建议缺失时重建对应产物。
+- 上游计划：提供 `zig gc`，按 LRU 淘汰缓存；先取得记录的非阻塞锁，删除对应
+  `o/` 产物和记录后释放锁。缓存命中时未更新使用时间的问题仍待处理。
+- 自动清理跟踪：[Zig #36858](https://codeberg.org/ziglang/zig/issues/36858)，
+  同样仍开放，计划在 `--watch` 空闲期间清理。以上是上游设计，
+  不是 Zig 0.17.1 已提供的功能。
+- 原版的手动恢复：从 `FileNotFound` 报错中的 `/tmp/zig-cache/o/<hash>/`
+  取得产物哈希，定位对应的 `h/` 记录，只使这条记录失效后重跑原构建命令。
+  通过非阻塞文件锁清空记录内容，保留记录文件；若记录正在使用则不修改。
+- 验证结果：六类失败产物均能通过上述定点恢复重新生成；`WriteFile` 目录中
+  只删除一个文件、保留其他文件时也能恢复。未受影响的对照生成步骤仍命中缓存，
+  执行次数保持为 1，没有因恢复失效记录而被强制重建。
+- 收益：保留现有缓存路径和 `/tmp` 清理配置，不修改工具链，不清空整个缓存。
+  代价：发生缺失时，需要手动定位记录并重试；这不是自动恢复所有缓存错误的方案。
+
+定位记录时，把 `cache_hash` 换成报错中的产物哈希。下面使用此次 shader 为例：
+
+```sh
+cache_hash=355484ed415f5f6cd2105f438952548b
+zig cache-cat /tmp/zig-cache/h/[0-9a-f]* | awk -v hash="$cache_hash" '
+/\.input_hash/ {record = $3; gsub(/[",]/, "", record)}
+/\.discovered_hash/ && index($0, "\"" hash "\"") {
+    print "/tmp/zig-cache/h/" record
+}'
+```
+
+把 `cache_record` 设为上一步打印的路径；以下路径同样仅用于此次 shader 示例。
+成功清空记录后，回到失败的项目重跑原构建命令：
+
+```sh
+cache_record=/tmp/zig-cache/h/d1516e6ba8763c9d8790aa1218aaa8bd
+flock -n "$cache_record" truncate -s 0 "$cache_record"
+```
+
+### 本机临时补丁（2026-11-21）
+
+- 状态：已应用到 `/root/software/zig` 的 Zig 0.17.1；直接使用原构建命令即可。
+  修改的是随工具链分发的源码，辅助程序会自动重新编译，不需要重编译 Zig 二进制。
+- 范围：8 个文件，补丁增加 296 行、删除 13 行，包含注释和空行。
+  未改缓存哈希算法或记录格式，有效缓存继续复用，缺失产物才触发对应步骤恢复。
+- `lib/std/Build/Cache.zig`：增加命中哈希预览和转为缺失状态的接口；
+  `TranslateC` 产物缺失时，在文件锁下仅清空匹配的编译器缓存记录。
+- `lib/compiler/Maker/Step.zig`：共用的输出存在性和类型检查。
+- `lib/compiler/Maker/Step/` 中的 `Run.zig`、`WriteFile.zig`、`Options.zig`、
+  `ConfigHeader.zig`、`ObjCopy.zig`、`TranslateC.zig`：接入上述检查和局部恢复。
+- 文件输出：命中时确认文件存在，包括 `ObjCopy` 的独立调试文件及捕获的
+  stdout/stderr；文件缺失时重新生成，不把所有资源步骤改为每次执行。
+- 目录输出：`WriteFile` 复用已有的输入遍历，检查应当复制或写入的具体路径。
+  `Run` 的目录内容由外部程序决定，因此在成功生成后保存文件和目录清单，
+  位于 `/tmp/zig-cache/output-lists/<产物哈希>`，命中时逐项检查。
+  旧目录缓存没有清单，或清单本身被清理时，仅重新生成对应目录一次；之后继续缓存。
+- 验证：六类缺失产物自动恢复；目录内部分文件缺失、整棵目录被删除、
+  捕获的 stdout/stderr 被删除、输出清单被删除均通过。
+  有效命中不改变产物 mtime，恢复后的下一次仍命中；未受影响的对照步骤只执行一次。
+- 项目验证：TinyFarm 当前源码构建通过，120 个测试通过；只删除实际 shader
+  产物后，构建自动恢复出相同内容，下一次构建显示 shader 命中缓存。
+- 代价：命中时增加输出文件检查；`Run` 目录输出增加清单读取和逐项检查。
+  `TranslateC` 只有缺失时才扫描记录并重试一次。不是完整的 Zig 缓存 GC，
+  未验证编译器所有内部缓存；仍跟踪上游修复。
+- 备份：`/root/software/zig-local-patches/cache-output-recovery-0.17.1/`。
+  `original/` 保存原文件，`cache-output-recovery.patch` 保存完整修改，
+  `metadata.json` 保存原版和补丁版 SHA-256，`verify.py` 保存独立验证程序。
+  补丁在临时副本中完成正向和反向应用验证，两次均与记录的 SHA-256 一致。
+- 恢复：`restore.py` 先核对 Zig 版本及文件 SHA-256，再恢复 8 个原文件；
+  文件若在此补丁后被修改，脚本会停止，避免覆盖其他修改。
+  备份位于持久目录，不随 `/tmp` 清理；本次未修改清理配置或缓存路径。
+
+恢复原版前先检查，然后执行恢复；恢复也不会清空缓存：
+
+```sh
+patch_dir=/root/software/zig-local-patches/cache-output-recovery-0.17.1
+python3 "$patch_dir/restore.py" --check
+python3 "$patch_dir/restore.py"
+```
+
+重新验证补丁时执行：
+
+```sh
+python3 "$patch_dir/verify.py"
+```
+
+[zig-cache-clean-report]: https://codeberg.org/ziglang/zig/issues/30193#issuecomment-10077444
