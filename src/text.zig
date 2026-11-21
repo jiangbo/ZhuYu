@@ -271,8 +271,9 @@ pub const static = if (options.font == .static) struct {
         }
 
         for (zon.images, 0..) |path, i| {
-            const image = assets.getImage(assets.id(path)).?;
-            std.debug.assert(image.filter == option.filter);
+            var image = assets.getImage(assets.id(path)).?;
+            std.debug.assert(options.samplers or image.filter == option.filter);
+            image.filter = option.filter;
             images[i] = image;
         }
         invalidGlyph = searchGlyph('?').?;
