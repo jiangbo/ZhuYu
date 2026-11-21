@@ -3,7 +3,7 @@ const std = @import("std");
 const assets = @import("../assets.zig");
 const graphics = @import("../graphics.zig");
 const math = @import("../math.zig");
-const Grid = @import("grid.zig").Grid;
+const Grid = @import("spatial.zig").Grid;
 
 const Vector2 = math.Vector2;
 const Rect = math.Rect;

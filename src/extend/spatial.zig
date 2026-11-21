@@ -127,7 +127,53 @@ pub const Grid = struct {
             .current = first,
         };
     }
+
+    /// 将 body 限制在网格范围 [0, size) 内，返回撞到边界的最早接触。
+    pub fn sweepBounds(self: Grid, body: Shape, move: Vector2) ?Contact {
+        return sweepBoundsInRect(.init(.zero, self.size()), body, move);
+    }
 };
+
+/// 将 body 限制在 bounds 矩形内，返回撞到四条内边界的最早接触，无越界返回 null。
+/// 贴边或已越界时允许朝矩形内侧移回，仅阻挡继续向外移动。
+pub fn sweepBounds(bounds: Rect, body: Shape, move: Vector2) ?Contact {
+    return sweepBoundsInRect(bounds, body, move);
+}
+
+fn sweepBoundsInRect(bounds: Rect, body: Shape, move: Vector2) ?Contact {
+    const box = body.toRect();
+    const boxMax = box.max();
+    const max = bounds.max();
+    const isRect = std.meta.activeTag(body) == .rect;
+    var best: ?Contact = null;
+    inline for (.{ "x", "y" }) |axis| {
+        const delta = @field(move, axis);
+        if (delta < 0) {
+            const dist = @field(box.min, axis) - @field(bounds.min, axis);
+            if (dist <= -delta) {
+                var normal = Vector2.zero;
+                @field(normal, axis) = 1;
+                Contact.record(&best, .{
+                    .fraction = if (dist <= 0) 0 else dist / -delta,
+                    .normal = normal,
+                    .rectPair = isRect,
+                });
+            }
+        } else if (delta > 0) {
+            const dist = @field(max, axis) - @field(boxMax, axis);
+            if (dist <= delta) {
+                var normal = Vector2.zero;
+                @field(normal, axis) = -1;
+                Contact.record(&best, .{
+                    .fraction = if (dist <= 0) 0 else dist / delta,
+                    .normal = normal,
+                    .rectPair = isRect,
+                });
+            }
+        }
+    }
+    return best;
+}
 
 /// 扫掠过程中汇总出的最近阻挡接触。
 pub const Contact = struct {
