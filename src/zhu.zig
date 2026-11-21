@@ -20,6 +20,8 @@ pub const key = window.key;
 pub const mouse = window.mouse;
 
 pub const music = struct {
+    pub const State = audio.MusicState;
+    pub const Option = audio.MusicOption;
     pub const play = audio.playMusic;
     pub const playOption = audio.playMusicOption;
     pub const pause = audio.pauseMusic;
@@ -27,12 +29,19 @@ pub const music = struct {
     pub const @"resume" = audio.resumeMusic;
     pub const stop = audio.stopMusic;
     pub const getState = audio.getMusicState;
+    pub const getVolume = audio.getMusicVolume;
+    pub const setVolume = audio.setMusicVolume;
+    pub const changeVolume = audio.changeMusicVolume;
 };
 
 pub const sound = struct {
+    pub const Option = audio.Sound.Option;
     pub const play = audio.playSound;
     pub const playOption = audio.playSoundOption;
     pub const stopAll = audio.stopSounds;
+    pub const getVolume = audio.getSoundVolume;
+    pub const setVolume = audio.setSoundVolume;
+    pub const changeVolume = audio.changeSoundVolume;
 };
 
 pub const extend = struct {
