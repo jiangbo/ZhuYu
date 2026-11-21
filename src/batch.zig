@@ -15,7 +15,24 @@ const RenderPass = graphics.RenderPass;
 const Vector2 = zhu.Vector2;
 const Vertex = graphics.Vertex;
 
-pub const Option = graphics.DrawOption;
+pub const Option = struct {
+    size: ?Vector2 = null, // 大小
+    scale: Vector2 = .one, // 围绕 pivot 缩放。
+    anchor: Vector2 = .zero, // 变换前的定位锚点，归一化坐标。
+    pivot: Vector2 = .center, // 缩放、斜切和旋转共用的固定中心。
+    radian: f32 = 0, // 旋转弧度
+    skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
+    uvRect: ?zhu.Vector4 = null, // 纹理 UV 区域
+    color: Color = .white, // 乘色；Alpha 控制图片本身的不透明度。
+    // 额外增加颜色，让画面变亮；Alpha 控制强度，零表示不加色。
+    // 加色不受 color.a 控制，也不增加对背景的遮挡。
+    // 普通半透明：addColor 保持零，调整 color.a。
+    // 纯加法发光：color.a 设为零，用 addColor 设置颜色和强度。
+    // 图片和加色一起淡出时，需要同时降低 color.a 和 addColor.a。
+    addColor: Color = .all(0),
+    filter: ?graphics.Filter = null, // null 使用图片自身的采样方式。
+    snap: ?bool = null, // null 使用 batch 的默认设置。
+};
 
 pub const Command = union(enum) {
     target: TargetCommand, // 渲染目标
@@ -56,8 +73,7 @@ var flushed = false;
 pub fn init(cmds: []Command, image: ?Image) void {
     commands = .initBuffer(cmds);
     commandPeak = 0;
-    const shaderDesc = shader.quadShaderDesc(sk.gfx.queryBackend());
-    defaultPipeline = graphics.createPipeline(shaderDesc);
+    defaultPipeline = graphics.createQuadPipeline(.alpha);
 
     // 调用方提供圆形图片，其中心区域必须为白色。
     // 建议与其他素材放在同一图集，避免绘制基础图形时切换纹理、打断合批。

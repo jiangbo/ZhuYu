@@ -294,7 +294,8 @@ pub const static = if (options.font == .static) struct {
 
         static.initBitmap(zon, .{ .filter = .linear, .size = option.size });
         const desc = shader.msdfShaderDesc(sk.gfx.queryBackend());
-        const pipeline = graphics.createPipeline(desc);
+        const alphaState = graphics.Blend.alpha.state();
+        const pipeline = graphics.createPipeline(desc, alphaState);
         for (images[0..zon.images.len]) |image| {
             assets.view.getPtr(image.view).pipeline = pipeline;
         }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sk = @import("sokol");
+const shader = @import("shader");
 
 const zhu = @import("zhu.zig");
 const assets = @import("assets.zig");
@@ -7,11 +8,54 @@ const camera = @import("camera.zig");
 const window = @import("window.zig");
 
 pub const View = sk.gfx.View;
+pub const Pipeline = sk.gfx.Pipeline;
+pub const ShaderDesc = sk.gfx.ShaderDesc;
+pub const BlendState = sk.gfx.BlendState;
+
+pub const Blend = enum {
+    alpha,
+    /// 预乘加法混合：将源像素 RGB 直接累加到目标画面，保持目标不透明度不变。
+    add,
+    /// 预乘乘法混合（目标需不透明）：透明区保留原画面，半透明区按 alpha 乘色。
+    multiply,
+
+    pub fn state(self: Blend) BlendState {
+        return switch (self) {
+            .alpha => .{
+                .enabled = true,
+                .src_factor_rgb = .ONE,
+                .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+                .src_factor_alpha = .ONE,
+                .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+            },
+            .add => .{
+                .enabled = true,
+                .src_factor_rgb = .ONE,
+                .dst_factor_rgb = .ONE,
+                .src_factor_alpha = .ZERO,
+                .dst_factor_alpha = .ONE,
+            },
+            .multiply => .{
+                .enabled = true,
+                .src_factor_rgb = .DST_COLOR,
+                .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+                .src_factor_alpha = .ZERO,
+                .dst_factor_alpha = .ONE,
+            },
+        };
+    }
+};
 
 pub const queryBackend = sk.gfx.queryBackend;
 
-// 使用引擎顶点布局创建流水线，资源由 assets.gpu 统一释放。
-pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
+// 使用默认 quad 着色器和指定混合模式创建流水线。
+pub fn createQuadPipeline(blend: Blend) Pipeline {
+    const desc = shader.quadShaderDesc(queryBackend());
+    return createPipeline(desc, blend.state());
+}
+
+// 使用引擎顶点布局和指定混合状态创建流水线，资源由 assets.gpu 统一释放。
+pub fn createPipeline(desc: ShaderDesc, blend: BlendState) Pipeline {
     var vertexLayout = sk.gfx.VertexLayoutState{};
 
     vertexLayout.attrs[0].format = .FLOAT2;
@@ -25,7 +69,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
     vertexLayout.attrs[8].format = .FLOAT2;
     vertexLayout.buffers[0].step_func = .PER_INSTANCE;
 
-    const shaderHandle = sk.gfx.makeShader(shaderDesc);
+    const shaderHandle = sk.gfx.makeShader(desc);
     assets.gpu.addShader(shaderHandle);
 
     const pipeline = sk.gfx.makePipeline(.{
@@ -34,13 +78,7 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
         .primitive_type = .TRIANGLE_STRIP,
         .colors = init: {
             var c: [8]sk.gfx.ColorTargetState = @splat(.{});
-            c[0] = .{ .blend = .{
-                .enabled = true,
-                .src_factor_rgb = .ONE,
-                .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
-                .src_factor_alpha = .ONE,
-                .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
-            } };
+            c[0] = .{ .blend = blend };
             break :init c;
         },
     });
@@ -50,25 +88,6 @@ pub fn createPipeline(shaderDesc: sk.gfx.ShaderDesc) sk.gfx.Pipeline {
 
 const Vector2 = zhu.Vector2;
 pub const ImageId = assets.Id;
-
-pub const DrawOption = struct {
-    size: ?Vector2 = null, // 大小
-    scale: Vector2 = .one, // 围绕 pivot 缩放。
-    anchor: Vector2 = .zero, // 变换前的定位锚点，归一化坐标。
-    pivot: Vector2 = .center, // 缩放、斜切和旋转共用的固定中心。
-    radian: f32 = 0, // 旋转弧度
-    skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
-    uvRect: ?zhu.Vector4 = null, // 纹理 UV 区域
-    color: Color = .white, // 乘色；Alpha 控制图片本身的不透明度。
-    // 额外增加颜色，让画面变亮；Alpha 控制强度，零表示不加色。
-    // 加色不受 color.a 控制，也不增加对背景的遮挡。
-    // 普通半透明：addColor 保持零，调整 color.a。
-    // 纯加法发光：color.a 设为零，用 addColor 设置颜色和强度。
-    // 图片和加色一起淡出时，需要同时降低 color.a 和 addColor.a。
-    addColor: Color = .all(0),
-    filter: ?Filter = null, // null 使用图片自身的采样方式。
-    snap: ?bool = null, // null 使用 batch 的默认设置。
-};
 
 // 图片实例的顶点布局，由资产模块暂存、合批模块提交绘制。
 pub const Vertex = extern struct {
@@ -82,7 +101,7 @@ pub const Vertex = extern struct {
     pivot: zhu.Vector2 = .zero, // 固定中心在图片中的归一化位置。
     uvRect: zhu.Vector4, // 纹理 UV 区域
     color: Color = .white, // 乘色，按通道乘纹理。
-    // 加色规则见 DrawOption；自己的 Alpha 控制强度，不受 color.a 控制。
+    // 加色规则见 batch.Option；自己的 Alpha 控制强度，不受 color.a 控制。
     addColor: Color = .all(0),
     skew: Vector2 = .zero, // 斜切弧度，x 改变 Y 轴，y 改变 X 轴方向。
 };
