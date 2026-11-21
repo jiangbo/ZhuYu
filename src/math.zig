@@ -439,7 +439,9 @@ pub const Rect = extern struct {
         if (T == Rect) {
             // 目标向左上扩张后，只需扫移动矩形的左上角。
             const min = other.min.sub(self.size);
-            return castRect(self.min, offset, min, other.max(), false);
+            var hit = castRect(self.min, offset, min, other.max(), false) orelse return null;
+            hit.rectPair = true;
+            return hit;
         }
         if (T == Circle) {
             // 交换移动方和目标后，位移和返回的法线都反向。
@@ -686,6 +688,8 @@ pub const Hit = struct {
     fraction: f32,
     /// 从目标表面垂直朝外的单位向量。
     normal: Vector2,
+    /// 两个轴对齐矩形之间的接触可按轴约束位移。
+    rectPair: bool = false,
 };
 
 // 求线段在矩形两轴区间内的共同时间范围。

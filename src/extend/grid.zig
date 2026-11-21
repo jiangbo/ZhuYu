@@ -129,6 +129,134 @@ pub const Grid = struct {
     }
 };
 
+/// 扫掠过程中汇总出的最近阻挡接触。
+pub const Contact = struct {
+    /// 首次阻挡接触占请求位移的比例，范围为 [0, 1]，包含终点接触。
+    fraction: f32,
+    /// 从障碍朝外的单位法线；同时命中时取最先遇到的。
+    normal: Vector2,
+    /// 最先记录的接触来自两个轴对齐矩形。
+    rectPair: bool = false,
+    /// 矩形同时接触的轴向面，各分量为 -1、0 或 1，不是单位向量。
+    /// 仅接触矩形角点或圆形时为零，此时使用 normal。
+    faces: Vector2 = .zero,
+
+    /// 用单次 Shape.sweep 的命中更新最近接触，并合并同刻轴向面。
+    pub fn record(best: *?Contact, hit: math.Hit) void {
+        if (best.* == null or hit.fraction < best.*.?.fraction) {
+            best.* = .{
+                .fraction = hit.fraction,
+                .normal = hit.normal,
+                .rectPair = hit.rectPair,
+            };
+        }
+        if (hit.rectPair and hit.fraction == best.*.?.fraction) {
+            const faces = &best.*.?.faces;
+            if (hit.normal.x == 0) faces.y = hit.normal.y;
+            if (hit.normal.y == 0) faces.x = hit.normal.x;
+        }
+    }
+
+    /// 合并另一个已汇总的接触，保留更早的命中并在同刻合并轴向面。
+    pub fn merge(best: *?Contact, other: ?Contact) void {
+        const found = other orelse return;
+        if (best.* == null or found.fraction < best.*.?.fraction) {
+            best.* = found;
+            return;
+        }
+        if (found.fraction == best.*.?.fraction) {
+            const faces = &best.*.?.faces;
+            if (found.faces.x != 0) faces.x = found.faces.x;
+            if (found.faces.y != 0) faces.y = found.faces.y;
+        }
+    }
+};
+
+/// 连续 2D 滑墙移动步进器，由调用方在每轮提供本步最近接触。
+/// 剩余位移不超过 math.epsilon 时结束；狭缝中连续微小推进视为阻挡，
+/// 可能舍弃本帧仍较大的剩余位移，避免反复接触而无法结束。
+pub const Slide = struct {
+    pub const Step = struct { body: Shape, move: Vector2 };
+
+    body: Shape,
+    moved: Vector2 = .zero,
+    rem: Vector2,
+    prev: ?Vector2 = null,
+    stalled: bool = false,
+
+    pub fn init(body: Shape, move: Vector2) Slide {
+        return .{ .body = body, .rem = move };
+    }
+
+    /// 返回当前待扫掠的形状和剩余位移；剩余位移不超过 math.epsilon 时返回 null。
+    pub fn next(self: Slide) ?Step {
+        if (self.rem.length2() <= math.epsilon * math.epsilon) return null;
+        return .{ .body = self.body.move(self.moved), .move = self.rem };
+    }
+
+    /// 根据本轮扫掠的最近接触推进位移，并计算下一轮滑动方向。
+    pub fn advance(self: *Slide, contact: ?Contact) void {
+        const found = contact orelse {
+            self.moved = self.moved.add(self.rem);
+            self.rem = .zero;
+            return;
+        };
+        const step = self.rem.scale(found.fraction);
+        const small = step.length2() <= math.epsilon * math.epsilon;
+        // 首次微小推进仍调整滑动方向并重查，保证贴墙时可以滑动。
+        // 连续两次推进都不超过 math.epsilon 时，结束本帧移动。
+        if (self.stalled and small) {
+            self.rem = .zero;
+            return;
+        }
+        self.moved = self.moved.add(step);
+        self.rem = self.rem.scale(1 - found.fraction);
+        const hasFaces = found.faces.x != 0 or found.faces.y != 0;
+        if (hasFaces or found.rectPair) {
+            // 墙面优先。只有孤立矩形角点才用其法线的两个轴。
+            const axes = if (hasFaces) found.faces else found.normal;
+            if (self.rem.x * axes.x < 0) self.rem.x = 0;
+            if (self.rem.y * axes.y < 0) self.rem.y = 0;
+            self.prev = null;
+        } else {
+            self.rem = slideAlong(self.rem, found.normal);
+            // 旧法线只约束同一位置上的连续接触。
+            if (self.prev) |normal| {
+                const inward = self.rem.dot(normal) < -math.epsilon;
+                if (found.fraction == 0 and inward) {
+                    self.rem = .zero;
+                    return;
+                }
+            }
+            self.prev = found.normal;
+        }
+        self.stalled = small;
+    }
+
+    // 将位移投影到法线切面，并保证转回 f32 后不朝法线内侧偏斜。
+    fn slideAlong(rem: Vector2, normal: Vector2) Vector2 {
+        const nx: f64 = normal.x;
+        const ny: f64 = normal.y;
+        const dot = @as(f64, rem.x) * nx + @as(f64, rem.y) * ny;
+        if (dot >= 0) return rem;
+
+        // 用实际法线长度投影，避免把近似单位向量当作精确单位向量。
+        const along = dot / (nx * nx + ny * ny);
+        const x: f32 = @floatCast(rem.x - nx * along);
+        const y: f32 = @floatCast(rem.y - ny * along);
+        if (@as(f64, x) * nx + @as(f64, y) * ny >= 0) return .xy(x, y);
+
+        // 转回 f32 后若仍朝内，沿法线较大的分量向外舍入。
+        const inf = std.math.inf(f32);
+        if (@abs(nx) >= @abs(ny)) {
+            const fixed: f32 = @floatCast(-@as(f64, y) * ny / nx);
+            return .xy(std.math.nextAfter(f32, fixed, if (nx > 0) inf else -inf), y);
+        }
+        const fixed: f32 = @floatCast(-@as(f64, x) * nx / ny);
+        return .xy(x, std.math.nextAfter(f32, fixed, if (ny > 0) inf else -inf));
+    }
+};
+
 /// 瓦片对齐的静态阻挡位图，支持查询与连续 2D 滑墙移动。
 pub const SolidMask = struct {
     grid: Grid,
@@ -186,101 +314,23 @@ pub const SolidMask = struct {
     }
 
     /// 按实心瓦片做连续 2D 滑墙移动，返回实际位移。
-    /// 剩余位移不超过 math.epsilon 时结束；狭缝中连续微小推进视为阻挡，
-    /// 可能舍弃本帧仍较大的剩余位移，避免反复接触而无法结束。
     pub fn slide(self: SolidMask, body: Shape, move: Vector2) Vector2 {
-        const epsilon2 = math.epsilon * math.epsilon;
-        var moved = Vector2.zero;
-        var rem = move;
-        var prev: ?Vector2 = null;
-        var stalled = false;
-        while (rem.length2() > epsilon2) {
-            const found = self.sweep(body.move(moved), rem) orelse {
-                moved = moved.add(rem);
-                break;
-            };
-            const advance = rem.scale(found.fraction);
-            const small = advance.length2() <= epsilon2;
-            // 首次微小推进仍调整滑动方向并重查，保证贴墙时可以滑动。
-            // 连续两次推进都不超过 math.epsilon 时，结束本帧移动。
-            if (stalled and small) break;
-            moved = moved.add(advance);
-            rem = rem.scale(1 - found.fraction);
-            switch (body) {
-                .rect => {
-                    // 墙面决定滑动方向。只有孤立角点时才用角点的两个轴。
-                    const isCorner = found.faces.x == 0 and found.faces.y == 0;
-                    const axes = if (isCorner) found.normal else found.faces;
-                    if (rem.x * axes.x < 0) rem.x = 0;
-                    if (rem.y * axes.y < 0) rem.y = 0;
-                },
-                .circle => {
-                    rem = slideAlong(rem, found.normal);
-                    // 旧法线只约束同一位置上的连续接触。
-                    if (prev) |normal| {
-                        const inward = rem.dot(normal) < -math.epsilon;
-                        if (found.fraction == 0 and inward) break;
-                    }
-                    prev = found.normal;
-                },
-            }
-            stalled = small;
-        }
-        return moved;
+        var s = Slide.init(body, move);
+        while (s.next()) |step| s.advance(self.sweep(step.body, step.move));
+        return s.moved;
     }
-
-    // 将位移投影到法线切面，并保证转回 f32 后不朝法线内侧偏斜。
-    fn slideAlong(rem: Vector2, normal: Vector2) Vector2 {
-        const nx: f64 = normal.x;
-        const ny: f64 = normal.y;
-        const dot = @as(f64, rem.x) * nx + @as(f64, rem.y) * ny;
-        if (dot >= 0) return rem;
-
-        // 用实际法线长度投影，避免把近似单位向量当作精确单位向量。
-        const along = dot / (nx * nx + ny * ny);
-        const x: f32 = @floatCast(rem.x - nx * along);
-        const y: f32 = @floatCast(rem.y - ny * along);
-        if (@as(f64, x) * nx + @as(f64, y) * ny >= 0) return .xy(x, y);
-
-        // 转回 f32 后若仍朝内，沿法线较大的分量向外舍入。
-        const inf = std.math.inf(f32);
-        if (@abs(nx) >= @abs(ny)) {
-            const fixed: f32 = @floatCast(-@as(f64, y) * ny / nx);
-            return .xy(std.math.nextAfter(f32, fixed, if (nx > 0) inf else -inf), y);
-        }
-        const fixed: f32 = @floatCast(-@as(f64, x) * nx / ny);
-        return .xy(x, std.math.nextAfter(f32, fixed, if (ny > 0) inf else -inf));
-    }
-
-    pub const Contact = struct {
-        /// 首次阻挡接触占请求位移的比例，范围为 [0, 1]，包含终点接触。
-        fraction: f32,
-        /// 从瓦片朝外的单位法线；同时命中时取按行遍历遇到的第一个。
-        normal: Vector2,
-        /// 矩形同时接触的轴向面，各分量为 -1、0 或 1，不是单位向量。
-        /// 圆形或仅接触矩形角点时为零，此时使用 normal。
-        faces: Vector2 = .zero,
-    };
 
     /// body 沿 move 平移，返回实心瓦片的最早阻挡接触，无命中时返回 null。
     /// 允许沿边滑动和相切；初始重叠时允许朝最近的边界退开。
     /// 网格外不阻挡；只查询接触，不修改形状或计算滑墙位移。
     pub fn sweep(self: SolidMask, body: Shape, move: Vector2) ?Contact {
-        const isRect = std.meta.activeTag(body) == .rect;
         var best: ?Contact = null;
         var iter = self.grid.indicesInSweep(body.toRect(), move);
         while (iter.next()) |index| {
             if (!self.bits.isSet(index)) continue;
             const tile = Shape{ .rect = self.grid.indexToRect(index) };
             const found = body.sweep(tile, move) orelse continue;
-            if (best == null or found.fraction < best.?.fraction) {
-                best = .{ .fraction = found.fraction, .normal = found.normal };
-            }
-            if (isRect and found.fraction == best.?.fraction) {
-                const faces = &best.?.faces;
-                if (found.normal.x == 0) faces.y = found.normal.y;
-                if (found.normal.y == 0) faces.x = found.normal.x;
-            }
+            Contact.record(&best, found);
         }
         return best;
     }
@@ -365,15 +415,18 @@ pub fn OwnerGrid(comptime Id: type, comptime empty: Id) type {
     };
 }
 
-/// 静态网格索引，按格子返回候选矩形下标的连续切片。
+/// 静态网格索引，按格子返回候选矩形下标，并借用建表时的矩形切片提供查询。
 pub const StaticIndex = struct {
+    grid: Grid,
+    rects: []const Rect = &.{},
     offsets: []u32,
     /// 完整分配的编号缓冲区，建表后 offsets 的最后一项表示有效数量。
     ids: []u32,
 
     /// 按 rects 的下标建立静态网格索引，忽略宽或高为 0 的空矩形。
     /// 同格内按下标升序排列。
-    /// 不保存矩形数据；矩形移动、扩大或 rects 重排后需重建索引。
+    /// 借用 rects 切片而不拥有它；调用方需保证底层内存在索引释放或重建前有效，
+    /// 矩形移动、扩大或 rects 扩容重排后需重建索引。
     pub fn build(gpa: Allocator, grid: Grid, rects: []const Rect) !StaticIndex {
         const offsets = try gpa.alloc(u32, grid.count() + 1);
         errdefer gpa.free(offsets);
@@ -390,7 +443,7 @@ pub const StaticIndex = struct {
         // 填表后游标是各格的结束位置，右移一项恢复起始位置。
         std.mem.copyBackwards(u32, offsets[1..], offsets[0 .. offsets.len - 1]);
         offsets[0] = 0;
-        return .{ .offsets = offsets, .ids = ids };
+        return .{ .grid = grid, .rects = rects, .offsets = offsets, .ids = ids };
     }
 
     pub fn deinit(self: *StaticIndex, gpa: Allocator) void {
@@ -404,12 +457,66 @@ pub const StaticIndex = struct {
     pub fn idsAt(self: StaticIndex, index: usize) []const u32 {
         return self.ids[self.offsets[index]..self.offsets[index + 1]];
     }
+
+    /// 检查形状是否与索引中的任意有效矩形重叠，相切不算，忽略空矩形。
+    pub fn overlaps(self: StaticIndex, body: Shape) bool {
+        var iter = self.grid.indicesInRect(body.toRect());
+        while (iter.next()) |cell| {
+            for (self.idsAt(cell)) |id| {
+                if (overlapsRect(body, self.rects[id])) return true;
+            }
+        }
+        return false;
+    }
+
+    /// body 沿 move 平移，返回索引中有效矩形的最早阻挡接触，无命中返回 null。
+    pub fn sweep(self: StaticIndex, body: Shape, move: Vector2) ?Contact {
+        var best: ?Contact = null;
+        var iter = self.grid.indicesInSweep(body.toRect(), move);
+        while (iter.next()) |cell| {
+            for (self.idsAt(cell)) |id| {
+                const rect = self.rects[id];
+                if (rect.size.x <= 0 or rect.size.y <= 0) continue;
+                const found = body.sweep(.{ .rect = rect }, move) orelse continue;
+                Contact.record(&best, found);
+            }
+        }
+        return best;
+    }
+
+    /// 按索引中的有效矩形做连续 2D 滑墙移动，返回实际位移。
+    pub fn slide(self: StaticIndex, body: Shape, move: Vector2) Vector2 {
+        var s = Slide.init(body, move);
+        while (s.next()) |step| s.advance(self.sweep(step.body, step.move));
+        return s.moved;
+    }
+};
+
+/// 组合静态瓦片位图与矩形索引的轻量查询视图，不拥有内存，忽略空矩形。
+pub const Static = struct {
+    mask: SolidMask,
+    index: StaticIndex,
+
+    pub fn overlaps(self: Static, body: Shape) bool {
+        return self.mask.overlaps(body) or self.index.overlaps(body);
+    }
+
+    pub fn sweep(self: Static, body: Shape, move: Vector2) ?Contact {
+        var best = self.mask.sweep(body, move);
+        Contact.merge(&best, self.index.sweep(body, move));
+        return best;
+    }
+
+    pub fn slide(self: Static, body: Shape, move: Vector2) Vector2 {
+        var s = Slide.init(body, move);
+        while (s.next()) |step| s.advance(self.sweep(step.body, step.move));
+        return s.moved;
+    }
 };
 
 /// 按 clear、countRect、prepare、add、finish 的顺序重建网格索引。
 /// 两遍遍历须提供相同的矩形；不保存矩形，各次调用使用同一分配器。
 pub const DynamicIndex = struct {
-    grid: Grid,
     index: StaticIndex,
     phase: Phase = .counting,
 
@@ -419,7 +526,7 @@ pub const DynamicIndex = struct {
     pub fn init(gpa: Allocator, grid: Grid) !DynamicIndex {
         const offsets = try gpa.alloc(u32, grid.count() + 1);
         @memset(offsets, 0);
-        return .{ .grid = grid, .index = .{ .offsets = offsets, .ids = &.{} } };
+        return .{ .index = .{ .grid = grid, .offsets = offsets, .ids = &.{} } };
     }
 
     pub fn deinit(self: *DynamicIndex, gpa: Allocator) void {
@@ -436,7 +543,7 @@ pub const DynamicIndex = struct {
     /// 第一遍只统计每格数量。宽高非负，空矩形忽略，范围按网格裁剪。
     pub fn countRect(self: *DynamicIndex, rect: Rect) void {
         std.debug.assert(self.phase == .counting);
-        var cells = self.grid.indicesInRect(rect);
+        var cells = self.index.grid.indicesInRect(rect);
         while (cells.next()) |index| self.index.offsets[index] += 1;
     }
 
@@ -460,7 +567,7 @@ pub const DynamicIndex = struct {
     /// prepare 成功后进行第二遍登记，直接写入调用方 ID，不分配内存。
     pub fn add(self: *DynamicIndex, id: u32, rect: Rect) void {
         std.debug.assert(self.phase == .filling);
-        fillRectIds(self.grid, rect, id, self.index.offsets, self.index.ids);
+        fillRectIds(self.index.grid, rect, id, self.index.offsets, self.index.ids);
     }
 
     /// 全部 ID 填入后结束本轮构建，此后才能查询。
@@ -490,6 +597,14 @@ fn startOffsets(offsets: []u32) u32 {
         total += count;
     }
     return total;
+}
+
+fn overlapsRect(body: Shape, rect: Rect) bool {
+    if (rect.size.x <= 0 or rect.size.y <= 0) return false;
+    return switch (body) {
+        .rect => |r| r.intersect(rect),
+        .circle => |c| c.separate(rect) != null,
+    };
 }
 
 fn fillRectIds(grid: Grid, rect: Rect, id: u32, offsets: []u32, ids: []u32) void {
