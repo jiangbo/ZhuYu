@@ -295,10 +295,11 @@ pub const Animation = struct {
         self.reset();
     }
 
-    /// 推进到当前时间对应的帧，丢弃途中事件。
-    pub fn update(self: *Animation, delta: f32) void {
-        if (!self.advance(delta)) return;
+    /// 推进到当前时间对应的帧，丢弃途中事件；有事件推进时返回 true。
+    pub fn update(self: *Animation, delta: f32) bool {
+        if (!self.advance(delta)) return false;
         while (self.nextStep() != null) {}
+        return true;
     }
 
     /// 累加时间；返回本帧是否有事件待 nextStep 取出。
