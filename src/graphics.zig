@@ -297,16 +297,20 @@ pub const Animation = struct {
 
     /// 推进到当前时间对应的帧，丢弃途中事件。
     pub fn update(self: *Animation, delta: f32) void {
-        self.advance(delta);
+        if (!self.advance(delta)) return;
         while (self.nextStep() != null) {}
     }
 
-    /// 累加时间；随后调用 nextStep 逐个取出事件。
-    pub fn advance(self: *Animation, delta: f32) void {
+    /// 累加时间；返回本帧是否有事件待 nextStep 取出。
+    pub fn advance(self: *Animation, delta: f32) bool {
         std.debug.assert(delta >= 0);
-        if (self.isFinished()) return;
-        const starting = std.math.signbit(self.elapsed);
-        self.elapsed += if (starting) -delta else delta;
+        if (self.isFinished()) return false;
+        if (std.math.signbit(self.elapsed)) {
+            self.elapsed -= delta;
+            return true;
+        }
+        self.elapsed += delta;
+        return self.elapsed >= self.source.frames[self.index].duration;
     }
 
     /// 取出下一个事件；play/reset 会清除剩余时间并重新产生首帧事件。
