@@ -31,7 +31,8 @@ pub const Map = struct {
 
         if (tileSet.columns == 0) {
             const tile = tileSet.getTileByLocalId(localId).?;
-            return assets.getImage(tile.id);
+            const image = assets.getImage(tile.id) orelse return null;
+            return if (tile.imageRect) |rect| image.sub(rect) else image;
         }
         if (tileSet.image == 0) return null;
 
@@ -180,6 +181,7 @@ pub const TileSet = struct {
 
 pub const Tile = struct {
     id: u32,
+    imageRect: ?Rect = null, // 图片集合瓦片在源图片中的裁剪区域。
     objectGroup: ?ObjectGroup = null,
     properties: []const Property,
     animation: []const graphics.Frame = &.{},

@@ -184,6 +184,7 @@ const Convert = struct {
                         try self.fileId(image)
                     else
                         0,
+                    .imageRect = if (tile.image != null) tile.imageRect() else null,
                     .objectGroup = group,
                     .properties = try self.parseProperties(tile.properties orelse &.{}),
                     .animation = try self.parseAnimation(tile.animation, value),
@@ -711,8 +712,22 @@ const JsonTileDefinition = struct {
     properties: ?[]JsonProperty = null,
     /// 瓦片每个角的角点索引 (由 Wang sets 取代)
     terrain: ?[]i32 = null,
+
     /// 瓦片的类 (自 1.9 起，之前保存为 class)
     type: ?[]const u8 = null,
+
+    fn imageRect(self: JsonTileDefinition) ?zhu.Rect {
+        const width = self.width orelse self.imagewidth orelse return null;
+        const height = self.height orelse self.imageheight orelse return null;
+        const full = self.x == 0 and self.y == 0 and
+            width == (self.imagewidth orelse width) and
+            height == (self.imageheight orelse height);
+        if (full) return null;
+        return .init(
+            .xy(@floatFromInt(self.x), @floatFromInt(self.y)),
+            .xy(@floatFromInt(width), @floatFromInt(height)),
+        );
+    }
 };
 
 // --- 其他小型组件 ---
