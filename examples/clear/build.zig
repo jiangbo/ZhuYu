@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) !void {
             .name = "clear",
             .root_module = mod,
         });
-        b.getInstallStep().dependOn(&web.step);
+        b.getInstallStep().dependOn(web);
     } else {
         const exe = b.addExecutable(.{ .name = "clear", .root_module = mod });
         zhuBuild.setLibC(zhuyu, exe);
