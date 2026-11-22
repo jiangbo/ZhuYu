@@ -16,13 +16,14 @@ const Image = graphics.Image;
 const Vector2 = zhu.Vector2;
 const Filter = graphics.Filter;
 const Path = []const u8;
+const HashMap = std.AutoHashMapUnmanaged;
 pub const Pack = fetch.Pack;
 
 var gpa: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
 pub var frameStats: FrameStats = .{}; // 本帧绘制统计。
 pub var fontStats: FontStats = .{}; // 当前字体和字库统计。
-var imageCache: std.AutoHashMapUnmanaged(Id, graphics.Image) = .empty;
+var imageCache: HashMap(Id, graphics.Image) = .empty;
 
 // 配置 IO 和统计分配器，不创建图形资源。
 pub fn setup(io_: std.Io, gpa_: std.mem.Allocator) std.mem.Allocator {
@@ -53,7 +54,6 @@ pub fn update() void {
 pub fn deinit() void {
     imageCache.deinit(gpa);
     atlas.cache.deinit(gpa);
-    view.deinit();
     sound.deinit();
     music.deinit();
     if (options.font != .static) glyph.deinit();
@@ -79,8 +79,8 @@ pub fn loadImage(path: Path, size: Vector2, option: ImageOption) Image {
         .size = size,
         .filter = option.filter,
     };
-    view.put(imageView, .{ .sampler = sampler.get(option.filter) });
-    fetch.load(path, imageView.id, view.handler, .{ .kind = .image });
+    gpu.putView(imageView, null);
+    fetch.load(path, imageView.id, loadImageHandler, .{ .kind = .image });
     return entry.value_ptr.*;
 }
 
@@ -126,7 +126,8 @@ pub const sampler = struct {
 
 pub const gpu = struct {
     // 统一持有缓冲句柄，提前销毁时移除，退出时释放剩余缓冲。
-    var buffers: std.AutoHashMapUnmanaged(sk.gfx.Buffer, void) = .empty;
+    var buffers: HashMap(sk.gfx.Buffer, void) = .empty;
+    var views: HashMap(graphics.View, ?graphics.Pipeline) = .empty;
     var textureBytes: usize = 0; // 纹理存储估算。
     var vertices: std.ArrayList(graphics.Vertex) = .empty; // 本帧顶点数据。
     var pipelines: std.ArrayListUnmanaged(sk.gfx.Pipeline) = .empty;
@@ -221,6 +222,28 @@ pub const gpu = struct {
         shaders.append(gpa, value) catch oom();
     }
 
+    // 创建并登记采样视图，退出时统一销毁。
+    pub fn makeView(desc: sk.gfx.ViewDesc) graphics.View {
+        const view = sk.gfx.makeView(desc);
+        putView(view, null);
+        return view;
+    }
+
+    // 登记或更新视图流水线；流水线为空时使用默认图片流水线。
+    pub fn putView(source: graphics.View, pipeline: ?graphics.Pipeline) void {
+        views.put(gpa, source, pipeline) catch oom();
+    }
+
+    pub fn getViewPipeline(source: graphics.View) ?graphics.Pipeline {
+        return views.get(source) orelse null;
+    }
+
+    // 提前释放采样视图，同时移除记录，退出时不再重复销毁。
+    pub fn destroyView(source: graphics.View) void {
+        _ = views.remove(source);
+        sk.gfx.destroyView(source);
+    }
+
     // 登记图像复制操作，上传缓冲的写入策略由调用方决定。
     pub fn addUpdate(value: sk.gfx.CopyBufferToImageDesc) void {
         updates.append(gpa, value) catch oom();
@@ -233,10 +256,15 @@ pub const gpu = struct {
         vertices.deinit(gpa);
         vertices = .empty;
         frameStats = .{};
-        var iterator = buffers.keyIterator();
-        while (iterator.next()) |buffer| sk.gfx.destroyBuffer(buffer.*);
+        var bufferIt = buffers.keyIterator();
+        while (bufferIt.next()) |buffer| sk.gfx.destroyBuffer(buffer.*);
         buffers.deinit(gpa);
         buffers = .empty;
+
+        var viewIt = views.keyIterator();
+        while (viewIt.next()) |key| sk.gfx.destroyView(key.*);
+        views.deinit(gpa);
+        views = .empty;
 
         for (pipelines.items) |value| sk.gfx.destroyPipeline(value);
         pipelines.deinit(gpa);
@@ -252,7 +280,7 @@ pub const atlas = struct {
     pub const Option = struct { pages: u8 = 0, filter: Filter = .nearest };
 
     // 记录每个图集剩余待加载的图片页数。
-    var cache: std.AutoHashMapUnmanaged(Id, i32) = .empty;
+    var cache: HashMap(Id, i32) = .empty;
 
     // 打包为文件加载回调的 64 位标识。
     const PageIndex = packed struct(u64) { atlasId: Id, layer: i32 };
@@ -280,7 +308,7 @@ pub const atlas = struct {
                 .num_slices = @intCast(source.imagePaths.len + option.pages),
             }) },
         });
-        view.put(atlasView, .{ .sampler = sampler.get(option.filter) });
+        gpu.putView(atlasView, null);
         entry.value_ptr.* = @intCast(source.imagePaths.len);
 
         const len: u32 = @intCast(source.imagePaths.len + source.images.len);
@@ -361,71 +389,31 @@ pub fn loadZlib(path: Path, handle: u64, handler: ZlibHandler) void {
     }.callback, .{ .kind = .zlib });
 }
 
-pub const view = struct {
-    // 视图的绘制配置，流水线为空时使用默认图片流水线。
-    pub const Info = struct {
-        sampler: sk.gfx.Sampler,
-        pipeline: ?sk.gfx.Pipeline = null,
-    };
+fn loadImageHandler(index: u64, resp: Response) void {
+    const decoded = resp.content.image;
+    const imageView: sk.gfx.View = .{ .id = @intCast(index) };
 
-    var cache: std.AutoHashMapUnmanaged(graphics.View, Info) = .empty;
-
-    // 创建视图时登记采样器与流水线。
-    pub fn put(source: graphics.View, info: Info) void {
-        cache.put(gpa, source, info) catch oom();
-    }
-
-    // 返回视图配置，视图必须已经登记。
-    pub fn get(source: graphics.View) Info {
-        return cache.get(source).?;
-    }
-
-    // 用于修改已有流水线，缓存扩容或移除记录后指针失效。
-    pub fn getPtr(source: graphics.View) *Info {
-        return cache.getPtr(source).?;
-    }
-
-    // 提前释放采样视图，同时移除记录，退出时不再重复销毁。
-    pub fn destroy(source: graphics.View) void {
-        _ = cache.remove(source);
-        sk.gfx.destroyView(source);
-    }
-
-    // 销毁仍在缓存中的采样视图，再释放记录表。
-    pub fn deinit() void {
-        var iterator = cache.keyIterator();
-        while (iterator.next()) |key| sk.gfx.destroyView(key.*);
-
-        cache.deinit(gpa);
-        cache = .empty;
-    }
-
-    fn handler(index: u64, resp: Response) void {
-        const decoded = resp.content.image;
-        const imageView: sk.gfx.View = .{ .id = @intCast(index) };
-
-        sk.gfx.initView(imageView, .{ .texture = .{
-            .image = gpu.makeImage(.{
-                .width = decoded.width,
-                .height = decoded.height,
-                .type = .ARRAY,
-                .data = sk.gfx.asRange(decoded.data),
-            }),
-        } });
-        const image = imageCache.getPtr(id(resp.path)).?;
-        // 文件尺寸必须与调用方提供的尺寸一致。
-        const width: f32 = @floatFromInt(decoded.width);
-        const height: f32 = @floatFromInt(decoded.height);
-        std.debug.assert(image.size.x == width);
-        std.debug.assert(image.size.y == height);
-    }
-};
+    sk.gfx.initView(imageView, .{ .texture = .{
+        .image = gpu.makeImage(.{
+            .width = decoded.width,
+            .height = decoded.height,
+            .type = .ARRAY,
+            .data = sk.gfx.asRange(decoded.data),
+        }),
+    } });
+    const image = imageCache.getPtr(id(resp.path)).?;
+    // 文件尺寸必须与调用方提供的尺寸一致。
+    const width: f32 = @floatFromInt(decoded.width);
+    const height: f32 = @floatFromInt(decoded.height);
+    std.debug.assert(image.size.x == width);
+    std.debug.assert(image.size.y == height);
+}
 
 pub const sound = struct {
     pub const Source = audio.SoundSource;
     pub const Handler = fn (Id, Source) void;
 
-    var cache: std.AutoHashMapUnmanaged(Id, ?Source) = .empty;
+    var cache: HashMap(Id, ?Source) = .empty;
 
     fn deinit() void {
         var iterator = cache.valueIterator();
@@ -458,7 +446,7 @@ pub const music = struct {
     pub const Source = audio.MusicSource;
     pub const Handler = fn (Id, Source) void;
 
-    var cache: std.AutoHashMapUnmanaged(Id, ?Source) = .empty;
+    var cache: HashMap(Id, ?Source) = .empty;
 
     pub fn load(path: Path, handler: Handler) ?Source {
         const assetId = id(path);
@@ -541,7 +529,7 @@ pub const glyph = if (options.font == .static) struct {} else struct {
     pub var createGlyph: CreateGlyph = undefined;
 
     var atlasImage: Image = .empty;
-    var cache: std.AutoHashMapUnmanaged(u32, graphics.Glyph) = .empty;
+    var cache: HashMap(u32, graphics.Glyph) = .empty;
     var upload: sk.gfx.Buffer = .{};
     var buffer: Buffer = .{};
     var offset: usize = 0;

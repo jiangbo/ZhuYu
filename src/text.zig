@@ -272,7 +272,6 @@ pub const static = if (options.font == .static) struct {
 
         for (zon.images, 0..) |path, i| {
             var image = assets.getImage(assets.id(path)).?;
-            std.debug.assert(options.samplers or image.filter == option.filter);
             image.filter = option.filter;
             images[i] = image;
         }
@@ -297,7 +296,7 @@ pub const static = if (options.font == .static) struct {
         const alphaState = graphics.Blend.alpha.state();
         const pipeline = graphics.createPipeline(desc, alphaState);
         for (images[0..zon.images.len]) |image| {
-            assets.view.getPtr(image.view).pipeline = pipeline;
+            assets.gpu.putView(image.view, pipeline);
         }
     }
 

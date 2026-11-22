@@ -472,7 +472,7 @@ pub const RenderTarget = struct {
     pub fn deinit(self: RenderTarget) void {
         const texture = sk.gfx.queryViewImage(self.image.view);
         sk.gfx.destroyView(self.pass.attachments.colors[0]);
-        assets.view.destroy(self.image.view);
+        assets.gpu.destroyView(self.image.view);
         assets.gpu.destroyImage(texture);
     }
 };
@@ -491,10 +491,7 @@ pub fn createRenderTarget(size: zhu.Vector2, filter: Filter) RenderTarget {
         .color_attachment = .{ .image = colorImage },
     });
 
-    const view = sk.gfx.makeView(.{
-        .texture = .{ .image = colorImage },
-    });
-    assets.view.put(view, .{ .sampler = assets.sampler.get(filter) });
+    const view = assets.gpu.makeView(.{ .texture = .{ .image = colorImage } });
     return .{
         .pass = pass,
         .image = .{ .view = view, .size = size, .filter = filter },

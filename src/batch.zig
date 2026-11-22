@@ -30,7 +30,6 @@ pub const Option = struct {
     // 纯加法发光：color.a 设为零，用 addColor 设置颜色和强度。
     // 图片和加色一起淡出时，需要同时降低 color.a 和 addColor.a。
     addColor: Color = .all(0),
-    filter: ?graphics.Filter = null, // null 使用图片自身的采样方式。
     snap: ?bool = null, // null 使用 batch 的默认设置。
 };
 
@@ -46,8 +45,10 @@ pub const DrawCommand = struct {
     start: u32 = 0, // 起始顶点索引
     end: ?u32 = null, // 结束顶点索引，null 表示未结束。
     view: graphics.View = .{}, // 纹理视图
+    pipeline: graphics.Pipeline, // 本批次使用的流水线。
     camera: camera.Camera, // 本批次的基准相机快照。
     snap: bool, // 是否将投影平移对齐到实际像素。
+    filter: graphics.Filter, // 单采样器模式下使用的采样方式。
     size: Vector2, // 本批次绘制的逻辑尺寸。
 };
 
@@ -63,6 +64,7 @@ pub var commandPeak: usize = 0;
 
 // 满时提供更大的列表，保留原有命令及顺序。缓冲区仍由调用方管理。
 pub var onFull: ?*const fn ([]Command) std.ArrayList(Command) = null;
+var currentPipeline: ?graphics.Pipeline = null;
 
 var vertexBuffer: sk.gfx.Buffer = .{}; // 上传后用于绘制的顶点缓冲。
 var defaultPipeline: sk.gfx.Pipeline = undefined; // 默认图片流水线。
@@ -93,9 +95,17 @@ pub fn beginDraw(color: Color, pass: RenderPass) void {
 
 pub fn useTarget(color: Color, pass: graphics.RenderPass) void {
     endDrawCommand();
+    currentPipeline = null;
     appendCommand(.{ .target = .{ .color = color, .pass = pass } });
     camera.state.viewRect = pass.queryViewport();
     camera.state.size = pass.querySize();
+}
+
+// 切换后续批次使用的流水线；null 恢复纹理或默认流水线。
+pub fn usePipeline(pipeline: ?graphics.Pipeline) void {
+    if (std.meta.eql(currentPipeline, pipeline)) return;
+    endDrawCommand();
+    currentPipeline = pipeline;
 }
 
 // 相机栈为空时，切换后续批次的基准相机和投影取整设置。
@@ -155,21 +165,30 @@ fn appendCommand(cmd: Command) void {
 
 fn addCommand(image: Image) *DrawCommand {
     endDrawCommand();
+    const pip = currentPipeline orelse
+        assets.gpu.getViewPipeline(image.view) orelse defaultPipeline;
     appendCommand(.{ .draw = .{
         .start = @intCast(assets.frameStats.vertex),
         .view = image.view,
+        .pipeline = pip,
         .camera = camera.state.camera,
         .snap = camera.state.snap,
+        .filter = image.filter,
         .size = camera.state.size,
     } });
     return currentDraw().?;
 }
 
+fn ensureDraw(image: Image) *DrawCommand {
+    const cmd = currentDraw() orelse return addCommand(image);
+    const same = cmd.view.id == image.view.id and
+        (options.samplers or cmd.filter == image.filter);
+    return if (same) cmd else addCommand(image);
+}
+
 // 直接提交调用方准备好的顶点，不修改其绘制设置。
 pub fn drawVertices(image: Image, items: []const Vertex) void {
-    const cmd = currentDraw() orelse addCommand(image);
-    // 自动分批只比较纹理视图，不比较采样器或其它状态。
-    if (cmd.view.id != image.view.id) _ = addCommand(image);
+    _ = ensureDraw(image);
     assets.gpu.addVertices(items);
 }
 
@@ -320,9 +339,7 @@ pub fn drawCamera(
     source: ?camera.Camera,
     option: Option,
 ) void {
-    var cmd = currentDraw() orelse addCommand(image);
-    if (cmd.view.id != image.view.id) cmd = addCommand(image);
-
+    const cmd = ensureDraw(image);
     const size = option.size orelse image.size;
     // 中心使用缩放前的尺寸，改变 scale 时保持位置不变。
     var center = pos.add(size.mul(option.pivot.sub(option.anchor)));
@@ -335,7 +352,7 @@ pub fn drawCamera(
     assets.gpu.addVertex(Vertex{
         .position = center,
         .layer = image.layer,
-        .filter = option.filter orelse image.filter,
+        .filter = image.filter,
         .radian = option.radian,
         .size = drawSize,
         .pivot = option.pivot,
@@ -403,15 +420,12 @@ fn doDraw(
     flipY: bool,
     pipeline: *sk.gfx.Pipeline,
 ) void {
-    // 未指定流水线时使用默认图片流水线。
-    const info = assets.view.get(cmd.view);
-    const selected = info.pipeline orelse defaultPipeline;
     // 只缓存流水线。
     // bindings 包含实例起点 offset，每个命令可能不同。
     // uniforms 依赖相机、目标翻转和纹理大小，保持逐次提交。
-    if (pipeline.id != selected.id) {
-        sk.gfx.applyPipeline(selected);
-        pipeline.* = selected;
+    if (pipeline.id != cmd.pipeline.id) {
+        sk.gfx.applyPipeline(cmd.pipeline);
+        pipeline.* = cmd.pipeline;
     }
 
     // Sokol 将浮点视口截断为整数，对齐必须使用同样的实际像素尺寸。
@@ -445,7 +459,7 @@ fn doDraw(
         bindings.samplers[0] = assets.sampler.nearest;
         bindings.samplers[1] = assets.sampler.linear;
     } else {
-        bindings.samplers[0] = info.sampler;
+        bindings.samplers[0] = assets.sampler.get(cmd.filter);
     }
     sk.gfx.applyBindings(bindings);
 
