@@ -131,7 +131,9 @@ fn writeZon(io: std.Io, path: []const u8, value: anytype) !void {
     var buffer: [4096]u8 = undefined;
     var writer = file.writer(io, &buffer);
     // 引擎的类属性包含递归类型，直接使用支持该类型的序列化方法。
-    try std.zon.stringify.serializeArbitraryDepth(value, .{}, &writer.interface);
+    try std.zon.stringify.serializeArbitraryDepth(value, .{
+        .emit_default_optional_fields = false,
+    }, &writer.interface);
     try writer.interface.flush();
 }
 
