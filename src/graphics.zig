@@ -543,6 +543,7 @@ pub fn beginPass(color: Color, renderPass: RenderPass) zhu.Rect {
 
     const view = renderPass.queryViewport();
     applyViewport(view.min, view.size);
+    applyScissor(view.min, view.size);
     return view;
 }
 

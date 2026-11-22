@@ -38,8 +38,11 @@ pub const Command = union(enum) {
     viewport: zhu.Rect, // 目标像素区域。
     scissor: zhu.Rect, // 目标像素裁剪，离屏翻转在提交时处理。
     draw: DrawCommand, // 绘制命令
+    custom: CustomCommand, // 自定义绘制回调
 };
 
+pub const CustomFn = *const fn (?*anyopaque) void;
+pub const CustomCommand = struct { ctx: ?*anyopaque, func: CustomFn };
 pub const TargetCommand = struct { color: Color, pass: RenderPass };
 pub const DrawCommand = struct {
     start: u32 = 0, // 起始顶点索引
@@ -133,6 +136,12 @@ pub fn useScissor(rect: ?zhu.Rect) void {
         clip.size = area.size.mul(scale);
     }
     appendCommand(.{ .scissor = clip });
+}
+
+// 在命令队列当前位置插入自定义 GPU 操作，ctx 必须保持有效直到 endDraw() 完成。
+pub fn addCustom(ctx: ?*anyopaque, func: CustomFn) void {
+    endDrawCommand();
+    appendCommand(.{ .custom = .{ .ctx = ctx, .func = func } });
 }
 
 // 存在未结束的绘制命令时结束它，下一次绘制会创建新命令。
@@ -373,6 +382,7 @@ pub fn flush() void {
     var pipeline: sk.gfx.Pipeline = .{}; // 当前渲染通道已绑定的流水线。
     var activePass, var flipY = .{ false, false };
     var viewport: zhu.Rect = undefined;
+    var scissor: zhu.Rect = undefined;
     for (commands.items) |cmd| {
         switch (cmd) {
             .target => |target| {
@@ -380,11 +390,12 @@ pub fn flush() void {
                 flipY = target.pass.target != null and
                     !sk.gfx.queryFeatures().origin_top_left;
                 viewport = graphics.beginPass(target.color, target.pass);
+                scissor = viewport;
                 pipeline = .{};
                 activePass = true;
             },
             .viewport => |view| {
-                viewport = view;
+                viewport, scissor = .{ view, view };
                 graphics.applyViewport(view.min, view.size);
                 // 切换视口时恢复完整裁剪，避免沿用旧视口的局部裁剪。
                 graphics.applyScissor(view.min, view.size);
@@ -396,9 +407,16 @@ pub fn flush() void {
                     const gap = viewport.max().y - clip.max().y;
                     pos.y = viewport.min.y + gap;
                 }
+                scissor = .init(pos, clip.size);
                 graphics.applyScissor(pos, clip.size);
             },
             .draw => |draw| doDraw(draw, viewport.size, flipY, &pipeline),
+            .custom => |custom| {
+                custom.func(custom.ctx);
+                pipeline = .{};
+                graphics.applyViewport(viewport.min, viewport.size);
+                graphics.applyScissor(scissor.min, scissor.size);
+            },
         }
     }
     flushed = true;

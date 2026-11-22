@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) !void {
     sokolLibrary.lto = if (optimize == .debug) .none else .full;
     b.installArtifact(sokolLibrary);
     const sokolModule = sokolDep.module("sokol");
-    const shader = try createShader(b, sokolDep, target.result, samplers);
+    const shader = try createQuadShader(b, sokolDep, target.result, samplers);
 
     const zhu = b.addModule("zhu", .{
         .root_source_file = b.path("src/zhu.zig"),
@@ -139,20 +139,56 @@ fn buildCross(
     b.step("test", "Run tests").dependOn(&runTests.step);
 }
 
+pub const ShaderOptions = struct {
+    name: []const u8,
+    input: []const u8,
+    output: []const u8,
+    defines: ?[][]const u8 = null,
+};
+
+// 为游戏模块编译自定义 GLSL 着色器，复用引擎的 Sokol、shdc 和平台格式。
+pub fn createShader(
+    b: *std.Build,
+    dep: *std.Build.Dependency,
+    options: ShaderOptions,
+) !*std.Build.Module {
+    const zhu = dep.module("zhu");
+    const sokolModule = zhu.import_table.get("sokol").?;
+    const shdc = sokolModule.owner.dependency("shdc", .{});
+    const target = zhu.resolved_target.?.result;
+    return createShaderModule(b, sokolModule, shdc, target, options);
+}
+
 // 生成目标平台的着色器模块。
-fn createShader(
+fn createQuadShader(
     b: *std.Build,
     sokolDep: *std.Build.Dependency,
     target: std.Target,
     samplers: bool,
 ) !*std.Build.Module {
     const sokolModule = sokolDep.module("sokol");
+    const shdc = sokolDep.builder.dependency("shdc", .{});
     var defines = [_][]const u8{"SAMPLERS"};
-    return try sokol.shdc.createModule(b, "shader", sokolModule, .{
-        .shdc_dep = sokolDep.builder.dependency("shdc", .{}),
+    return createShaderModule(b, sokolModule, shdc, target, .{
+        .name = "shader",
         .input = "src/internal/quad.glsl",
         .output = "quad.glsl.zig",
         .defines = if (samplers) &defines else null,
+    });
+}
+
+fn createShaderModule(
+    b: *std.Build,
+    sokolModule: *std.Build.Module,
+    shdc: *std.Build.Dependency,
+    target: std.Target,
+    options: ShaderOptions,
+) !*std.Build.Module {
+    return try sokol.shdc.createModule(b, options.name, sokolModule, .{
+        .shdc_dep = shdc,
+        .input = options.input,
+        .output = options.output,
+        .defines = options.defines,
         // 保留对应平台可能使用的 shader 格式。
         .slang = switch (target.os.tag) {
             .windows => .{ .hlsl5 = true, .glsl410 = true },

@@ -108,10 +108,14 @@ pub const sampler = struct {
         nearest = sk.gfx.makeSampler(.{
             .min_filter = .NEAREST,
             .mag_filter = .NEAREST,
+            .wrap_u = .CLAMP_TO_EDGE,
+            .wrap_v = .CLAMP_TO_EDGE,
         });
         linear = sk.gfx.makeSampler(.{
             .min_filter = .LINEAR,
             .mag_filter = .LINEAR,
+            .wrap_u = .CLAMP_TO_EDGE,
+            .wrap_v = .CLAMP_TO_EDGE,
         });
     }
 
