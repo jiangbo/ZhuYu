@@ -623,6 +623,16 @@ pub const Color = extern struct {
         };
     }
 
+    // 将浮点 RGBA 限制到 0～1，再舍入到最近的字节值。
+    pub fn fromFloat(color: sk.gfx.Color) Color {
+        var result: Color = undefined;
+        inline for (.{ "r", "g", "b", "a" }) |field| {
+            const value = std.math.clamp(@field(color, field), 0, 1);
+            @field(result, field) = @intFromFloat(@round(value * 255));
+        }
+        return result;
+    }
+
     // 将线性 RGB 转为 sRGB，保持透明度。
     pub fn toSrgb(self: Color) Color {
         return .{
