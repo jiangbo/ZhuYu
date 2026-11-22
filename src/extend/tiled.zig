@@ -12,8 +12,20 @@ pub const Map = struct {
     grid: Grid,
 
     backgroundColor: ?graphics.Color = null,
+    properties: []const Property = &.{},
     layers: []const Layer = &.{},
     tileSets: []const TileSet = &.{},
+
+    pub fn getProperty(self: Map, name: []const u8, T: type) ?T {
+        for (self.properties) |property| {
+            if (property.is(name)) return property.value.get(T);
+        }
+        return null;
+    }
+
+    pub fn getClass(self: Map, name: []const u8) ?ClassProperty {
+        return self.getProperty(name, ClassProperty);
+    }
 
     pub fn getTileSet(self: Map, gid: u32) TileSet {
         std.debug.assert(gid != 0);

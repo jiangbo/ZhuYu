@@ -256,6 +256,7 @@ const Convert = struct {
                 parseColor(color)
             else
                 null,
+            .properties = try self.parseProperties(value.properties orelse &.{}),
             .layers = try self.parseLayers(value.layers, ranges),
         };
     }
