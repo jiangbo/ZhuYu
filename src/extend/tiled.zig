@@ -113,12 +113,12 @@ pub const Layer = struct {
     }
 
     /// 根据地图瓦片尺寸返回当前 tile 层的网格。
-    pub fn grid(self: Layer, cell: u32) Grid {
+    pub fn grid(self: Layer, cellSide: u32) Grid {
         std.debug.assert(self.type == .tile);
         return .{
             .width = @intFromFloat(self.width),
             .height = @intFromFloat(self.height),
-            .cell = cell,
+            .cellSide = cellSide,
         };
     }
 };

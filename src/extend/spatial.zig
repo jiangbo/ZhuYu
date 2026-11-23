@@ -40,12 +40,12 @@ pub const IndexIter = struct {
 pub const Grid = struct {
     width: i32,
     height: i32,
-    cell: u32,
+    cellSide: u32,
 
     pub fn size(self: Grid) Vector2 {
         const w: f32 = @floatFromInt(self.width);
         const h: f32 = @floatFromInt(self.height);
-        return Vector2.xy(w, h).scale(@floatFromInt(self.cell));
+        return Vector2.xy(w, h).scale(@floatFromInt(self.cellSide));
     }
 
     pub fn count(self: Grid) usize {
@@ -53,7 +53,7 @@ pub const Grid = struct {
     }
 
     pub fn cellSize(self: Grid) Vector2 {
-        return .all(@floatFromInt(self.cell));
+        return .all(@floatFromInt(self.cellSide));
     }
 
     pub fn halfCell(self: Grid) Vector2 {
@@ -77,14 +77,14 @@ pub const Grid = struct {
     pub fn cellToWorld(self: Grid, cell: Cell) Vector2 {
         const x: f32 = @floatFromInt(cell.x);
         const y: f32 = @floatFromInt(cell.y);
-        return Vector2.xy(x, y).scale(@floatFromInt(self.cell));
+        return Vector2.xy(x, y).scale(@floatFromInt(self.cellSide));
     }
 
     pub fn indexToWorld(self: Grid, index: usize) Vector2 {
         const width: usize = @intCast(self.width);
         const x: f32 = @floatFromInt(index % width);
         const y: f32 = @floatFromInt(index / width);
-        return Vector2.xy(x, y).scale(@floatFromInt(self.cell));
+        return Vector2.xy(x, y).scale(@floatFromInt(self.cellSide));
     }
 
     pub fn indexToRect(self: Grid, index: usize) Rect {
@@ -336,7 +336,7 @@ pub const SolidMask = struct {
     }
 
     /// 逐个取出合并后的世界坐标矩形，不进行分配。
-    /// 结果互不重叠且完整覆盖实心区域，半格等精度由 grid.cell 决定。
+    /// 结果互不重叠且完整覆盖实心区域，半格等精度由 grid.cellSide 决定。
     /// 每次 next 清除返回区域的实心位，遍历完成后位图为空。
     /// 迭代期间保持 self 有效，不通过其它途径修改网格或位图。
     pub fn takeRects(self: *SolidMask) RectIter {
@@ -507,8 +507,8 @@ pub const StaticIndex = struct {
     /// 检查形状是否与索引中的任意有效矩形重叠，相切不算，忽略空矩形。
     pub fn overlaps(self: StaticIndex, body: Shape) bool {
         var iter = self.grid.indicesInRect(body.toRect());
-        while (iter.next()) |cell| {
-            for (self.idsAt(cell)) |id| {
+        while (iter.next()) |index| {
+            for (self.idsAt(index)) |id| {
                 if (overlapsRect(body, self.rects[id])) return true;
             }
         }
@@ -519,8 +519,8 @@ pub const StaticIndex = struct {
     pub fn sweep(self: StaticIndex, body: Shape, move: Vector2) ?Contact {
         var best: ?Contact = null;
         var iter = self.grid.indicesInSweep(body.toRect(), move);
-        while (iter.next()) |cell| {
-            for (self.idsAt(cell)) |id| {
+        while (iter.next()) |index| {
+            for (self.idsAt(index)) |id| {
                 const rect = self.rects[id];
                 if (rect.size.x <= 0 or rect.size.y <= 0) continue;
                 const found = body.sweep(.{ .rect = rect }, move) orelse continue;
@@ -538,18 +538,44 @@ pub const StaticIndex = struct {
     }
 };
 
-/// 组合静态瓦片位图与矩形索引的轻量查询视图，不拥有内存，忽略空矩形。
+/// 按需组合静态瓦片位图、矩形索引和活动边界，借用索引中的矩形数据。
 pub const Static = struct {
-    mask: SolidMask,
-    index: StaticIndex,
+    mask: ?SolidMask = null,
+    index: ?StaticIndex = null,
+    bounds: ?Rect = null,
+
+    /// 释放位图和索引缓冲区，保留借用的矩形数据，并重置为空。
+    pub fn deinit(self: *Static, gpa: Allocator) void {
+        if (self.index) |*index| index.deinit(gpa);
+        if (self.mask) |*mask| mask.deinit(gpa);
+        self.* = .{};
+    }
+
+    /// 设置 rect 覆盖到的整格，按网格边界裁剪；要求 mask 存在。
+    pub fn setCellsInRect(self: *Static, rect: Rect) void {
+        self.mask.?.setCellsInRect(rect, true);
+    }
 
     pub fn overlaps(self: Static, body: Shape) bool {
-        return self.mask.overlaps(body) or self.index.overlaps(body);
+        if (self.bounds) |bounds| {
+            if (!bounds.containsRect(body.toRect())) return true;
+        }
+        if (self.mask) |mask| if (mask.overlaps(body)) return true;
+        if (self.index) |index| if (index.overlaps(body)) return true;
+        return false;
     }
 
     pub fn sweep(self: Static, body: Shape, move: Vector2) ?Contact {
-        var best = self.mask.sweep(body, move);
-        Contact.merge(&best, self.index.sweep(body, move));
+        var best: ?Contact = null;
+        if (self.mask) |mask| {
+            Contact.merge(&best, mask.sweep(body, move));
+        }
+        if (self.index) |index| {
+            Contact.merge(&best, index.sweep(body, move));
+        }
+        if (self.bounds) |bounds| {
+            Contact.merge(&best, sweepBounds(bounds, body, move));
+        }
         return best;
     }
 

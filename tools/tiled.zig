@@ -252,7 +252,7 @@ const Convert = struct {
             .grid = .{
                 .width = value.width,
                 .height = value.height,
-                .cell = @intCast(value.tilewidth),
+                .cellSide = @intCast(value.tilewidth),
             },
             .backgroundColor = if (value.backgroundcolor) |color|
                 parseColor(color)
