@@ -11,6 +11,65 @@ const assets = @import("../assets.zig");
 
 const Vector2 = zhu.Vector2;
 
+/// 管理画面淡出和淡入；遮罩绘制使用调用方的相机和渲染目标。
+pub const Fade = struct {
+    pub const Event = enum { covered, clear };
+    const State = enum { clear, out, covered, in };
+
+    timer: zhu.Timer,
+    state: State = .clear,
+
+    pub fn init(duration: f32) Fade {
+        std.debug.assert(duration > 0);
+        return .{ .timer = .init(duration) };
+    }
+
+    /// 从透明开始，完成后保持完全遮挡。
+    pub fn fadeOut(self: *Fade) void {
+        self.state = .out;
+        self.timer.restart();
+    }
+
+    /// 从完全遮挡开始，完成后保持透明。
+    pub fn fadeIn(self: *Fade) void {
+        self.state = .in;
+        self.timer.restart();
+    }
+
+    /// 每次完成只返回一次事件，不自动进入下一阶段。
+    pub fn update(self: *Fade, delta: f32) ?Event {
+        switch (self.state) {
+            .clear, .covered => return null,
+            .out, .in => {},
+        }
+        if (self.timer.updateRunning(delta)) return null;
+        const event: Event = if (self.state == .out) .covered else .clear;
+        self.state = if (event == .covered) .covered else .clear;
+        return event;
+    }
+
+    /// 完全透明时为 false，淡出、完全遮挡和淡入期间均为 true。
+    pub fn active(self: Fade) bool {
+        return self.state != .clear;
+    }
+
+    /// 返回遮罩不透明度，可用于绘制遮罩或计算图片的可见程度。
+    pub fn alpha(self: Fade) f32 {
+        return switch (self.state) {
+            .clear => 0,
+            .out => self.timer.progress(),
+            .covered => 1,
+            .in => 1 - self.timer.progress(),
+        };
+    }
+
+    pub fn draw(self: Fade, rect: zhu.Rect, color: graphics.Color) void {
+        const opacity = self.alpha();
+        if (opacity == 0) return;
+        batch.drawRect(rect, .{ .color = color.scaleAlpha(opacity) });
+    }
+};
+
 // 默认按钮使用 usize 事件编号。
 pub const Button = ButtonT(usize);
 
