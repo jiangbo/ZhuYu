@@ -49,8 +49,7 @@ pub const DrawCommand = struct {
     end: ?u32 = null, // 结束顶点索引，null 表示未结束。
     view: graphics.View = .{}, // 纹理视图
     pipeline: graphics.Pipeline, // 本批次使用的流水线。
-    camera: camera.Camera, // 本批次的基准相机快照。
-    snap: bool, // 是否将投影平移对齐到实际像素。
+    camera: camera.Camera, // 本批次的实际渲染相机快照。
     filter: graphics.Filter, // 单采样器模式下使用的采样方式。
     size: Vector2, // 本批次绘制的逻辑尺寸。
 };
@@ -174,14 +173,21 @@ fn appendCommand(cmd: Command) void {
 
 fn addCommand(image: Image) *DrawCommand {
     endDrawCommand();
+    var view = camera.state.camera;
+    const area = camera.state.viewRect.size;
+    const pixels: Vector2 = .xy(@trunc(area.x), @trunc(area.y));
+    if (camera.state.snap and pixels.x > 0 and pixels.y > 0) {
+        // 坐标转换与 GPU 投影共用同一份按实际视口像素对齐的相机。
+        const scale = view.scale.mul(pixels.div(camera.state.size));
+        view.position = view.position.mul(scale).round().div(scale);
+    }
     const pip = currentPipeline orelse
         assets.gpu.getViewPipeline(image.view) orelse defaultPipeline;
     appendCommand(.{ .draw = .{
         .start = @intCast(assets.frameStats.vertex),
         .view = image.view,
         .pipeline = pip,
-        .camera = camera.state.camera,
-        .snap = camera.state.snap,
+        .camera = view,
         .filter = image.filter,
         .size = camera.state.size,
     } });
@@ -451,12 +457,7 @@ fn doDraw(
     if (pixels.x <= 0 or pixels.y <= 0) return;
     const size = graphics.queryViewSize(cmd.view);
     const scale = cmd.camera.scale.mul(.xy(2, -2)).div(cmd.size);
-    var offset = cmd.camera.position.mul(scale).neg();
-    if (cmd.snap) {
-        // 在实际视口像素中取整平移量，不修改相机的逻辑位置。
-        const half = pixels.scale(0.5);
-        offset = offset.mul(half).round().div(half);
-    }
+    const offset = cmd.camera.position.mul(scale).neg();
     var rowY = [_]f32{ 0, scale.y, offset.y + 1, pixels.y / 2 };
     if (flipY) rowY[1], rowY[2] = .{ -rowY[1], -rowY[2] };
     const uniforms = sk.gfx.asRange(&shader.VsParams{
