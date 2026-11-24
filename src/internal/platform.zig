@@ -105,6 +105,30 @@ pub const storage = struct {
         try atomicFile.replace(io);
     }
 
+    /// 读取不含动态数据的值，无需释放；含切片或 ArrayList 时使用 readArena。
+    pub fn readValue(comptime T: type, path: []const u8) !T {
+        comptime checkValue(T);
+        const content = try readAll(gpa, path);
+        defer gpa.free(content);
+
+        var buffer = std.heap.FixedBufferAllocator.init(&.{});
+        var reader = Reader.fixed(content);
+        const value = try codec.decode(&reader, T, buffer.allocator());
+        if (reader.seek != content.len) return error.InvalidData;
+        return value;
+    }
+
+    fn checkValue(comptime T: type) void {
+        switch (@typeInfo(T)) {
+            .pointer => @compileError("readValue cannot read pointers"),
+            inline .optional, .array, .vector => |info| checkValue(info.child),
+            inline .@"struct", .@"union" => |info| {
+                for (info.field_types) |Field| checkValue(Field);
+            },
+            else => {},
+        }
+    }
+
     /// 读取结果拥有所有切片数据，使用结束后调用 deinit，切片随之失效。
     /// 读取的 ArrayList 由 arena 管理，扩容时应使用 arena 的分配器。
     pub fn Loaded(comptime T: type) type {
@@ -120,8 +144,9 @@ pub const storage = struct {
         };
     }
 
-    /// 按指定类型读取二进制存档，字段顺序和类型必须与写入时一致。
-    pub fn readValue(comptime T: type, path: []const u8) !Loaded(T) {
+    /// 使用 arena 读取二进制存档，使用结束后调用 deinit。
+    /// 字段顺序和类型必须与写入时一致。
+    pub fn readArena(comptime T: type, path: []const u8) !Loaded(T) {
         const content = try readAll(gpa, path);
         defer gpa.free(content);
 
