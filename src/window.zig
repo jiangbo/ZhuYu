@@ -455,6 +455,8 @@ pub const mouse = struct {
     // 帧开始时更新的游戏逻辑坐标；事件回调中仍为上一帧的值。
     pub var pos: zhu.Vector = zhu.Vector.inf.neg();
     pub var scrollY: f32 = 0;
+    /// 鼠标捕获标记，由应用读写，引擎仅提供该字段。
+    pub var captured: bool = false;
 
     // 判断鼠标逻辑坐标是否位于指定区域内。
     pub fn hover(area: anytype) bool {
