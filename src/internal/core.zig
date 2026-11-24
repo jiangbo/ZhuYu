@@ -181,13 +181,6 @@ pub const enums = struct {
         return @fromBackingInt(@intCast(value));
     }
 
-    pub fn array(E: type, V: type, values: []const V) Array(E, V) {
-        const keys = std.enums.values(E);
-        var result: Array(E, V) = .initUndefined();
-        for (keys, values) |tag, value| result.set(tag, value);
-        return result;
-    }
-
     fn EntryArray(T: type) type {
         return Array(@FieldType(T, "type"), @FieldType(T, "value"));
     }
@@ -195,6 +188,30 @@ pub const enums = struct {
         var result: EntryArray(Entry) = .initUndefined();
         for (slice) |value| result.set(value.type, value.value);
         return result;
+    }
+
+    /// 按 V 的枚举字段 key 构造数组。每个键必须配置一次。
+    pub fn array(
+        V: type,
+        comptime key: []const u8,
+        comptime list: []const V,
+    ) Array(@FieldType(V, key), V) {
+        const E = @FieldType(V, key);
+        return comptime blk: {
+            const print = std.fmt.comptimePrint;
+            var result: Array(E, V) = .initUndefined();
+            var missing: std.EnumSet(E) = .full;
+            for (list) |value| {
+                const tag = @field(value, key);
+                if (!missing.contains(tag))
+                    @compileError(print("duplicate key {any}", .{tag}));
+                missing.remove(tag);
+                result.set(tag, value);
+            }
+            var keys = missing.iterator();
+            if (keys.next()) |tag| @compileError(print("missing key {any}", .{tag}));
+            break :blk result;
+        };
     }
 };
 
