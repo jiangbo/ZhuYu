@@ -142,6 +142,11 @@ pub const Timer = struct {
 pub const enums = struct {
     const Array = std.EnumArray;
 
+    /// 以枚举名作为字段名，每个字段都必须显式赋值。
+    pub fn FieldStruct(E: type, V: type) type {
+        return std.enums.EnumFieldStruct(E, V, null);
+    }
+
     // 根据配置字段生成连续枚举。
     pub fn fromField(items: anytype, comptime field: []const u8) type {
         const Tag = std.math.IntFittingRange(0, items.len - 1);
