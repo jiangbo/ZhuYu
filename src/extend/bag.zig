@@ -6,7 +6,6 @@ pub fn StackT(T: type) type {
         item: T,
         count: u32,
 
-        pub const empty: @This() = .{ .item = undefined, .count = 0 };
         pub fn one(item: T) @This() {
             return .{ .item = item, .count = 1 };
         }
@@ -38,7 +37,7 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
             items: []const Stack,
         };
 
-        stacks: [len]Stack = @splat(.empty),
+        stacks: [len]?Stack = @splat(null),
 
         pub fn add(self: *@This(), item: T, count: u32) u32 {
             const args: Stack = .{ .item = item, .count = count };
@@ -73,48 +72,47 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
         }
 
         pub fn get(self: *const @This(), index: usize) ?Stack {
-            const stack = self.stacks[index];
-            return if (stack.count == 0) null else stack;
+            return self.stacks[index];
         }
 
         pub fn getPtr(self: *@This(), index: usize) ?*Stack {
-            if (self.stacks[index].count == 0) return null;
-            return &self.stacks[index];
+            return if (self.stacks[index]) |*stack| stack else null;
         }
 
         pub fn first(self: *const @This(), item: T) ?usize {
-            for (&self.stacks, 0..) |*stack, index| {
-                if (stack.count == 0) continue;
+            for (self.stacks, 0..) |slot, index| {
+                const stack = slot orelse continue;
                 if (std.meta.eql(stack.item, item)) return index;
             }
             return null;
         }
 
         pub fn firstEmpty(self: *const @This()) ?usize {
-            for (self.stacks, 0..) |*stack, index| {
-                if (stack.count == 0) return index;
+            for (self.stacks, 0..) |slot, index| {
+                if (slot == null) return index;
             }
             return null;
         }
 
         pub fn clearAt(self: *@This(), index: usize) void {
-            self.stacks[index].count = 0;
+            self.stacks[index] = null;
         }
 
         pub fn clear(self: *@This()) void {
-            for (&self.stacks) |*stack| stack.count = 0;
+            @memset(&self.stacks, null);
         }
 
         pub fn move(self: *@This(), from: usize, to: usize) ?Move {
             if (from == to) return null;
 
-            const source = &self.stacks[from];
-            const target = &self.stacks[to];
-            if (source.count == 0) return null;
-            const empty = target.count == 0;
-            if (empty or !std.meta.eql(source.item, target.item)) {
-                std.mem.swap(Stack, source, target);
-                return if (empty) .move else .swap;
+            const source = self.getPtr(from) orelse return null;
+            const target = self.getPtr(to) orelse {
+                std.mem.swap(?Stack, &self.stacks[from], &self.stacks[to]);
+                return .move;
+            };
+            if (!std.meta.eql(source.item, target.item)) {
+                std.mem.swap(?Stack, &self.stacks[from], &self.stacks[to]);
+                return .swap;
             }
 
             const limit = limitOf(source.item);
@@ -124,7 +122,9 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
             const moved = @min(limit - target.count, source.count);
             target.count += moved;
             source.count -= moved;
-            return if (source.count > 0) .merge else .clear;
+            if (source.count > 0) return .merge;
+            self.stacks[from] = null;
+            return .clear;
         }
 
         pub fn tryPut(self: *@This(), buf: []Patch, ops: Put) !Done {
@@ -167,15 +167,14 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
                 if (entry.count == 0) continue;
 
                 var remaining = entry.count;
-                for (&self.stacks, 0..) |*stack, index| {
+                for (0..self.stacks.len) |index| {
                     if (remaining == 0) break;
-                    if (stack.count == 0) continue;
+                    const stack = self.getPtr(index) orelse continue;
                     if (!std.meta.eql(stack.item, entry.item)) continue;
 
                     const count = @min(stack.count, remaining);
-                    const patch = Entry.init(index, stack.item, count);
-                    stack.count -= count;
-                    errdefer stack.count += count;
+                    const patch = self.subAt(index, count).?;
+                    errdefer self.putOne(.{ .add = patch });
                     if (args.buffer) |buffer|
                         try buffer.appendBounded(.{ .sub = patch });
                     remaining -= count;
@@ -208,6 +207,7 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
 
             const entry = Entry.init(index, stack.item, count);
             stack.count -= count;
+            if (stack.count == 0) self.stacks[index] = null;
             return entry;
         }
 
@@ -240,7 +240,7 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
 
         fn fill(self: *@This(), args: Stack, limit: u32) ?Entry {
             for (&self.stacks, 0..) |*stack, index| {
-                if (stack.count != 0) continue;
+                if (stack.* != null) continue;
 
                 const moved = @min(limit, args.count);
                 stack.* = .{ .item = args.item, .count = moved };
@@ -252,10 +252,15 @@ pub fn Store(T: type, len: usize, limitOf: fn (T) u32) type {
         fn putOne(self: *@This(), patch: Patch) void {
             switch (patch) {
                 .add => |entry| {
-                    const stack = &self.stacks[entry.index];
-                    if (stack.count == 0) stack.item = entry.item;
-                    std.debug.assert(std.meta.eql(entry.item, stack.item));
-                    stack.count += entry.count;
+                    if (self.getPtr(entry.index)) |stack| {
+                        std.debug.assert(std.meta.eql(entry.item, stack.item));
+                        stack.count += entry.count;
+                    } else {
+                        self.stacks[entry.index] = .{
+                            .item = entry.item,
+                            .count = entry.count,
+                        };
+                    }
                 },
                 .sub => |entry| {
                     const taken = self.subAt(entry.index, entry.count).?;
