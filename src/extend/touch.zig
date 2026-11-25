@@ -154,6 +154,7 @@ pub const pad = struct {
 // 最近一次更新使用的配置，绘制时保持不变。
 var current: std.EnumArray(Button, Option) = undefined;
 var hasPatch: bool = false; // 本轮更新前是否已经合入补丁。
+var buttonTouches: std.StaticBitSet(window.touch.points.len) = .empty;
 // 每个按钮本次按住的键，null 表示未按住。
 var pressedKeys: std.EnumArray(Button, ?window.key.Code) = .initFill(null);
 var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换。
@@ -212,16 +213,36 @@ fn updateButtons() void {
     if (!hasPatch) current = pad.defaults;
     hasPatch = false;
 
-    // 每个按住的触点只转换一次，汇总各按钮是否按住。
+    // 只认领从按钮区域按下的触点，按住期间允许在按钮之间滑动。
     var held: std.EnumArray(Button, bool) = .initFill(false);
-    for (window.touch.points) |slot| {
-        const point = slot orelse continue;
-        if (point.state != .held) continue;
+    for (&window.touch.points, 0..) |*slot, index| {
+        const point = &(slot.* orelse {
+            buttonTouches.unset(index);
+            continue;
+        });
+        if (point.began) {
+            buttonTouches.unset(index);
+            if (!point.captured and point.state != .cancelled) {
+                const start = buttonCamera.toWorld(point.start);
+                for (current.values) |option| {
+                    if (option.hidden or option.key == null) continue;
+                    if (!option.shape.?.contains(start)) continue;
+                    point.captured = true;
+                    buttonTouches.set(index);
+                    break;
+                }
+            }
+        }
+        if (point.state != .held) {
+            buttonTouches.unset(index);
+            continue;
+        }
+        if (!buttonTouches.isSet(index)) continue;
+
         const pos = buttonCamera.toWorld(point.raw);
         for (current.values, &held.values) |option, *down| {
-            if (option.hidden) continue;
-            const contains = option.shape.?.contains(pos);
-            if (option.key != null and contains) down.* = true;
+            if (option.hidden or option.key == null) continue;
+            if (option.shape.?.contains(pos)) down.* = true;
         }
     }
 
@@ -247,6 +268,7 @@ fn resetButtons() void {
         if (code) |key| window.key.queue(key, false);
     }
     pressedKeys = .initFill(null);
+    buttonTouches = .empty;
 }
 
 // 切换到全窗口视口和按钮使用的 DPI 相机。
@@ -383,20 +405,21 @@ pub const stick = struct {
     fn updateStick() ?zhu.Vector2 {
         if (touchIndex) |index| {
             if (window.touch.points[index]) |point| {
-                if (point.state == .held) {
+                if (!point.began and point.state == .held) {
                     return buttonCamera.toWorld(point.raw).sub(center);
                 }
             }
             touchIndex = null;
-            return null;
         }
 
-        for (window.touch.points, 0..) |slot, index| {
-            const point = slot orelse continue;
-            if (!point.began or point.state != .held) continue;
+        for (&window.touch.points, 0..) |*slot, index| {
+            const point = &(slot.* orelse continue);
+            if (!point.began or point.captured or point.state == .cancelled) continue;
             const start = buttonCamera.toWorld(point.start);
             if (!area.contains(start)) continue;
 
+            point.captured = true;
+            if (point.state != .held) continue;
             touchIndex = index;
             center = start;
             return buttonCamera.toWorld(point.raw).sub(center);
