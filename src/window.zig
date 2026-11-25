@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
 const options = @import("options");
-const root = @import("root");
 
 const platform = @import("internal/platform.zig");
 const zhu = @import("zhu.zig");
@@ -28,13 +27,18 @@ pub const Option = struct {
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
     alignment: zhu.Vector = .center, // 对齐方式
+    init: ?fn (zhu.Allocator) void = null,
+    event: fn (*const Event) void = handleEvent,
+    frame: fn (f32) void,
+    deinit: ?fn (zhu.Allocator) void = null,
 };
 
 pub var size: zhu.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
 // 默认游戏画面在窗口中的像素区域，由缩放模式计算，不随绘制切换而改变。
 pub var viewRect: zhu.Rect = undefined;
 pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
-var info: Option = undefined; // 当前窗口配置，由 run 设置。
+var scaleEnum: ScaleEnum = undefined;
+var alignment: zhu.Vector = undefined;
 
 var allocator: std.mem.Allocator = undefined;
 
@@ -44,21 +48,23 @@ pub fn setup(gpa: std.mem.Allocator) void {
 }
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
-pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
+pub fn run(title: [:0]const u8, size_: zhu.Vector, comptime option: Option) void {
     sk.time.setup();
-    info = option;
-    camera.init(info.logicSize orelse size_);
+    scaleEnum = option.scaleEnum;
+    alignment = option.alignment;
+    camera.init(option.logicSize orelse size_);
     viewRect = .init(.zero, camera.size);
 
+    const cb = Handler(option);
     const desc: sk.app.Desc = .{
         .window_title = title,
         .width = @intFromFloat(size_.x),
         .height = @intFromFloat(size_.y),
         .depth_format = .NONE,
-        .init_cb = windowInit,
-        .event_cb = windowEvent,
-        .frame_cb = windowFrame,
-        .cleanup_cb = windowDeinit,
+        .init_cb = cb.init,
+        .event_cb = cb.event,
+        .frame_cb = cb.frame,
+        .cleanup_cb = cb.deinit,
         .allocator = assets.sokolAllocator(sk.app.Allocator),
         .high_dpi = true,
         .logger = .{ .func = sk.log.func },
@@ -66,26 +72,42 @@ pub fn run(title: [:0]const u8, size_: zhu.Vector, option: Option) void {
     platform.run(desc, option.disableIME);
 }
 
-fn windowInit() callconv(.c) void {
+fn Handler(comptime option: Option) type {
+    return struct {
+        fn init() callconv(.c) void {
+            windowInit(option.pack);
+            if (option.init) |func| func(allocator);
+        }
+
+        fn event(raw: ?*const Event) callconv(.c) void {
+            if (raw) |ev| option.event(ev);
+        }
+
+        fn frame() callconv(.c) void {
+            const start = sk.time.now();
+            option.frame(beginFrame());
+            endFrame(start);
+        }
+
+        fn deinit() callconv(.c) void {
+            if (option.deinit) |func| func(allocator);
+            windowDeinit();
+        }
+    };
+}
+
+fn windowInit(pack: ?assets.Pack) void {
     computeViewRect();
     sk.gfx.setup(.{
         .environment = sk.glue.environment(),
         .logger = .{ .func = sk.log.func },
         .allocator = assets.sokolAllocator(sk.gfx.Allocator),
     });
-    assets.init(info.pack);
+    assets.init(pack);
     zhu.random.init(sk.time.now());
-    if (@hasDecl(root, "init")) root.init(allocator);
 }
 
-fn windowEvent(raw: ?*const Event) callconv(.c) void {
-    const ev = raw orelse return;
-    if (@hasDecl(root, "event")) return root.event(ev);
-    handleEvent(ev);
-}
-
-fn windowFrame() callconv(.c) void {
-    const frameStart = sk.time.now();
+fn beginFrame() f32 {
     assets.update();
     if (resized) computeViewRect();
     if (anyMoved()) {
@@ -98,14 +120,16 @@ fn windowFrame() callconv(.c) void {
     }
     const delta: f32 = @floatCast(sk.app.frameDuration());
     if (options.font == .system) text.system.update(delta);
-    root.frame(delta);
-    endInput();
-    resized = false;
-    frameTicks = sk.time.since(frameStart);
+    return delta;
 }
 
-fn windowDeinit() callconv(.c) void {
-    if (@hasDecl(root, "deinit")) root.deinit(allocator);
+fn endFrame(start: u64) void {
+    endInput();
+    resized = false;
+    frameTicks = sk.time.since(start);
+}
+
+fn windowDeinit() void {
     audio.deinit();
     assets.deinit();
     sk.gfx.shutdown();
@@ -206,30 +230,30 @@ pub fn computeViewRect() void {
     size = .xy(sk.app.widthf(), sk.app.heightf());
     const logicSize = camera.size;
     const ratio = size.div(logicSize);
-    viewRect = switch (info.scaleEnum) {
-        .none => .init(size.sub(logicSize).mul(info.alignment), logicSize),
+    viewRect = switch (scaleEnum) {
+        .none => .init(size.sub(logicSize).mul(alignment), logicSize),
         .stretch => .init(.zero, size),
         .fit => blk: {
             const minSize = logicSize.scale(@min(ratio.x, ratio.y));
-            const position = size.sub(minSize).mul(info.alignment);
+            const position = size.sub(minSize).mul(alignment);
             break :blk .init(position, minSize);
         },
         .fill => blk: {
             const maxSize = logicSize.scale(@max(ratio.x, ratio.y));
-            const position = size.sub(maxSize).mul(info.alignment);
+            const position = size.sub(maxSize).mul(alignment);
             break :blk .init(position, maxSize);
         },
         .integer => blk: {
             const min = @min(ratio.x, ratio.y);
             const usedScale = if (min < 1) min else @trunc(min);
             const intSize = logicSize.scale(usedScale);
-            const position = size.sub(intSize).mul(info.alignment);
+            const position = size.sub(intSize).mul(alignment);
             break :blk .init(position, intSize);
         },
     };
     // 先对齐尺寸，再按最终尺寸计算整数像素位置。
     viewRect.size = viewRect.size.round().max(.one);
-    viewRect.min = size.sub(viewRect.size).mul(info.alignment).round();
+    viewRect.min = size.sub(viewRect.size).mul(alignment).round();
     scale = viewRect.size.div(logicSize);
 }
 
