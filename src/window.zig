@@ -528,8 +528,29 @@ pub const touch = struct {
         pos: zhu.Vector = zhu.Vector.inf.neg(),
         state: enum { held, ended, cancelled } = .held, // 当前触点状态。
         began: bool = true, // 本帧是否按下。
-        /// 控件在按下时标记捕获，随触点保留到松开或取消的帧末。
+        /// 捕获保留到触点移除，避免松手那一帧被下层控件读到。
         captured: bool = false,
+
+        // 同帧按下并松开仍可认领，取消的触点直接跳过。
+        pub fn canCapture(self: Point) bool {
+            return self.began and !self.captured and self.state != .cancelled;
+        }
+    };
+
+    pub const Capture = struct {
+        index: usize,
+        frame: u64, // 上次认领或成功读取的帧。
+
+        /// 每帧读取同一次按压，松开和取消的触点仍可读取到帧末。
+        pub fn get(self: *Capture) ?*const Point {
+            const frame = frameCount();
+            const point = &(points[self.index] orelse return null);
+            // 跳过更新可能漏掉新触点的 began，旧跟踪无法确认槽位归属。
+            if (!point.captured or frame -% self.frame > 1) return null;
+            if (point.began and frame != self.frame) return null;
+            self.frame = frame;
+            return point;
+        }
     };
 
     // 区域内的触摸状态，包含鼠标左键。
@@ -543,6 +564,16 @@ pub const touch = struct {
     pub var points: [mouseIndex + 1]?Point = @splat(null);
     // 本帧有触点按下、移动，或逻辑位置因视口变化而改变。
     pub var moved: bool = false;
+
+    /// 认领刚按下的触点，优先级由调用方的更新顺序决定。
+    pub fn capture(index: usize) ?Capture {
+        if (index >= points.len) return null;
+        const point = &(points[index] orelse return null);
+        if (!point.canCapture()) return null;
+
+        point.captured = true;
+        return .{ .index = index, .frame = frameCount() };
+    }
 
     // 根据系统触点 ID 查找真实触点，不搜索鼠标槽位。
     fn find(id: usize) ?*Point {
@@ -562,12 +593,12 @@ pub const touch = struct {
         return false;
     }
 
-    // 按游戏逻辑坐标查询矩形、圆形等区域内的触摸和鼠标左键。
+    // 按游戏逻辑坐标查询区域内未捕获的触摸和鼠标左键。
     pub fn query(area: anytype) State {
         var result: State = .{};
         for (points) |slot| {
             const point = slot orelse continue;
-            if (!area.contains(point.pos)) continue;
+            if (point.captured or !area.contains(point.pos)) continue;
             result.held = result.held or point.state == .held;
             result.pressed = result.pressed or point.began;
             result.released = result.released or point.state == .ended;

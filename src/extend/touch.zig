@@ -154,7 +154,8 @@ pub const pad = struct {
 // 最近一次更新使用的配置，绘制时保持不变。
 var current: std.EnumArray(Button, Option) = undefined;
 var hasPatch: bool = false; // 本轮更新前是否已经合入补丁。
-var buttonTouches: std.StaticBitSet(window.touch.points.len) = .empty;
+// 按槽位记录按钮组认领的触点，手指换到组内另一按钮时继续跟踪。
+var buttonTouches: [window.touch.points.len]?window.touch.Capture = @splat(null);
 // 每个按钮本次按住的键，null 表示未按住。
 var pressedKeys: std.EnumArray(Button, ?window.key.Code) = .initFill(null);
 var buttonCamera: camera.Camera = .window; // 输入和绘制共用 DPI 变换。
@@ -207,6 +208,18 @@ pub fn patch(option: Option) void {
     if (option.shape) |shape| value.shape = shape;
 }
 
+fn captureButton(index: usize) ?window.touch.Capture {
+    const point = window.touch.points[index] orelse return null;
+    if (!point.canCapture()) return null;
+
+    const start = buttonCamera.toWorld(point.start);
+    for (current.values) |option| {
+        if (option.hidden or option.key == null) continue;
+        if (option.shape.?.contains(start)) return window.touch.capture(index);
+    }
+    return null;
+}
+
 // 未打补丁时自动恢复默认配置，暂存按钮变化供下一帧读取。
 fn updateButtons() void {
     if (window.resized) layoutButtons();
@@ -215,31 +228,19 @@ fn updateButtons() void {
 
     // 只认领从按钮区域按下的触点，按住期间允许在按钮之间滑动。
     var held: std.EnumArray(Button, bool) = .initFill(false);
-    for (&window.touch.points, 0..) |*slot, index| {
-        const point = &(slot.* orelse {
-            buttonTouches.unset(index);
-            continue;
-        });
-        if (point.began) {
-            buttonTouches.unset(index);
-            if (!point.captured and point.state != .cancelled) {
-                const start = buttonCamera.toWorld(point.start);
-                for (current.values) |option| {
-                    if (option.hidden or option.key == null) continue;
-                    if (!option.shape.?.contains(start)) continue;
-                    point.captured = true;
-                    buttonTouches.set(index);
-                    break;
-                }
-            }
+    for (&buttonTouches, 0..) |*slot, index| {
+        var point = if (slot.*) |*press| press.get() else null;
+        if (point == null) {
+            slot.* = captureButton(index);
+            if (slot.*) |*press| point = press.get();
         }
-        if (point.state != .held) {
-            buttonTouches.unset(index);
+        const finger = point orelse continue;
+        if (finger.state != .held) {
+            slot.* = null;
             continue;
         }
-        if (!buttonTouches.isSet(index)) continue;
 
-        const pos = buttonCamera.toWorld(point.raw);
+        const pos = buttonCamera.toWorld(finger.raw);
         for (current.values, &held.values) |option, *down| {
             if (option.hidden or option.key == null) continue;
             if (option.shape.?.contains(pos)) down.* = true;
@@ -268,7 +269,7 @@ fn resetButtons() void {
         if (code) |key| window.key.queue(key, false);
     }
     pressedKeys = .initFill(null);
-    buttonTouches = .empty;
+    buttonTouches = @splat(null);
 }
 
 // 切换到全窗口视口和按钮使用的 DPI 相机。
@@ -351,7 +352,7 @@ pub const stick = struct {
     // 摇杆启动区域，使用 DPI 坐标，布局默认设置为屏幕最左侧四分之一。
     pub var area: zhu.Rect = undefined;
     // 摇杆只跟踪一个触点，中心在本次操作中保持不变。
-    var touchIndex: ?usize = null;
+    var touchPress: ?window.touch.Capture = null;
     var center: zhu.Vector2 = .zero;
     var offset: ?zhu.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
     // 记录摇杆产生的上、下、左、右按键，只在状态变化时发送事件。
@@ -403,24 +404,22 @@ pub const stick = struct {
 
     // 空闲时捕获区域内新按下的触点，之后持续跟踪同一槽位。
     fn updateStick() ?zhu.Vector2 {
-        if (touchIndex) |index| {
-            if (window.touch.points[index]) |point| {
-                if (!point.began and point.state == .held) {
-                    return buttonCamera.toWorld(point.raw).sub(center);
-                }
-            }
-            touchIndex = null;
+        if (touchPress) |*press| {
+            if (press.get()) |point| if (point.state == .held) {
+                return buttonCamera.toWorld(point.raw).sub(center);
+            };
+            touchPress = null;
         }
 
-        for (&window.touch.points, 0..) |*slot, index| {
-            const point = &(slot.* orelse continue);
-            if (!point.began or point.captured or point.state == .cancelled) continue;
+        for (window.touch.points, 0..) |slot, index| {
+            const point = slot orelse continue;
+            if (!point.canCapture()) continue;
             const start = buttonCamera.toWorld(point.start);
             if (!area.contains(start)) continue;
 
-            point.captured = true;
+            const press = window.touch.capture(index) orelse continue;
             if (point.state != .held) continue;
-            touchIndex = index;
+            touchPress = press;
             center = start;
             return buttonCamera.toWorld(point.raw).sub(center);
         }
@@ -434,7 +433,7 @@ pub const stick = struct {
         for (keys, held) |key, down| if (down) window.key.queue(key, false);
 
         held = @splat(false);
-        touchIndex = null;
+        touchPress = null;
         offset = null;
     }
 
