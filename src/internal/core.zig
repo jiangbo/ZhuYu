@@ -186,15 +186,6 @@ pub const enums = struct {
         return @fromBackingInt(@intCast(value));
     }
 
-    fn EntryArray(T: type) type {
-        return Array(@FieldType(T, "type"), @FieldType(T, "value"));
-    }
-    pub fn fromEntries(Entry: type, slice: anytype) EntryArray(Entry) {
-        var result: EntryArray(Entry) = .initUndefined();
-        for (slice) |value| result.set(value.type, value.value);
-        return result;
-    }
-
     /// 按 V 的枚举字段 key 构造数组。每个键必须配置一次。
     pub fn array(
         V: type,
