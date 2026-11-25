@@ -152,7 +152,8 @@ pub const gpu = struct {
     }
 
     fn textureSize(texture: sk.gfx.Image) usize {
-        if (sk.gfx.queryImageState(texture) != .VALID) return 0;
+        const state = sk.gfx.queryImageState(texture);
+        if (state != .VALID and state != .UNSEALED) return 0;
         const desc = sk.gfx.queryImageDesc(texture);
         const format = desc.pixel_format;
         const pitch = sk.gfx.querySurfacePitch(format, desc.width, desc.height, 1);
