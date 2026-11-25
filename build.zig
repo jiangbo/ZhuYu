@@ -25,6 +25,8 @@ pub fn build(b: *std.Build) !void {
     // 默认按纹理绑定一个采样器，开启后允许实例分别选择过滤方式。
     const samplers = b.option(bool, "samplers", "Use two samplers") orelse false;
     const imgui = b.option(bool, "imgui", "Enable ImGui") orelse false;
+    const action = b.option(std.Build.LazyPath, "action", "Action bindings zon") orelse
+        b.addWriteFiles().add("action.zon", ".{}");
     const options = b.addOptions();
     options.addOption(FontMode, "font", font);
     // append 只对桌面目标生效，其他目标继续使用各自的资产加载方式。
@@ -60,6 +62,7 @@ pub fn build(b: *std.Build) !void {
     });
     zhu.addImport("sokol", sokolModule);
     zhu.addImport("shader", shader);
+    zhu.addAnonymousImport("action", .{ .root_source_file = action });
     zhu.addOptions("options", options);
 
     if (target.result.os.tag == .ios) {

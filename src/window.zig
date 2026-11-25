@@ -472,6 +472,32 @@ pub const key = struct {
     }
 };
 
+pub const action = struct {
+    pub const Action = std.meta.FieldEnum(@TypeOf(@import("action")));
+    var bindings: std.EnumArray(Action, []const key.Code) = .init(@import("action"));
+
+    pub fn get(id: Action) []const key.Code {
+        return bindings.get(id);
+    }
+
+    /// 调用方负责保持切片有效，直到该绑定被替换。传空切片表示解绑。
+    pub fn set(id: Action, keys: []const key.Code) void {
+        bindings.set(id, keys);
+    }
+
+    pub fn held(id: Action) bool {
+        return key.anyHeld(get(id));
+    }
+
+    pub fn pressed(id: Action) bool {
+        return key.anyPressed(get(id));
+    }
+
+    pub fn released(id: Action) bool {
+        return key.anyReleased(get(id));
+    }
+};
+
 pub const mouse = struct {
     // 当前帧收到移动事件，或逻辑位置因视口变化而改变。
     pub var moved: bool = false;
@@ -502,6 +528,8 @@ pub const touch = struct {
         pos: zhu.Vector = zhu.Vector.inf.neg(),
         state: enum { held, ended, cancelled } = .held, // 当前触点状态。
         began: bool = true, // 本帧是否按下。
+        /// 控件在按下时标记捕获，随触点保留到松开或取消的帧末。
+        captured: bool = false,
     };
 
     // 区域内的触摸状态，包含鼠标左键。
@@ -547,75 +575,3 @@ pub const touch = struct {
         return result;
     }
 };
-
-pub const Binding = struct { action: []const u8, keys: []const key.Code };
-/// 接受动作枚举或默认配置列表；枚举方式初始不绑定任何按键。
-pub fn Bindings(comptime config: anytype) type {
-    const isEnum = @TypeOf(config) == type;
-    const defaults = if (isEnum) &.{} else config;
-    const E = if (isEnum) config else zhu.enums.fromField(defaults, "action");
-
-    return struct {
-        pub const Action = E;
-
-        const Entry = struct {
-            keys: [4]key.Code = @splat(.INVALID),
-            len: u8 = 0,
-        };
-
-        var entries: std.EnumArray(Action, Entry) = init: {
-            var result: std.EnumArray(Action, Entry) = .initFill(.{});
-            for (defaults, 0..) |binding, index| {
-                const action: Action = @fromBackingInt(index);
-                const entry = result.getPtr(action);
-                if (binding.keys.len > entry.keys.len)
-                    @compileError("each action supports at most 4 keys");
-                for (binding.keys, 0..) |code, i| entry.keys[i] = code;
-                entry.len = @intCast(binding.keys.len);
-            }
-            break :init result;
-        };
-
-        /// 复制按键配置；空切片表示解绑，最多传入 4 个键。
-        pub fn set(action: Action, keys: []const key.Code) void {
-            const entry = entries.getPtr(action);
-            std.debug.assert(keys.len <= entry.keys.len);
-            std.mem.copyForwards(key.Code, entry.keys[0..keys.len], keys);
-            @memset(entry.keys[keys.len..], .INVALID);
-            entry.len = @intCast(keys.len);
-        }
-
-        /// 返回内部按键切片，内容会随 set 改变。
-        pub fn get(action: Action) []const key.Code {
-            const entry = entries.getPtrConst(action);
-            return entry.keys[0..entry.len];
-        }
-
-        pub fn held(action: Action) bool {
-            return key.anyHeld(get(action));
-        }
-
-        pub fn anyHeld(actions: []const Action) bool {
-            for (actions) |action| if (held(action)) return true;
-            return false;
-        }
-
-        pub fn pressed(action: Action) bool {
-            return key.anyPressed(get(action));
-        }
-
-        pub fn anyPressed(actions: []const Action) bool {
-            for (actions) |action| if (pressed(action)) return true;
-            return false;
-        }
-
-        pub fn released(action: Action) bool {
-            return key.anyReleased(get(action));
-        }
-
-        pub fn anyReleased(actions: []const Action) bool {
-            for (actions) |action| if (released(action)) return true;
-            return false;
-        }
-    };
-}

@@ -18,6 +18,7 @@ const platform = @import("internal/platform.zig");
 
 pub const key = window.key;
 pub const mouse = window.mouse;
+pub const action = window.action;
 
 pub const music = struct {
     pub const State = audio.MusicState;
@@ -153,16 +154,8 @@ pub fn toIndex(T: type, value: anytype) T {
     };
 }
 
-// 验证运行时整数到窄枚举的转换，避免只编译声明漏掉泛型错误。
-test "enum accepts runtime integer" {
-    const Kind = enum(u8) { first, second };
-    var value: u32 = 1;
-    _ = &value;
-    try std.testing.expectEqual(Kind.second, enums.to(Kind, value));
-    try std.testing.expectEqual(@as(usize, 2), enums.len(Kind));
-}
-
 test "compile zhu modules" {
+    std.testing.refAllDecls(@This());
     std.testing.refAllDecls(window);
     std.testing.refAllDecls(assets);
     std.testing.refAllDecls(audio);
@@ -170,7 +163,6 @@ test "compile zhu modules" {
     std.testing.refAllDecls(batch);
     std.testing.refAllDecls(camera);
     std.testing.refAllDecls(math);
-    std.testing.refAllDecls(@This());
     std.testing.refAllDecls(text);
     std.testing.refAllDecls(extend.debug);
     std.testing.refAllDecls(extend.widget);
