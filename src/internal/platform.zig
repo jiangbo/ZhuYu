@@ -28,7 +28,7 @@ pub const backend = switch (builtin.os.tag) {
 
 /// 读取原生资源文件；Android 使用 APK 资源，其他平台使用传入目录。
 /// 返回的缓冲区由调用者释放，Web 不支持同步文件读取。
-pub fn readFile(gpa: zhu.Allocator, dir: ?Io.Dir, path: [:0]const u8) ![]u8 {
+pub fn readFile(gpa: std.mem.Allocator, dir: ?Io.Dir, path: [:0]const u8) ![]u8 {
     if (builtin.os.tag == .emscripten) @panic("web has no file system");
     if (builtin.abi.isAndroid()) return android.readAsset(path, gpa);
     const file = try dir.?.openFile(io, path, .{});
@@ -287,7 +287,7 @@ pub const DateTime = extern struct {
 
 // POSIX 平台在启动时读取时区设置。
 /// 保存共用 IO，并按应用名称初始化用户数据存储。
-pub fn setup(info: Init, gpa: zhu.Allocator, dir: ?[]const u8) void {
+pub fn setup(info: Init, gpa: std.mem.Allocator, dir: ?[]const u8) void {
     io = info.io;
     backend.setup(gpa);
     if (dir) |name| {

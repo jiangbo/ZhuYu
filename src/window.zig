@@ -27,10 +27,10 @@ pub const Option = struct {
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
     alignment: zhu.Vector = .center, // 对齐方式
-    init: ?fn (zhu.Allocator) void = null,
+    init: ?fn (std.mem.Allocator) void = null,
     event: fn (*const Event) void = handleEvent,
     frame: fn (f32) void,
-    deinit: ?fn (zhu.Allocator) void = null,
+    deinit: ?fn (std.mem.Allocator) void = null,
 };
 
 pub var size: zhu.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。

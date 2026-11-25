@@ -4,7 +4,7 @@ const zhu = @import("zhu");
 var commands: [8]zhu.batch.Command = undefined; // 示例持有绘制命令缓冲。
 
 // 窗口创建后初始化绘制，不加载外部资源。
-fn init(_: zhu.Allocator) void {
+fn init(_: std.mem.Allocator) void {
     zhu.batch.init(&commands, null);
 }
 
