@@ -105,11 +105,28 @@ pub const storage = struct {
         try atomicFile.replace(io);
     }
 
+    fn checkedContent(content: []const u8) ![]const u8 {
+        const size = @sizeOf(u32);
+        if (content.len < size) return error.InvalidData;
+        const end = content.len - size;
+        const data = content[0..end];
+        const crc = std.mem.readInt(u32, content[end..][0..size], .little);
+        if (std.hash.Crc32.hash(data) != crc) return error.InvalidData;
+        return data;
+    }
+
+    fn writeChecked(path: []const u8, output: *Writer.Allocating) !void {
+        const crc = std.hash.Crc32.hash(output.writer.buffered());
+        try output.writer.writeInt(u32, crc, .little);
+        try writeAll(path, output.writer.buffered());
+    }
+
     /// 读取不含动态数据的值，无需释放；含切片或 ArrayList 时使用 readArena。
     pub fn readValue(comptime T: type, path: []const u8) !T {
         comptime checkValue(T);
-        const content = try readAll(gpa, path);
-        defer gpa.free(content);
+        const data = try readAll(gpa, path);
+        defer gpa.free(data);
+        const content = try checkedContent(data);
 
         var buffer = std.heap.FixedBufferAllocator.init(&.{});
         var reader = Reader.fixed(content);
@@ -147,8 +164,9 @@ pub const storage = struct {
     /// 使用 arena 读取二进制存档，使用结束后调用 deinit。
     /// 字段顺序和类型必须与写入时一致。
     pub fn readArena(comptime T: type, path: []const u8) !Loaded(T) {
-        const content = try readAll(gpa, path);
-        defer gpa.free(content);
+        const data = try readAll(gpa, path);
+        defer gpa.free(data);
+        const content = try checkedContent(data);
 
         const arena = try gpa.create(ArenaAllocator);
         errdefer gpa.destroy(arena);
@@ -161,7 +179,8 @@ pub const storage = struct {
         return .{ .value = value, .arena = arena };
     }
 
-    /// 按字段保存二进制数据，数值使用小端序，切片先写入 u64 长度。
+    /// 按字段保存二进制数据，数值使用小端序，文件末尾附加 CRC32。
+    /// 切片先写入 u64 长度。
     /// 支持 void、数值、布尔、枚举、可选值、数组、向量、结构体、带标签联合和切片。
     /// ArrayList 只保存元素，读取后容量等于元素数量。
     pub fn writeValue(path: []const u8, value: anytype) !void {
@@ -169,7 +188,7 @@ pub const storage = struct {
         var output = Writer.Allocating.init(gpa);
         defer output.deinit();
         try codec.encode(&output.writer, value);
-        try writeAll(path, output.writer.buffered());
+        try writeChecked(path, &output);
     }
 
     /// 带版本的存档，持有文件内容和读取时分配的数据。
@@ -202,7 +221,8 @@ pub const storage = struct {
         arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
 
-        const content = try readAll(arena.allocator(), path);
+        const data = try readAll(arena.allocator(), path);
+        const content = try checkedContent(data);
         var reader = Reader.fixed(content);
         const version = try codec.readVersion(&reader);
         return .{
@@ -212,13 +232,13 @@ pub const storage = struct {
         };
     }
 
-    /// 保存带版本的数据，文件头为 ZHYU 标识和 u32 小端版本号。
+    /// 文件头为 ZHYU 标识和 u32 小端版本号，末尾为 CRC32。
     pub fn writeSave(path: []const u8, version: u32, value: anytype) !void {
         if (dataPath.len == 0) @panic("set a storage name in zhu.setup");
         var output = Writer.Allocating.init(gpa);
         defer output.deinit();
         try codec.encodeVersion(&output.writer, version, value);
-        try writeAll(path, output.writer.buffered());
+        try writeChecked(path, &output);
     }
 };
 
