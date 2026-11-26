@@ -166,12 +166,8 @@ pub const MusicOption = struct {
     immediate: bool = false, // 新曲就绪即接管，跳过旧曲淡出。
 };
 
-pub fn playMusic(path: []const u8) void {
-    playMusicOption(path, .{});
-}
-
 /// 新曲就绪后切换，重播正在播放的同曲时直接从头播放。
-pub fn playMusicOption(path: []const u8, option: MusicOption) void {
+pub fn playMusic(path: []const u8, option: MusicOption) void {
     if (!sk.audio.isvalid()) return;
     const fadeIn = fadeFrames(option.fadeIn);
     const fadeOut = if (option.immediate) 0 else fadeFrames(option.fadeOut);

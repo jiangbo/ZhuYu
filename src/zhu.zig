@@ -24,7 +24,6 @@ pub const music = struct {
     pub const State = audio.MusicState;
     pub const Option = audio.MusicOption;
     pub const play = audio.playMusic;
-    pub const playOption = audio.playMusicOption;
     pub const pause = audio.pauseMusic;
     pub const unpause = audio.resumeMusic;
     pub const @"resume" = audio.resumeMusic;
