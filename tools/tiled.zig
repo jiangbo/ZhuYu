@@ -11,10 +11,18 @@ pub const Options = struct {
     output: []const u8 = "src/zon", // 地图保留相对于 input 的目录结构。
     name: []const u8 = "tiled",
     terrain: bool = false, // 是否导出 Wang 地形规则。
+    mergeTileSets: bool = true, // 合并为 tileSet.zon；关闭时保留 TSJ 相对路径。
 };
 
-// 路径通过运行参数传入，多组资源共用同一个工具编译结果。
+// 路径按调用项目解析，其余配置直接注入工具模块。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
+    var toolOptions = options;
+    toolOptions.input = b.root.joinString(b.allocator, options.input) catch
+        @panic("out of memory");
+    toolOptions.output = b.root.joinString(b.allocator, options.output) catch
+        @panic("out of memory");
+    const config = b.addOptions();
+    config.addOption(Options, "config", toolOptions);
     const tool = b.addExecutable(.{
         .name = "zhuyu-tiled",
         .root_module = b.createModule(.{
@@ -23,37 +31,30 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
             .optimize = .safe,
         }),
     });
+    tool.root_module.addOptions("options", config);
     // 只使用引擎的数据类型，宿主工具按需分析这些声明。
     tool.root_module.addAnonymousImport("zhu", .{
         .root_source_file = dep.path("src/zhu.zig"),
     });
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
-    for ([_][]const u8{ options.input, options.output }) |path| {
-        const absolute = b.root.joinString(b.allocator, path) catch
-            @panic("out of memory");
-        run.addArg(absolute);
-    }
-    if (options.terrain) run.addArg("--terrain");
     // 每次执行都扫描全部文件，新增的地图与瓦片集也会一起生成。
     run.has_side_effects = true;
     b.step(options.name, "Generate Tiled tilesets and maps").dependOn(&run.step);
 }
 
-// 参数依次为资源根目录、ZON 输出目录，可选 --terrain 导出地形规则。
-// 瓦片集与地图独立转换，地图临时数据逐张释放。
+// 配置由构建系统注入，入口不解析命令行。
+// 转换数据统一使用进程 arena，程序结束时释放。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    const allocator = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(allocator);
-    std.debug.assert(args.len == 3 or args.len == 4);
-    const terrain = args.len == 4;
-    if (terrain) std.debug.assert(std.mem.eql(u8, args[3], "--terrain"));
-    const root = try std.fs.path.resolveAlloc(allocator, &.{args[1]});
+    const gpa = init.arena.allocator();
+    const options = @import("options").config;
+    const root = try std.fs.path.resolveAlloc(gpa, &.{options.input});
+    const outputRoot = options.output;
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.openDir(io, root, .{ .iterate = true });
     defer dir.close(io);
-    var walker = try dir.walk(allocator);
+    var walker = try dir.walk(gpa);
     defer walker.deinit();
 
     var tileSets: std.ArrayList(tiled.TileSet) = .empty;
@@ -62,29 +63,36 @@ pub fn main(init: std.process.Init) !void {
         if (entry.kind != .file) continue;
         const extension = std.fs.path.extension(entry.path);
         if (std.mem.eql(u8, extension, ".tmj")) {
-            try maps.append(allocator, try allocator.dupe(u8, entry.path));
+            try maps.append(gpa, try gpa.dupe(u8, entry.path));
         } else if (std.mem.eql(u8, extension, ".tsj")) {
-            const path = try std.fs.path.join(allocator, &.{ root, entry.path });
+            const path = try std.fs.path.join(gpa, &.{ root, entry.path });
             const convert = Convert{
-                .allocator = allocator,
+                .gpa = gpa,
                 .root = root,
                 .directory = std.fs.path.dirname(path).?,
-                .terrain = terrain,
+                .terrain = options.terrain,
             };
             const content = try dir.readFileAlloc(
                 io,
                 entry.path,
-                allocator,
+                gpa,
                 .unlimited,
             );
             const value = try std.json.parseFromSliceLeaky(
                 JsonTileSet,
-                allocator,
+                gpa,
                 content,
                 .{},
             );
             const id = try convert.fileId(path);
-            try tileSets.append(allocator, try convert.parseTileSet(id, value));
+            const tileSet = try convert.parseTileSet(id, value);
+            try tileSets.append(gpa, tileSet);
+            if (!options.mergeTileSets) {
+                const base = entry.path[0 .. entry.path.len - extension.len];
+                const name = try std.fmt.allocPrint(gpa, "{s}.zon", .{base});
+                const output = try std.fs.path.join(gpa, &.{ outputRoot, name });
+                try writeZon(io, output, tileSet);
+            }
         }
     }
     std.mem.sort(tiled.TileSet, tileSets.items, {}, struct {
@@ -95,31 +103,30 @@ pub fn main(init: std.process.Init) !void {
     for (tileSets.items, 0..) |set, i| {
         if (i != 0) std.debug.assert(tileSets.items[i - 1].id < set.id);
     }
-    const tileSetPath = try std.fs.path.join(allocator, &.{ args[2], "tileSet.zon" });
-    try writeZon(io, tileSetPath, tileSets.items);
+    if (options.mergeTileSets) {
+        const path = try std.fs.path.join(gpa, &.{ outputRoot, "tileSet.zon" });
+        try writeZon(io, path, tileSets.items);
+    }
 
     for (maps.items) |relative| {
-        var arena = std.heap.ArenaAllocator.init(init.gpa);
-        defer arena.deinit();
-        const mapAllocator = arena.allocator();
-        const path = try std.fs.path.join(mapAllocator, &.{ root, relative });
+        const path = try std.fs.path.join(gpa, &.{ root, relative });
         const convert = Convert{
-            .allocator = mapAllocator,
+            .gpa = gpa,
             .root = root,
             .directory = std.fs.path.dirname(path).?,
         };
-        const content = try dir.readFileAlloc(io, relative, mapAllocator, .unlimited);
+        const content = try dir.readFileAlloc(io, relative, gpa, .unlimited);
         const value = try std.json.parseFromSliceLeaky(
             JsonMap,
-            mapAllocator,
+            gpa,
             content,
             .{},
         );
         const map = try convert.parseMap(value);
-        const name = try std.fmt.allocPrint(mapAllocator, "{s}.zon", .{
+        const name = try std.fmt.allocPrint(gpa, "{s}.zon", .{
             relative[0 .. relative.len - 4],
         });
-        const output = try std.fs.path.join(mapAllocator, &.{ args[2], name });
+        const output = try std.fs.path.join(gpa, &.{ outputRoot, name });
         try writeZon(io, output, map);
         std.log.info("converted map: {s}", .{relative});
     }
@@ -145,18 +152,18 @@ fn writeZon(io: std.Io, path: []const u8, value: anytype) !void {
 
 // 每个源文件携带所在目录，图片和瓦片集引用均以该文件为起点解析。
 const Convert = struct {
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     root: []const u8,
     directory: []const u8,
     terrain: bool = false,
 
     // 图片和瓦片集统一使用根目录相对路径，图片 ID 与 atlas 保持一致。
     fn fileId(self: Convert, file: []const u8) !u32 {
-        const path = try std.fs.path.resolveAlloc(self.allocator, &.{
+        const path = try std.fs.path.resolveAlloc(self.gpa, &.{
             self.directory, file,
         });
         const relative = try std.fs.path.relativeAlloc(
-            self.allocator,
+            self.gpa,
             self.root,
             null,
             self.root,
@@ -179,7 +186,7 @@ const Convert = struct {
                 count = 0;
                 for (definitions) |tile| count = @max(count, tile.id + 1);
             }
-            tiles = try self.allocator.alloc(tiled.Tile, count);
+            tiles = try self.gpa.alloc(tiled.Tile, count);
             if (value.columns == 0) @memset(tiles, std.mem.zeroes(tiled.Tile));
             for (definitions, 0..) |tile, index| {
                 var group: ?tiled.ObjectGroup = null;
@@ -216,12 +223,12 @@ const Convert = struct {
 
     fn parseWangSets(self: Convert, input: []const JsonWangSet) ![]const tiled.WangSet {
         if (!self.terrain) return &.{};
-        const sets = try self.allocator.alloc(tiled.WangSet, input.len);
+        const sets = try self.gpa.alloc(tiled.WangSet, input.len);
         for (sets, input) |*set, old| {
             std.debug.assert(old.colors.len <= 254);
-            const colors = try self.allocator.alloc([]const u8, old.colors.len);
+            const colors = try self.gpa.alloc([]const u8, old.colors.len);
             for (colors, old.colors) |*color, value| color.* = value.name;
-            const tiles = try self.allocator.alloc(tiled.WangTile, old.wangtiles.len);
+            const tiles = try self.gpa.alloc(tiled.WangTile, old.wangtiles.len);
             for (tiles, old.wangtiles) |*tile, value| {
                 for (value.wangid) |index| std.debug.assert(index <= colors.len);
                 tile.* = .{ .tileId = @intCast(value.tileid), .colors = value.wangid };
@@ -243,7 +250,7 @@ const Convert = struct {
         frames: []const JsonFrame,
         set: JsonTileSet,
     ) ![]zhu.graphics.Frame {
-        const result = try self.allocator.alloc(zhu.graphics.Frame, frames.len);
+        const result = try self.gpa.alloc(zhu.graphics.Frame, frames.len);
         for (result, frames) |*frame, old| frame.* = .{
             .offset = .{
                 .x = @floatFromInt((old.tileid % set.columns) * set.tilewidth),
@@ -259,7 +266,7 @@ const Convert = struct {
         if (!std.mem.eql(u8, value.orientation, "orthogonal")) {
             return error.UnsupportedMapOrientation;
         }
-        const refs = try self.allocator.alloc(tiled.TileSetRef, value.tilesets.len);
+        const refs = try self.gpa.alloc(tiled.TileSetRef, value.tilesets.len);
         for (refs, value.tilesets) |*ref, old| {
             const source = old.source orelse return error.ExternalTileSetRequired;
             ref.* = .{ .firstGid = old.firstgid, .id = try self.fileId(source) };
@@ -292,7 +299,7 @@ const Convert = struct {
 
     // 可见层按源文件顺序紧密写入，隐藏层不占输出位置。
     fn parseLayers(self: Convert, layers: []const JsonLayer) ![]tiled.Layer {
-        const result = try self.allocator.alloc(tiled.Layer, layers.len);
+        const result = try self.gpa.alloc(tiled.Layer, layers.len);
         var count: usize = 0;
         for (layers) |old| {
             if (!old.visible) continue;
@@ -332,7 +339,7 @@ const Convert = struct {
 
     // 原生 GID 同时保存编号与方向标志，转换时不重写或拆分。
     fn parseObjects(self: Convert, objects: []const JsonObject) ![]tiled.Object {
-        const result = try self.allocator.alloc(tiled.Object, objects.len);
+        const result = try self.gpa.alloc(tiled.Object, objects.len);
         for (result, objects) |*object, old| {
             object.* = .{
                 .id = old.id,
@@ -353,7 +360,7 @@ const Convert = struct {
         self: Convert,
         properties: []const JsonProperty,
     ) ![]tiled.Property {
-        const result = try self.allocator.alloc(tiled.Property, properties.len);
+        const result = try self.gpa.alloc(tiled.Property, properties.len);
         for (result, properties) |*property, old| property.* = .{
             .name = old.name,
             .value = try self.parsePropertyValue(old),
@@ -387,7 +394,7 @@ const Convert = struct {
             .object => |object| object,
             else => return error.InvalidClassProperty,
         };
-        const result = try self.allocator.alloc(tiled.Property, object.count());
+        const result = try self.gpa.alloc(tiled.Property, object.count());
         var iterator = object.iterator();
         for (result) |*member| {
             const entry = iterator.next().?;
