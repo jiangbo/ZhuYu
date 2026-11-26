@@ -9,9 +9,22 @@ const Init = std.process.Init;
 const assert = std.debug.assert;
 
 // 当前平台的用户数据目录，路径写入调用方缓冲区。
-pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
-    const base = info.environ_map.get("APPDATA") orelse @panic("APPDATA not set");
-    return zhu.format(buf, "{s}\\{s}", .{ base, name });
+pub fn dataPath(_: Init, name: []const u8, buf: []u8) []const u8 {
+    var path: ?[*:0]u16 = null;
+    // FOLDERID_RoamingAppData
+    const result = SHGetKnownFolderPath(
+        &comptime Guid.parse("{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D}"),
+        0x4000, // KF_FLAG_DONT_VERIFY，写入时再创建目录。
+        null,
+        &path,
+    );
+    defer CoTaskMemFree(path);
+    if (result < 0) @panic("cannot get Roaming AppData");
+    const wide = std.mem.span(path.?);
+    if (std.unicode.calcWtf8Len(wide) > buf.len) @panic("buffer too small");
+    const len = std.unicode.wtf16LeToWtf8(buf, wide);
+    const tail = zhu.format(buf[len..], "\\{s}", .{name});
+    return buf[0 .. len + tail.len];
 }
 
 pub fn setup(_: std.mem.Allocator) void {}
@@ -303,6 +316,14 @@ pub const font = struct {
 
 // 按 Windows ABI 声明，x86 使用 stdcall，x64 和 ARM64 使用各自的系统调用约定。
 pub extern "imm32" fn ImmDisableIME(i32) callconv(.winapi) std.os.windows.BOOL;
+
+extern "shell32" fn SHGetKnownFolderPath(
+    *const Guid,
+    u32,
+    ?std.os.windows.HANDLE,
+    *?[*:0]u16,
+) callconv(.winapi) HRESULT;
+extern "ole32" fn CoTaskMemFree(?*anyopaque) callconv(.winapi) void;
 
 const FileTime = std.os.windows.FILETIME;
 const SystemTime = extern struct {

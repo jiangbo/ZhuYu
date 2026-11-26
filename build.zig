@@ -69,6 +69,10 @@ pub fn build(b: *std.Build) !void {
         // iOS 单独链接色彩空间接口；macOS 通过 AppKit 重导出提供。
         zhu.linkFramework("CoreGraphics", .{});
     }
+    if (target.result.os.tag == .windows) {
+        zhu.linkSystemLibrary("shell32", .{});
+        zhu.linkSystemLibrary("ole32", .{});
+    }
     if (font == .system) linkSystemFont(zhu);
     if (target.result.abi.isAndroid()) {
         if (target.result.os.version_range.linux.android < 26)
