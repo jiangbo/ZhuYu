@@ -420,6 +420,12 @@ pub const Image = struct {
         return self.view.id != 0;
     }
 
+    pub fn withFilter(self: Image, filter: Filter) Image {
+        var image = self;
+        image.filter = filter;
+        return image;
+    }
+
     pub fn sub(self: *const Image, subRect: zhu.Rect) Image {
         var image = self.*;
         image.offset = self.offset.add(subRect.min);

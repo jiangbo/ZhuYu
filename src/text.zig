@@ -271,9 +271,8 @@ pub const static = if (options.font == .static) struct {
         }
 
         for (zon.images, 0..) |path, i| {
-            var image = assets.getImage(assets.id(path)).?;
-            image.filter = option.filter;
-            images[i] = image;
+            const image = assets.getImage(assets.id(path)).?;
+            images[i] = image.withFilter(option.filter);
         }
         invalidGlyph = searchGlyph('?').?;
         fontScale = (option.size orelse zon.size) / zon.size;
