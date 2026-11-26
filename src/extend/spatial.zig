@@ -12,6 +12,10 @@ pub const Cell = struct {
     x: i32,
     y: i32,
 
+    pub fn xy(x: i32, y: i32) Cell {
+        return .{ .x = x, .y = y };
+    }
+
     /// 各分量向零截断，不进行网格坐标换算。
     pub fn fromVector(v: Vector2) Cell {
         return .{ .x = @intFromFloat(v.x), .y = @intFromFloat(v.y) };

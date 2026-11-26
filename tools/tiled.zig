@@ -1,4 +1,4 @@
-//! 一次生成全部 Tiled 瓦片集和地图，共用同一份瓦片集顺序。
+//! 将 Tiled 瓦片集和地图导出为 ZON，地图通过稳定 ID 引用瓦片集。
 const std = @import("std");
 const zhu = @import("zhu");
 
@@ -10,6 +10,7 @@ pub const Options = struct {
     input: []const u8, // 资源根目录，与 atlas 的 input 相同，递归读取 TSJ/TMJ。
     output: []const u8 = "src/zon", // 地图保留相对于 input 的目录结构。
     name: []const u8 = "tiled",
+    terrain: bool = false, // 是否导出 Wang 地形规则。
 };
 
 // 路径通过运行参数传入，多组资源共用同一个工具编译结果。
@@ -33,20 +34,21 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
             @panic("out of memory");
         run.addArg(absolute);
     }
+    if (options.terrain) run.addArg("--terrain");
     // 每次执行都扫描全部文件，新增的地图与瓦片集也会一起生成。
     run.has_side_effects = true;
     b.step(options.name, "Generate Tiled tilesets and maps").dependOn(&run.step);
 }
 
-// 将地图文件内的 GID 区间映射到本次生成的瓦片集顺序。
-const TileSetRange = struct { index: u8, firstGid: u32, endGid: u32 };
-
-// 参数依次为资源根目录、ZON 输出目录，所有资源 ID 均相对于根目录计算。
-// 瓦片集数据保留到所有地图生成结束，地图临时数据逐张释放。
+// 参数依次为资源根目录、ZON 输出目录，可选 --terrain 导出地形规则。
+// 瓦片集与地图独立转换，地图临时数据逐张释放。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
+    std.debug.assert(args.len == 3 or args.len == 4);
+    const terrain = args.len == 4;
+    if (terrain) std.debug.assert(std.mem.eql(u8, args[3], "--terrain"));
     const root = try std.fs.path.resolveAlloc(allocator, &.{args[1]});
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.openDir(io, root, .{ .iterate = true });
@@ -67,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
                 .allocator = allocator,
                 .root = root,
                 .directory = std.fs.path.dirname(path).?,
+                .terrain = terrain,
             };
             const content = try dir.readFileAlloc(
                 io,
@@ -89,6 +92,9 @@ pub fn main(init: std.process.Init) !void {
             return a.id < b.id;
         }
     }.lessThan);
+    for (tileSets.items, 0..) |set, i| {
+        if (i != 0) std.debug.assert(tileSets.items[i - 1].id < set.id);
+    }
     const tileSetPath = try std.fs.path.join(allocator, &.{ args[2], "tileSet.zon" });
     try writeZon(io, tileSetPath, tileSets.items);
 
@@ -109,7 +115,7 @@ pub fn main(init: std.process.Init) !void {
             content,
             .{},
         );
-        const map = try convert.parseMap(value, tileSets.items);
+        const map = try convert.parseMap(value);
         const name = try std.fmt.allocPrint(mapAllocator, "{s}.zon", .{
             relative[0 .. relative.len - 4],
         });
@@ -142,6 +148,7 @@ const Convert = struct {
     allocator: std.mem.Allocator,
     root: []const u8,
     directory: []const u8,
+    terrain: bool = false,
 
     // 图片和瓦片集统一使用根目录相对路径，图片 ID 与 atlas 保持一致。
     fn fileId(self: Convert, file: []const u8) !u32 {
@@ -178,7 +185,7 @@ const Convert = struct {
                 var group: ?tiled.ObjectGroup = null;
                 if (tile.objectgroup) |old| group = .{
                     .visible = old.visible,
-                    .objects = try self.parseObjects(old.objects, null),
+                    .objects = try self.parseObjects(old.objects),
                 };
                 const slot = if (value.columns == 0) tile.id else index;
                 tiles[slot] = .{
@@ -203,7 +210,31 @@ const Convert = struct {
                 .y = @floatFromInt(value.tileheight),
             },
             .tiles = tiles,
+            .wangSets = try self.parseWangSets(value.wangsets orelse &.{}),
         };
+    }
+
+    fn parseWangSets(self: Convert, input: []const JsonWangSet) ![]const tiled.WangSet {
+        if (!self.terrain) return &.{};
+        const sets = try self.allocator.alloc(tiled.WangSet, input.len);
+        for (sets, input) |*set, old| {
+            std.debug.assert(old.colors.len <= 254);
+            const colors = try self.allocator.alloc([]const u8, old.colors.len);
+            for (colors, old.colors) |*color, value| color.* = value.name;
+            const tiles = try self.allocator.alloc(tiled.WangTile, old.wangtiles.len);
+            for (tiles, old.wangtiles) |*tile, value| {
+                for (value.wangid) |index| std.debug.assert(index <= colors.len);
+                tile.* = .{ .tileId = @intCast(value.tileid), .colors = value.wangid };
+            }
+            const kind = std.meta.stringToEnum(@TypeOf(set.type), old.type);
+            set.* = .{
+                .name = old.name,
+                .type = kind orelse return error.InvalidWangType,
+                .colors = colors,
+                .tiles = tiles,
+            };
+        }
+        return sets;
     }
 
     // 动画帧使用当前瓦片集的列数和瓦片尺寸，时间换算成秒。
@@ -223,29 +254,24 @@ const Convert = struct {
         return result;
     }
 
-    // 地图直接使用内存中的瓦片集顺序，不再读取生成的 ZON。
-    fn parseMap(
-        self: Convert,
-        value: JsonMap,
-        tileSets: []const tiled.TileSet,
-    ) !tiled.Map {
-        const ranges = try self.allocator.alloc(TileSetRange, value.tilesets.len);
-        for (ranges, value.tilesets, 0..) |*range, old, index| {
-            const source = old.source.?;
-            const id = try self.fileId(source);
-            const globalIndex: u8 = for (tileSets, 0..) |set, slot| {
-                if (set.id != id) continue;
-                std.debug.assert(slot < 255);
-                break @intCast(slot);
-            } else std.debug.panic("tileSet is missing: {s}", .{source});
-            range.* = .{
-                .index = globalIndex,
-                .firstGid = old.firstgid,
-                .endGid = if (index + 1 < ranges.len)
-                    value.tilesets[index + 1].firstgid
-                else
-                    std.math.maxInt(u32),
-            };
+    // 地图保留原生瓦片编号，通过本地引用关联稳定的瓦片集 ID。
+    fn parseMap(self: Convert, value: JsonMap) !tiled.Map {
+        if (!std.mem.eql(u8, value.orientation, "orthogonal")) {
+            return error.UnsupportedMapOrientation;
+        }
+        const refs = try self.allocator.alloc(tiled.TileSetRef, value.tilesets.len);
+        for (refs, value.tilesets) |*ref, old| {
+            const source = old.source orelse return error.ExternalTileSetRequired;
+            ref.* = .{ .firstGid = old.firstgid, .id = try self.fileId(source) };
+        }
+        std.mem.sort(tiled.TileSetRef, refs, {}, struct {
+            fn lessThan(_: void, a: tiled.TileSetRef, b: tiled.TileSetRef) bool {
+                return a.firstGid < b.firstGid;
+            }
+        }.lessThan);
+        for (refs, 0..) |ref, i| {
+            std.debug.assert(ref.firstGid != 0);
+            if (i != 0) std.debug.assert(refs[i - 1].firstGid < ref.firstGid);
         }
         std.debug.assert(value.tilewidth == value.tileheight);
         return .{
@@ -259,16 +285,13 @@ const Convert = struct {
             else
                 null,
             .properties = try self.parseProperties(value.properties orelse &.{}),
-            .layers = try self.parseLayers(value.layers, ranges),
+            .layers = try self.parseLayers(value.layers),
+            .tileSetRefs = refs,
         };
     }
 
     // 可见层按源文件顺序紧密写入，隐藏层不占输出位置。
-    fn parseLayers(
-        self: Convert,
-        layers: []const JsonLayer,
-        ranges: []const TileSetRange,
-    ) ![]tiled.Layer {
+    fn parseLayers(self: Convert, layers: []const JsonLayer) ![]tiled.Layer {
         const result = try self.allocator.alloc(tiled.Layer, layers.len);
         var count: usize = 0;
         for (layers) |old| {
@@ -296,12 +319,10 @@ const Convert = struct {
             } else if (std.mem.eql(u8, old.type, "tilelayer")) {
                 layer.width = @floatFromInt(old.width orelse 0);
                 layer.height = @floatFromInt(old.height orelse 0);
-                const data = try self.allocator.alloc(u32, old.data.len);
-                for (data, old.data) |*gid, raw| gid.* = encodeGid(raw, ranges);
-                layer.data = data;
+                layer.data = old.data;
             } else if (std.mem.eql(u8, old.type, "objectgroup")) {
                 layer.type = .object;
-                layer.objects = try self.parseObjects(old.objects, ranges);
+                layer.objects = try self.parseObjects(old.objects);
             } else return error.InvalidLayerType;
             result[count] = layer;
             count += 1;
@@ -309,29 +330,19 @@ const Convert = struct {
         return result[0..count];
     }
 
-    // 地图对象编码全局 GID，瓦片碰撞对象保留原有局部 GID。
-    fn parseObjects(
-        self: Convert,
-        objects: []const JsonObject,
-        ranges: ?[]const TileSetRange,
-    ) ![]tiled.Object {
+    // 原生 GID 同时保存编号与方向标志，转换时不重写或拆分。
+    fn parseObjects(self: Convert, objects: []const JsonObject) ![]tiled.Object {
         const result = try self.allocator.alloc(tiled.Object, objects.len);
         for (result, objects) |*object, old| {
-            const gid = old.gid orelse 0;
             object.* = .{
                 .id = old.id,
-                .gid = if (ranges) |list| encodeGid(gid, list) else gid & 0x1FFFFFFF,
+                .gid = old.gid orelse 0,
                 .name = old.name,
                 .type = old.type,
                 .position = .{ .x = old.x, .y = old.y },
                 .size = .{ .x = old.width, .y = old.height },
                 .point = old.point,
                 .properties = try self.parseProperties(old.properties),
-                .extend = .{
-                    .flipX = (gid & 0x80000000) != 0,
-                    .flipY = (gid & 0x40000000) != 0,
-                    .rotation = (gid & 0x20000000) != 0,
-                },
             };
         }
         return result;
@@ -394,19 +405,6 @@ const Convert = struct {
         return result;
     }
 };
-
-// 高八位存瓦片集序号加一，低二十四位存瓦片集内的局部 ID。
-fn encodeGid(gid: u32, ranges: []const TileSetRange) u32 {
-    if (gid == 0) return 0;
-    const cleanGid = gid & 0x1FFFFFFF;
-    for (ranges) |range| {
-        if (cleanGid < range.firstGid or cleanGid >= range.endGid) continue;
-        const localId = cleanGid - range.firstGid;
-        std.debug.assert(localId <= 0x00FFFFFF);
-        return ((@as(u32, range.index) + 1) << 24) | localId;
-    }
-    std.debug.panic("tiled compiler: GID {} has no matching tileSet", .{gid});
-}
 
 // Tiled 使用 RRGGBB 或 AARRGGBB，六位颜色默认不透明。
 fn parseColor(text: []const u8) zhu.Color {
@@ -810,7 +808,7 @@ const JsonWangColor = struct {
     /// 名称
     name: []const u8,
     /// 随机化时使用的概率
-    probability: f32,
+    probability: f32 = 1,
     /// 自定义属性数组
     properties: ?[]const JsonProperty = null,
     /// 代表该颜色的局部瓦片 ID

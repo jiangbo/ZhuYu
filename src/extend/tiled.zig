@@ -7,6 +7,11 @@ const Grid = @import("spatial.zig").Grid;
 
 const Vector2 = math.Vector2;
 const Rect = math.Rect;
+const Image = graphics.Image;
+const Vertex = graphics.Vertex;
+
+/// firstGid 是本地图中的编号起点；id 是按资源路径计算的稳定瓦片集 ID。
+pub const TileSetRef = struct { firstGid: u32, id: u32 };
 
 pub const Map = struct {
     grid: Grid,
@@ -14,7 +19,8 @@ pub const Map = struct {
     backgroundColor: ?graphics.Color = null,
     properties: []const Property = &.{},
     layers: []const Layer = &.{},
-    tileSets: []const TileSet = &.{},
+    tileSetRefs: []const TileSetRef = &.{}, // 按 firstGid 严格升序。
+    tileSets: []const TileSet = &.{}, // 按 id 严格升序，定义由调用方持有。
 
     pub fn getProperty(self: Map, name: []const u8, T: type) ?T {
         for (self.properties) |property| {
@@ -27,46 +33,68 @@ pub const Map = struct {
         return self.getProperty(name, ClassProperty);
     }
 
-    pub fn getTileSet(self: Map, gid: u32) TileSet {
+    /// 查找 GID 对应的瓦片引用；要求瓦片集已提供，查找失败时报错。
+    fn findTileRef(self: Map, raw: u32) struct { *const TileSet, u32 } {
+        // 查询定义时清除最高四位；原始 GID 仍保留方向信息，供加载时解析。
+        const gid = raw & 0x0FFFFFFF;
         std.debug.assert(gid != 0);
-        return self.tileSets[(gid >> 24) - 1];
+        // 原生 GID 只在本地图内有效，归属于 firstGid 不大于它的最后一项。
+        var i = self.tileSetRefs.len;
+        while (i != 0) : (i -= 1) {
+            const ref = self.tileSetRefs[i - 1];
+            if (gid < ref.firstGid) continue;
+            // 按稳定 ID 查询定义，不依赖瓦片集在全局数组中的位置。
+            const search = std.sort.binarySearch;
+            const found = search(TileSet, self.tileSets, ref.id, struct {
+                fn compare(id: u32, set: TileSet) std.math.Order {
+                    return std.math.order(id, set.id);
+                }
+            }.compare);
+            const index = found orelse
+                std.debug.panic("tileSet {} is not loaded", .{ref.id});
+            const set = &self.tileSets[index];
+            const localId = gid - ref.firstGid;
+            if (set.columns != 0) std.debug.assert(localId < set.tileCount) //
+            else std.debug.assert(localId < set.tiles.len);
+            return .{ set, localId };
+        }
+        std.debug.panic("GID {} has no tileSet reference", .{gid});
+    }
+
+    pub fn getTileSet(self: Map, gid: u32) TileSet {
+        return self.findTileRef(gid)[0].*;
     }
 
     pub fn getTile(self: Map, gid: u32) ?*const Tile {
-        const tileSet = self.getTileSet(gid);
-        return tileSet.getTileByLocalId(gid & 0x00FFFFFF);
+        const tileSet, const localId = self.findTileRef(gid);
+        return tileSet.getTileByLocalId(localId);
     }
 
-    pub fn getImage(self: Map, gid: u32) ?graphics.Image {
-        const tileSet = self.getTileSet(gid);
-        const localId = gid & 0x00FFFFFF;
-
+    /// 返回未翻转的子图；翻转和旋转由 TileFlags 在绘制时应用。
+    pub fn getImage(self: Map, gid: u32) ?Image {
+        const tileSet, const localId = self.findTileRef(gid);
         if (tileSet.columns == 0) {
             const tile = tileSet.getTileByLocalId(localId).?;
             const image = assets.getImage(tile.id) orelse return null;
             return if (tile.imageRect) |rect| image.sub(rect) else image;
         }
         if (tileSet.image == 0) return null;
-
         const x: f32 = @floatFromInt(localId % tileSet.columns);
         const y: f32 = @floatFromInt(localId / tileSet.columns);
         const position = tileSet.tileSize.mul(.xy(x, y));
-        const area = Rect.init(position, tileSet.tileSize);
         const image = assets.getImage(tileSet.image) orelse return null;
-        return image.sub(area);
+        return image.sub(.init(position, tileSet.tileSize));
     }
 
     pub fn getAnimation(self: Map, gid: u32) ?graphics.Animation {
-        const tileSet = self.getTileSet(gid);
-        const localId = gid & 0x00FFFFFF;
-        if (tileSet.getTileByLocalId(localId)) |tile| {
-            if (tile.animation.len == 0) return null;
-            return graphics.Animation.initSource(.{
-                .imageId = tileSet.image,
-                .size = tileSet.tileSize,
-                .frames = tile.animation,
-            });
-        } else return null;
+        const tileSet, const localId = self.findTileRef(gid);
+        const tile = tileSet.getTileByLocalId(localId) orelse return null;
+        if (tile.animation.len == 0) return null;
+        return graphics.Animation.initSource(.{
+            .imageId = tileSet.image,
+            .size = tileSet.tileSize,
+            .frames = tile.animation,
+        });
     }
 };
 
@@ -96,7 +124,7 @@ pub const Layer = struct {
 
     offset: Vector2,
 
-    // tile 层特有
+    // tile 层特有：保留 Tiled 原生 GID，最高四位是方向标志，0 表示空格。
     data: []const u32,
 
     // 对象层特有
@@ -182,6 +210,14 @@ pub const TileSet = struct {
     image: u32,
     tileSize: Vector2,
     tiles: []const Tile,
+    wangSets: []const WangSet = &.{},
+
+    pub fn getWangSet(self: TileSet, name: []const u8) ?*const WangSet {
+        for (self.wangSets) |*set| {
+            if (std.mem.eql(u8, set.name, name)) return set;
+        }
+        return null;
+    }
 
     pub fn getTileByLocalId(self: TileSet, localId: u32) ?*const Tile {
         if (self.columns == 0) return &self.tiles[localId];
@@ -190,6 +226,32 @@ pub const TileSet = struct {
         } else return null;
     }
 };
+
+/// Tiled 地形规则；颜色索引从 1 开始，0 表示未标记。
+pub const WangSet = struct {
+    name: []const u8,
+    type: enum { corner, edge, mixed },
+    colors: []const []const u8,
+    tiles: []const WangTile,
+
+    pub fn getColorIndex(self: WangSet, name: []const u8) ?u8 {
+        for (self.colors, 1..) |color, index| {
+            if (std.mem.eql(u8, color, name)) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// 按上、右上、右、右下、下、左下、左、左上的顺序精确匹配。
+    /// 0 也参与匹配；重复规则取首个，不应用随机概率或近似补全。
+    pub fn getTileId(self: WangSet, colors: [8]u8) ?u32 {
+        for (self.tiles) |tile| {
+            if (std.mem.eql(u8, &tile.colors, &colors)) return tile.tileId;
+        }
+        return null;
+    }
+};
+
+pub const WangTile = struct { tileId: u32, colors: [8]u8 };
 
 pub const Tile = struct {
     id: u32,
@@ -218,11 +280,67 @@ pub const ObjectGroup = struct {
     objects: []const Object, // 物体数组 (物体层用)
 };
 
-pub const ObjectExtend = struct {
-    flipX: bool = false, // 水平翻转
-    flipY: bool = false, // 垂直翻转
-    rotation: bool = false, // 旋转90度
-    padding: u5 = 0,
+/// 正交地图的显示标志：先交换坐标轴，再水平、垂直翻转。
+pub const TileFlags = struct {
+    flipX: bool = false,
+    flipY: bool = false,
+    rotation: bool = false, // GID 的对角翻转位，与水平、垂直翻转组合表示旋转。
+
+    /// 地图加载时解析，顶点和精灵保存结果；不在绘制时重复拆位。
+    /// 正交地图只使用三个方向位，第四个高位由 GID 查询入口统一清除。
+    pub fn fromGid(gid: u32) TileFlags {
+        return .{
+            .flipX = gid & 0x80000000 != 0,
+            .flipY = gid & 0x40000000 != 0,
+            .rotation = gid & 0x20000000 != 0,
+        };
+    }
+
+    /// 输入和输出均为 0～1 的瓦片坐标，碰撞与绘制共用相同的方向约定。
+    fn point(self: TileFlags, value: Vector2) Vector2 {
+        var result = value;
+        if (self.rotation) result = .xy(result.y, result.x);
+        if (self.flipX) result.x = 1 - result.x;
+        if (self.flipY) result.y = 1 - result.y;
+        return result;
+    }
+
+    /// 输入矩形使用 0～1 的瓦片坐标。
+    pub fn rect(self: TileFlags, value: Rect) Rect {
+        const a = self.point(value.min);
+        const b = self.point(value.max());
+        const min = a.min(b);
+        return .init(min, a.max(b).sub(min));
+    }
+
+    pub fn uvRect(self: TileFlags, value: math.Vector4) math.Vector4 {
+        var uv = value;
+        // 对角翻转由 vertex 的 90° 旋转配合 UV 翻转实现。
+        // 因而需要交换翻转轴，再补一次 Y 翻转，组合成坐标轴交换。
+        const x = if (self.rotation) self.flipY else self.flipX;
+        const y = if (self.rotation) !self.flipX else self.flipY;
+        if (x) uv.x, uv.z = .{ uv.x + uv.z, -uv.z };
+        if (y) uv.y, uv.w = .{ uv.y + uv.w, -uv.w };
+        return uv;
+    }
+
+    pub fn vertex(self: TileFlags, area: Rect, image: Image) Vertex {
+        var result = Vertex{
+            .position = area.min,
+            .size = area.size,
+            .layer = image.layer,
+            .filter = image.filter,
+            .uvRect = self.uvRect(image.uvRect()),
+        };
+        if (self.rotation) {
+            // 绕目标矩形中心旋转，并交换宽高，使非正方形瓦片仍落在原区域内。
+            result.position = area.center();
+            result.pivot = .center;
+            result.size = .xy(area.size.y, area.size.x);
+            result.radian = std.math.pi / 2.0;
+        }
+        return result;
+    }
 };
 
 pub const Object = struct {
@@ -234,7 +352,6 @@ pub const Object = struct {
     size: Vector2, // 像素宽高
     point: bool, // 是否为点物体
     properties: []const Property, // 物体自定义属性
-    extend: ObjectExtend, // 扩展信息
 
     pub fn topLeft(self: Object) Vector2 {
         if (self.gid == 0) return self.position;
