@@ -1,6 +1,6 @@
 //! 图集合并。
 const std = @import("std");
-const copy = @import("copy.zig");
+const core = @import("core.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -56,7 +56,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
         }),
     });
     tool.root_module.addOptions("options", config);
-    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
+    tool.root_module.addImport("zhu", core.createZhuModule(b, dep));
 
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
@@ -97,7 +97,6 @@ const Source = struct {
 const Scan = struct {
     io: std.Io,
     gpa: std.mem.Allocator,
-    options: Options,
     sources: std.ArrayListUnmanaged(Source) = .empty,
     ids: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
 };
@@ -145,9 +144,9 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     var scan = Scan{
         .io = io,
         .gpa = gpa,
-        .options = options,
     };
-    try scanDir(&scan, input, "", options.include.len == 0);
+    const rules = core.PathRules.init(options.include, options.exclude);
+    try scanFiles(&scan, input, rules);
     if (scan.sources.items.len == 0) return error.NoPngFiles;
 
     const items = try gpa.alloc(PackItem, scan.sources.items.len);
@@ -175,36 +174,14 @@ fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     });
 }
 
-fn scanDir(
-    scan: *Scan,
-    dir: std.Io.Dir,
-    relative: []const u8,
-    included: bool,
-) !void {
-    var iterator = dir.iterate();
-    entries: while (try iterator.next(scan.io)) |entry| {
-        const directory = entry.kind == .directory;
-        if (!directory and (entry.kind != .file or !isPng(entry.name))) continue;
-
-        const path = try joinRelative(scan.gpa, relative, entry.name);
-        for (scan.options.exclude) |rule| {
-            if (matchRule(path, directory, rule)) continue :entries;
-        }
-        const childIncluded = if (included) true else checkInclude(
-            scan.options.include,
-            path,
-            directory,
-        ) orelse continue :entries;
-
-        if (directory) {
-            var child = try dir.openDir(scan.io, entry.name, .{ .iterate = true });
-            defer child.close(scan.io);
-            try scanDir(scan, child, path, childIncluded);
-            continue;
-        }
-
-        const filePath = try std.fs.path.join(scan.gpa, &.{ scan.options.input, path });
-        const decoded = try copy.decodePng(scan.io, scan.gpa, filePath);
+fn scanFiles(scan: *Scan, dir: std.Io.Dir, rules: core.PathRules) !void {
+    const io = scan.io;
+    var walker = try rules.walk(dir, scan.gpa);
+    defer walker.deinit(io);
+    while (try walker.next(io)) |entry| {
+        if (!std.ascii.endsWithIgnoreCase(entry.basename, ".png")) continue;
+        const path = try core.resourcePath(scan.gpa, entry.path);
+        const decoded = try core.decodePng(io, scan.gpa, entry.dir, entry.basename);
         const id = std.hash.Fnv1a_32.hash(path);
         const result = try scan.ids.getOrPut(scan.gpa, id);
         if (result.found_existing) {
@@ -222,40 +199,6 @@ fn scanDir(
             .pixels = decoded.pixels,
         });
     }
-}
-
-fn matchRule(path: []const u8, directory: bool, rule: []const u8) bool {
-    const dirRule = std.mem.endsWith(u8, rule, "/");
-    if (directory != dirRule) return false;
-    const name = if (dirRule) rule[0 .. rule.len - 1] else rule;
-    return std.mem.eql(u8, path, name);
-}
-
-// 返回 true 表示整棵子树或文件被包含，false 表示仅父目录匹配，null 表示跳过。
-fn checkInclude(rules: []const []const u8, path: []const u8, directory: bool) ?bool {
-    for (rules) |rule| {
-        if (matchRule(path, directory, rule)) return true;
-        if (directory and rule.len > path.len and
-            std.mem.startsWith(u8, rule, path) and rule[path.len] == '/')
-        {
-            return false;
-        }
-    }
-    return null;
-}
-
-fn joinRelative(
-    gpa: std.mem.Allocator,
-    parent: []const u8,
-    name: []const u8,
-) ![]const u8 {
-    if (parent.len == 0) return gpa.dupe(u8, name);
-    return std.fmt.allocPrint(gpa, "{s}/{s}", .{ parent, name });
-}
-
-fn isPng(name: []const u8) bool {
-    const extension = std.fs.path.extension(name);
-    return std.ascii.eqlIgnoreCase(extension, ".png");
 }
 
 // 两种输出共用本次装箱结果。
@@ -336,8 +279,8 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
     const imagePaths = try gpa.alloc([]const u8, pageCount);
     var useOxipng = true;
     for (pages, 0..) |page, index| {
-        if (output.options.pngquant == null) copy.premultiply(page);
-        var bytes = try copy.encodePng(gpa, .{
+        if (output.options.pngquant == null) core.premultiply(page);
+        var bytes = try core.encodePng(gpa, .{
             .pixels = page,
             .width = layout.width,
             .height = layout.height,
@@ -346,7 +289,7 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
             bytes = try quantize(io, gpa, output.directory, bytes, q);
         }
         if (useOxipng) {
-            if (try copy.optimizePng(io, gpa, output.directory, bytes)) |optimized| {
+            if (try core.optimizePng(io, gpa, output.directory, bytes)) |optimized| {
                 std.log.info("oxipng page {}: {} -> {} bytes, saved {} bytes", .{
                     index, bytes.len, optimized.len, bytes.len -| optimized.len,
                 });

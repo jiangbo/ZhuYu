@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const bmfont = @import("bmfont.zig");
-const fontChars = @import("chars.zig");
+const core = @import("core.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -30,9 +30,9 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     }
 
     const codes = if (options.all)
-        try fontChars.readFont(b, options.font)
+        try core.readFontChars(b, options.font)
     else
-        try fontChars.read(b, dep, options.input);
+        try core.collectChars(b, dep, options.input);
     var content: std.ArrayList(u8) = .empty;
     for (codes) |code| {
         var buffer: [4]u8 = undefined;

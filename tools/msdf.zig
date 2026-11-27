@@ -1,8 +1,7 @@
 const std = @import("std");
 const text = @import("zhu").text;
 
-const fontChars = @import("chars.zig");
-const copy = @import("copy.zig");
+const core = @import("core.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -22,7 +21,7 @@ pub const Options = struct {
 // 注册转换程序，收集并排序字符，分页由工具按尺寸上限决定。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     if (options.maxSize == 0) return error.InvalidFontMaxSize;
-    const codes = try fontChars.read(b, dep, options.input);
+    const codes = try core.collectChars(b, dep, options.input);
     // 路径先按游戏项目解析，其余配置保持调用方的字段名。
     var toolOptions = options;
     toolOptions.font = try b.root.joinString(b.allocator, options.font);
@@ -39,7 +38,7 @@ pub fn addStep(b: *Build, dep: *Dependency, options: Options) !void {
     });
     const configModule = config.createModule();
     tool.root_module.addImport("options", configModule);
-    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
+    tool.root_module.addImport("zhu", core.createZhuModule(b, dep));
     const run = b.addRunArtifact(tool);
     run.setCwd(b.path("."));
     run.addFileInput(b.path(options.font));

@@ -1,9 +1,11 @@
 const std = @import("std");
+const core = @import("core.zig");
 
 // 资源打包和桌面程序追加共用的构建参数。
 pub const Options = struct {
     exe: ?*std.Build.Step.Compile = null,
     assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
+    include: []const []const u8 = &.{}, // 相对于 assets，为空时包含全部。
     exclude: []const []const u8 = &.{}, // 相对于 assets；文件精确匹配，目录以 / 结尾。
     output: []const u8 = "assets.pack", // 独立资源包的输出名称。
     metadata: ?[]const u8 = null, // 设置路径时额外输出 ZON 索引。
@@ -16,6 +18,9 @@ pub fn addStep(
     dep: *std.Build.Dependency,
     options: Options,
 ) ?std.Build.LazyPath {
+    const config = b.addOptions();
+    config.addOption([]const []const u8, "include", options.include);
+    config.addOption([]const []const u8, "exclude", options.exclude);
     const tool = b.addExecutable(.{
         .name = "zhuyu-pack",
         .root_module = b.createModule(.{
@@ -24,6 +29,7 @@ pub fn addStep(
             .optimize = .safe,
         }),
     });
+    tool.root_module.addOptions("options", config);
     const pack = b.addRunArtifact(tool);
     // 打包命令每次读取当前资源，不登记资源变化依赖。
     pack.has_side_effects = true;
@@ -32,7 +38,6 @@ pub fn addStep(
     pack.addArg(options.metadata orelse "");
     pack.addArg(options.output);
     pack.addArg(if (options.zlib) "true" else "false");
-    pack.addArgs(options.exclude);
     const install = b.addInstallFile(output, options.output);
     b.step("pack", "Pack assets")
         .dependOn(&install.step);
@@ -80,7 +85,7 @@ const Metadata = struct {
 
 // 路径仅供打包时读取和计算哈希，偏移指向资源包内的文件内容。
 const Entry = struct {
-    path: [:0]const u8,
+    path: []const u8,
     hash: u32, // 收集文件时计算并检查，写索引时直接使用。
     offset: u32 = 0,
     size: u32 = 0,
@@ -91,42 +96,29 @@ const Entry = struct {
     }
 };
 
-// 参数：输入目录、输出包；可选元数据路径、资源路径、zlib，之后为排除列表。
+// 筛选规则由构建配置传入，路径和压缩设置由命令行传入。
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
 
-    if (args.len != 3 and args.len < 6) return error.InvalidArguments;
-    const configured = args.len >= 6;
+    if (args.len != 3 and args.len != 6) return error.InvalidArguments;
+    const configured = args.len == 6;
     const metadata = configured and args[3].len != 0;
     const compressed = configured and std.mem.eql(u8, args[5], "true");
-    const exclude = if (configured) args[6..] else &.{};
+    const options = @import("options");
+    const rules = core.PathRules.init(options.include, options.exclude);
     const cwd = std.Io.Dir.cwd();
     var assets = try cwd.openDir(io, args[1], .{ .iterate = true });
     defer assets.close(io);
-    var walker = try assets.walkSelectively(allocator);
-    defer walker.deinit();
+    var walker = try rules.walk(assets, allocator);
+    defer walker.deinit(io);
 
     var entries: std.ArrayList(Entry) = .empty;
     // 写入产物前检查路径哈希，发生冲突时指出两个文件。
     var pathsByHash: std.AutoHashMapUnmanaged(u32, []const u8) = .empty;
-    files: while (try walker.next(io)) |file| {
-        const directory = file.kind == .directory;
-        if (!directory and file.kind != .file) continue;
-        const path = try allocator.dupeSentinel(u8, file.path, 0);
-        // Windows 宿主也使用资源接口约定的正斜杠路径。
-        std.mem.replaceScalar(u8, path, '\\', '/');
-        for (exclude) |rule| {
-            const dirRule = std.mem.endsWith(u8, rule, "/");
-            if (directory != dirRule) continue;
-            const name = if (dirRule) rule[0 .. rule.len - 1] else rule;
-            if (std.mem.eql(u8, path, name)) continue :files;
-        }
-        if (directory) {
-            try walker.enter(io, file);
-            continue;
-        }
+    while (try walker.next(io)) |file| {
+        const path = try core.resourcePath(allocator, file.path);
         const hash = std.hash.Fnv1a_32.hash(path);
         const entry = try pathsByHash.getOrPut(allocator, hash);
         if (entry.found_existing) {

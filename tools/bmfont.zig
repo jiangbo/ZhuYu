@@ -1,8 +1,7 @@
 const std = @import("std");
 const text = @import("zhu").text;
 
-const fontChars = @import("chars.zig");
-const copy = @import("copy.zig");
+const core = @import("core.zig");
 
 const Build = std.Build;
 const Dependency = Build.Dependency;
@@ -64,7 +63,7 @@ pub fn addConvertStep(
             .optimize = .safe,
         }),
     });
-    tool.root_module.addImport("zhu", copy.createZhuModule(b, dep));
+    tool.root_module.addImport("zhu", core.createZhuModule(b, dep));
     const configModule = config.createModule();
     tool.root_module.addImport("options", configModule);
     const run = b.addRunArtifact(tool);
@@ -76,7 +75,7 @@ pub fn addConvertStep(
 
 // BMFont 用 BOM 识别 UTF-8，字表编码与缓存文件由工具自身负责。
 fn createCharset(b: *Build, dep: *Dependency, input: ?[]const u8) !Build.LazyPath {
-    const codes = try fontChars.read(b, dep, input);
+    const codes = try core.collectChars(b, dep, input);
     var content: std.ArrayList(u8) = .empty;
     try content.appendSlice(b.allocator, "\xef\xbb\xbf");
     for (codes) |code| {
@@ -196,8 +195,8 @@ pub fn main(init: std.process.Init) !void {
         const path = try std.fs.path.join(gpa, &.{
             std.fs.path.dirname(options.source).?, image,
         });
-        const decoded = try copy.decodePng(io, gpa, path);
-        copy.premultiply(decoded.pixels);
+        const decoded = try core.decodePng(io, gpa, cwd, path);
+        core.premultiply(decoded.pixels);
         const bytes = try encodeFontPng(gpa, decoded);
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
@@ -241,18 +240,18 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // 预乘后的二值白色字体使用 1-bit 索引，其余像素保留 RGBA。
-fn encodeFontPng(gpa: std.mem.Allocator, source: copy.PngImage) ![]u8 {
+fn encodeFontPng(gpa: std.mem.Allocator, source: core.PngImage) ![]u8 {
     const pixels = std.mem.bytesAsSlice([4]u8, source.pixels);
     for (pixels) |pixel| {
         const alpha = pixel[3];
         if ((alpha != 0 and alpha != 255) or
             pixel[0] != alpha or pixel[1] != alpha or pixel[2] != alpha)
         {
-            return copy.encodePng(gpa, source, false);
+            return core.encodePng(gpa, source, false);
         }
     }
 
-    return copy.encodePng(gpa, source, true);
+    return core.encodePng(gpa, source, true);
 }
 
 // 二进制字段按 BMFont v3 的块顺序读取，内存由进程 arena 管理。
