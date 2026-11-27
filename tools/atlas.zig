@@ -20,14 +20,15 @@ pub const Options = struct {
     name: []const u8 = "atlas", // 同一项目可注册多组资源转换。
 };
 
-pub const Pngquant = struct {
-    colors: u16 = 256,
-    quality: ?struct { min: u8 = 0, max: u8 = 100 } = null,
-    dither: bool = false,
-};
+pub const Pngquant = core.Pngquant;
 
 // 图集工具复用引擎 PNG 读写，不引入第三方图片库。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
+    if (options.pngquant) |q| q.validate() catch |err| {
+        std.debug.panic("atlas step {s}: pngquant: {s}", .{
+            options.name, @errorName(err),
+        });
+    };
     const config = b.addOptions();
     const input = b.root.joinString(b.allocator, options.input) catch
         @panic("out of memory");
@@ -127,12 +128,6 @@ pub fn main(init: std.process.Init) !void {
 
 // 扫描源目录、装箱并生成引擎图集描述。
 fn buildAtlas(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
-    if (options.pngquant) |q| {
-        if (q.colors < 2 or q.colors > 256) return error.InvalidColorCount;
-        if (q.quality) |v| {
-            if (v.min > v.max or v.max > 100) return error.InvalidQuality;
-        }
-    }
     const cwd = std.Io.Dir.cwd();
     var input = try cwd.openDir(io, options.input, .{ .iterate = true });
     defer input.close(io);
@@ -286,7 +281,8 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
             .height = layout.height,
         }, false);
         if (output.options.pngquant) |q| {
-            bytes = try quantize(io, gpa, output.directory, bytes, q);
+            bytes = try core.quantizePng(io, gpa, output.directory, bytes, q);
+            try core.premultiplyPalette(bytes);
         }
         if (useOxipng) {
             if (try core.optimizePng(io, gpa, output.directory, bytes)) |optimized| {
@@ -349,68 +345,6 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
     var writer = file.writer(io, &buffer);
     try std.zon.stringify.serialize(atlas, .{}, &writer.interface);
     try writer.interface.flush();
-}
-
-// 只修改 PNG 调色板及其 CRC，保留 pngquant 压缩后的索引数据。
-fn premultiplyPalette(bytes: []u8) !void {
-    var palette: ?[]u8 = null;
-    var alpha: []const u8 = &.{};
-    var crc: ?[]u8 = null;
-    var start: usize = 8;
-    while (start + 12 <= bytes.len) {
-        const len = std.mem.readInt(u32, bytes[start..][0..4], .big);
-        const end = start + 8 + len;
-        if (end + 4 > bytes.len) return error.InvalidPng;
-        const kind = bytes[start + 4 ..][0..4];
-        if (std.mem.eql(u8, kind, "PLTE")) {
-            palette = bytes[start + 8 .. end];
-            crc = bytes[end..][0..4];
-        } else if (std.mem.eql(u8, kind, "tRNS")) {
-            alpha = bytes[start + 8 .. end];
-        }
-        start = end + 4;
-    }
-    const colors = palette orelse return error.MissingPalette;
-    if (colors.len % 3 != 0) return error.InvalidPng;
-    for (0..colors.len / 3) |i| {
-        const a: u16 = if (i < alpha.len) alpha[i] else 255;
-        for (colors[i * 3 ..][0..3]) |*channel| {
-            channel.* = @intCast((@as(u16, channel.*) * a + 127) / 255);
-        }
-    }
-    var hash = std.hash.Crc32.init();
-    hash.update("PLTE");
-    hash.update(colors);
-    std.mem.writeInt(u32, crc.?[0..4], hash.final(), .big);
-}
-
-fn quantize(
-    io: std.Io,
-    gpa: std.mem.Allocator,
-    directory: []const u8,
-    bytes: []const u8,
-    options: Pngquant,
-) ![]u8 {
-    const cwd = std.Io.Dir.cwd();
-    const path = try std.fs.path.join(gpa, &.{ directory, ".pngquant-input.png" });
-    try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
-    defer cwd.deleteFile(io, path) catch {};
-    var args: std.ArrayList([]const u8) = .empty;
-    try args.appendSlice(gpa, &.{ "pngquant", "--output", "-" });
-    if (!options.dither) try args.append(gpa, "--nofs");
-    if (options.quality) |q| {
-        const quality = try std.fmt.allocPrint(gpa, "{d}-{d}", .{ q.min, q.max });
-        try args.appendSlice(gpa, &.{ "--quality", quality });
-    }
-    const colors = try std.fmt.allocPrint(gpa, "{d}", .{options.colors});
-    try args.appendSlice(gpa, &.{ colors, "--", path });
-    const result = try std.process.run(gpa, io, .{ .argv = args.items });
-    if (!result.term.success()) {
-        std.log.err("pngquant {f}: {s}", .{ result.term, result.stderr });
-        return error.PngquantFailed;
-    }
-    try premultiplyPalette(result.stdout);
-    return result.stdout;
 }
 
 // 将图片边缘复制到页内的一像素留白。

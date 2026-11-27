@@ -221,6 +221,81 @@ fn appendChunk(
     std.mem.writeInt(u32, &crcBytes, crc.final(), .big);
     try result.appendSlice(gpa, &crcBytes);
 }
+
+pub const Pngquant = struct {
+    colors: u16 = 256,
+    quality: ?struct { min: u8 = 0, max: u8 = 100 } = null,
+    dither: bool = false,
+
+    pub fn validate(self: Pngquant) !void {
+        if (self.colors < 2 or self.colors > 256) return error.InvalidColorCount;
+        if (self.quality) |q| {
+            if (q.min > q.max or q.max > 100) return error.InvalidQuality;
+        }
+    }
+};
+
+// 只修改 PNG 调色板及其 CRC，保留 pngquant 压缩后的索引数据。
+pub fn premultiplyPalette(bytes: []u8) !void {
+    var palette: ?[]u8 = null;
+    var alpha: []const u8 = &.{};
+    var crc: ?[]u8 = null;
+    var start: usize = 8;
+    while (start + 12 <= bytes.len) {
+        const len = std.mem.readInt(u32, bytes[start..][0..4], .big);
+        const end = start + 8 + len;
+        if (end + 4 > bytes.len) return error.InvalidPng;
+        const kind = bytes[start + 4 ..][0..4];
+        if (std.mem.eql(u8, kind, "PLTE")) {
+            palette = bytes[start + 8 .. end];
+            crc = bytes[end..][0..4];
+        } else if (std.mem.eql(u8, kind, "tRNS")) {
+            alpha = bytes[start + 8 .. end];
+        }
+        start = end + 4;
+    }
+    const colors = palette orelse return error.MissingPalette;
+    if (colors.len % 3 != 0) return error.InvalidPng;
+    for (0..colors.len / 3) |i| {
+        const a: u16 = if (i < alpha.len) alpha[i] else 255;
+        for (colors[i * 3 ..][0..3]) |*channel| {
+            channel.* = @intCast((@as(u16, channel.*) * a + 127) / 255);
+        }
+    }
+    var hash = std.hash.Crc32.init();
+    hash.update("PLTE");
+    hash.update(colors);
+    std.mem.writeInt(u32, crc.?[0..4], hash.final(), .big);
+}
+
+pub fn quantizePng(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    directory: []const u8,
+    bytes: []const u8,
+    options: Pngquant,
+) ![]u8 {
+    const cwd = std.Io.Dir.cwd();
+    const path = try std.fs.path.join(gpa, &.{ directory, ".pngquant-input.png" });
+    try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
+    defer cwd.deleteFile(io, path) catch {};
+    var args: std.ArrayList([]const u8) = .empty;
+    try args.appendSlice(gpa, &.{ "pngquant", "--output", "-" });
+    if (!options.dither) try args.append(gpa, "--nofs");
+    if (options.quality) |q| {
+        const quality = try std.fmt.allocPrint(gpa, "{d}-{d}", .{ q.min, q.max });
+        try args.appendSlice(gpa, &.{ "--quality", quality });
+    }
+    const colors = try std.fmt.allocPrint(gpa, "{d}", .{options.colors});
+    try args.appendSlice(gpa, &.{ colors, "--", path });
+    const result = try std.process.run(gpa, io, .{ .argv = args.items });
+    if (!result.term.success()) {
+        std.log.err("pngquant {f}: {s}", .{ result.term, result.stderr });
+        return error.PngquantFailed;
+    }
+    return result.stdout;
+}
+
 // 缺少系统工具时跳过；已安装工具执行失败则显示错误。
 pub fn optimizePng(
     io: std.Io,
