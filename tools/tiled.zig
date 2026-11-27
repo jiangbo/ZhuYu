@@ -1,4 +1,5 @@
-//! 将 Tiled 瓦片集和地图导出为 ZON，地图通过稳定 ID 引用瓦片集。
+//! 导出 Tiled 瓦片集和地图，支持 ZON、二进制和 zlib 压缩。
+//! 地图通过稳定 ID 引用瓦片集。
 const std = @import("std");
 const zhu = @import("zhu");
 
@@ -8,18 +9,23 @@ const tiled = zhu.extend.tiled;
 
 pub const Options = struct {
     input: []const u8, // 资源根目录，与 atlas 的 input 相同，递归读取 TSJ/TMJ。
-    output: []const u8 = "src/zon", // 地图保留相对于 input 的目录结构。
+    output: ?[]const u8 = null, // ZON 默认 src/zon，其余格式默认 assets。
     name: []const u8 = "tiled",
+    format: enum { zon, bin, zlib } = .zon,
     terrain: bool = false, // 是否导出 Wang 地形规则。
-    mergeTileSets: bool = true, // 合并为 tileSet.zon；关闭时保留 TSJ 相对路径。
+    mergeTileSets: bool = true, // 合并为 tileSet；关闭时保留 TSJ 相对路径。
 };
 
 // 路径按调用项目解析，其余配置直接注入工具模块。
 pub fn addStep(b: *Build, dep: *Dependency, options: Options) void {
+    const output = options.output orelse switch (options.format) {
+        .zon => "src/zon",
+        .bin, .zlib => "assets",
+    };
     var toolOptions = options;
     toolOptions.input = b.root.joinString(b.allocator, options.input) catch
         @panic("out of memory");
-    toolOptions.output = b.root.joinString(b.allocator, options.output) catch
+    toolOptions.output = b.root.joinString(b.allocator, output) catch
         @panic("out of memory");
     const config = b.addOptions();
     config.addOption(Options, "config", toolOptions);
@@ -50,7 +56,6 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.arena.allocator();
     const options = @import("options").config;
     const root = try std.fs.path.resolveAlloc(gpa, &.{options.input});
-    const outputRoot = options.output;
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.openDir(io, root, .{ .iterate = true });
     defer dir.close(io);
@@ -89,9 +94,7 @@ pub fn main(init: std.process.Init) !void {
             try tileSets.append(gpa, tileSet);
             if (!options.mergeTileSets) {
                 const base = entry.path[0 .. entry.path.len - extension.len];
-                const name = try std.fmt.allocPrint(gpa, "{s}.zon", .{base});
-                const output = try std.fs.path.join(gpa, &.{ outputRoot, name });
-                try writeZon(io, output, tileSet);
+                try writeOutput(io, gpa, options, base, tileSet);
             }
         }
     }
@@ -104,8 +107,7 @@ pub fn main(init: std.process.Init) !void {
         if (i != 0) std.debug.assert(tileSets.items[i - 1].id < set.id);
     }
     if (options.mergeTileSets) {
-        const path = try std.fs.path.join(gpa, &.{ outputRoot, "tileSet.zon" });
-        try writeZon(io, path, tileSets.items);
+        try writeOutput(io, gpa, options, "tileSet", tileSets.items);
     }
 
     for (maps.items) |relative| {
@@ -123,11 +125,8 @@ pub fn main(init: std.process.Init) !void {
             .{},
         );
         const map = try convert.parseMap(value);
-        const name = try std.fmt.allocPrint(gpa, "{s}.zon", .{
-            relative[0 .. relative.len - 4],
-        });
-        const output = try std.fs.path.join(gpa, &.{ outputRoot, name });
-        try writeZon(io, output, map);
+        const base = relative[0 .. relative.len - std.fs.path.extension(relative).len];
+        try writeOutput(io, gpa, options, base, map);
         std.log.info("converted map: {s}", .{relative});
     }
     std.log.info("converted {} tilesets and {} maps", .{
@@ -136,18 +135,38 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // 输出类型共用文件写入流程，地图子目录按需创建。
-fn writeZon(io: std.Io, path: []const u8, value: anytype) !void {
+fn writeOutput(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    options: @TypeOf(@import("options").config),
+    base: []const u8,
+    value: anytype,
+) !void {
+    const format = options.format;
+    const name = try std.mem.concat(gpa, u8, &.{ base, ".", @tagName(format) });
+    const path = try std.fs.path.join(gpa, &.{ options.output.?, name });
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, std.fs.path.dirname(path).?);
     const file = try cwd.createFile(io, path, .{});
     defer file.close(io);
     var buffer: [4096]u8 = undefined;
     var writer = file.writer(io, &buffer);
-    // 引擎的类属性包含递归类型，直接使用支持该类型的序列化方法。
-    try std.zon.stringify.serializeArbitraryDepth(value, .{
-        .emit_default_optional_fields = false,
-    }, &writer.interface);
-    try writer.interface.flush();
+    const out = &writer.interface;
+    switch (format) {
+        // Tiled 类属性包含递归类型。
+        .zon => try std.zon.stringify.serializeArbitraryDepth(value, .{
+            .emit_default_optional_fields = false,
+        }, out),
+        .bin => try zhu.codec.encode(out, value),
+        .zlib => {
+            const flate = std.compress.flate;
+            var window: [flate.max_window_len]u8 = undefined;
+            var compressor: flate.Compress = try .init(out, &window, .zlib, .default);
+            try zhu.codec.encode(&compressor.writer, value);
+            try compressor.finish();
+        },
+    }
+    try out.flush();
 }
 
 // 每个源文件携带所在目录，图片和瓦片集引用均以该文件为起点解析。
