@@ -94,6 +94,7 @@ pub const loadImage = assets.loadImage;
 pub const loadAtlas = assets.atlas.load;
 pub const getImage = assets.getImageByPath;
 pub const localTime = platform.localTime;
+pub const panic = std.debug.panic;
 pub const oom = core.oom;
 
 /// 获取当前 Unix 时间戳；需要先调用 zhu.setup。
