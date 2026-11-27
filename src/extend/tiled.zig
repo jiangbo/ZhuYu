@@ -70,7 +70,7 @@ pub const Map = struct {
         return tileSet.getTileByLocalId(localId);
     }
 
-    /// 返回未翻转的子图；翻转和旋转由 TileFlags 在绘制时应用。
+    /// 返回未翻转的子图；翻转和旋转由 TileExtend 在绘制时应用。
     pub fn getImage(self: Map, gid: u32) ?Image {
         const tileSet, const localId = self.findTileRef(gid);
         if (tileSet.columns == 0) {
@@ -281,14 +281,14 @@ pub const ObjectGroup = struct {
 };
 
 /// 正交地图的显示标志：先交换坐标轴，再水平、垂直翻转。
-pub const TileFlags = struct {
+pub const TileExtend = struct {
     flipX: bool = false,
     flipY: bool = false,
     rotation: bool = false, // GID 的对角翻转位，与水平、垂直翻转组合表示旋转。
 
     /// 地图加载时解析，顶点和精灵保存结果；不在绘制时重复拆位。
     /// 正交地图只使用三个方向位，第四个高位由 GID 查询入口统一清除。
-    pub fn fromGid(gid: u32) TileFlags {
+    pub fn fromGid(gid: u32) TileExtend {
         return .{
             .flipX = gid & 0x80000000 != 0,
             .flipY = gid & 0x40000000 != 0,
@@ -297,7 +297,7 @@ pub const TileFlags = struct {
     }
 
     /// 输入和输出均为 0～1 的瓦片坐标，碰撞与绘制共用相同的方向约定。
-    fn point(self: TileFlags, value: Vector2) Vector2 {
+    fn point(self: TileExtend, value: Vector2) Vector2 {
         var result = value;
         if (self.rotation) result = .xy(result.y, result.x);
         if (self.flipX) result.x = 1 - result.x;
@@ -306,14 +306,14 @@ pub const TileFlags = struct {
     }
 
     /// 输入矩形使用 0～1 的瓦片坐标。
-    pub fn rect(self: TileFlags, value: Rect) Rect {
+    pub fn rect(self: TileExtend, value: Rect) Rect {
         const a = self.point(value.min);
         const b = self.point(value.max());
         const min = a.min(b);
         return .init(min, a.max(b).sub(min));
     }
 
-    pub fn uvRect(self: TileFlags, value: math.Vector4) math.Vector4 {
+    pub fn uvRect(self: TileExtend, value: math.Vector4) math.Vector4 {
         var uv = value;
         // 对角翻转由 vertex 的 90° 旋转配合 UV 翻转实现。
         // 因而需要交换翻转轴，再补一次 Y 翻转，组合成坐标轴交换。
@@ -324,7 +324,7 @@ pub const TileFlags = struct {
         return uv;
     }
 
-    pub fn vertex(self: TileFlags, area: Rect, image: Image) Vertex {
+    pub fn vertex(self: TileExtend, area: Rect, image: Image) Vertex {
         var result = Vertex{
             .position = area.min,
             .size = area.size,
@@ -352,6 +352,7 @@ pub const Object = struct {
     size: Vector2, // 像素宽高
     point: bool, // 是否为点物体
     properties: []const Property, // 物体自定义属性
+    extend: TileExtend = .{},
 
     pub fn topLeft(self: Object) Vector2 {
         if (self.gid == 0) return self.position;

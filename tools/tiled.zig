@@ -337,13 +337,14 @@ const Convert = struct {
         return result[0..count];
     }
 
-    // 原生 GID 同时保存编号与方向标志，转换时不重写或拆分。
+    // 保留原生 GID，并解析对象的扩展信息。
     fn parseObjects(self: Convert, objects: []const JsonObject) ![]tiled.Object {
         const result = try self.gpa.alloc(tiled.Object, objects.len);
         for (result, objects) |*object, old| {
             object.* = .{
                 .id = old.id,
                 .gid = old.gid orelse 0,
+                .extend = tiled.TileExtend.fromGid(old.gid orelse 0),
                 .name = old.name,
                 .type = old.type,
                 .position = .{ .x = old.x, .y = old.y },

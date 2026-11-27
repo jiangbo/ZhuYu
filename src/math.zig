@@ -237,6 +237,10 @@ pub const Vector2 = extern struct {
         };
     }
 
+    pub fn equal(self: Vector2, other: Vector2) bool {
+        return self.x == other.x and self.y == other.y;
+    }
+
     pub fn approxEqual(self: Vector2, other: Vector2) bool {
         return std.math.approxEqAbs(f32, self.x, other.x, epsilon) and
             std.math.approxEqAbs(f32, self.y, other.y, epsilon);
