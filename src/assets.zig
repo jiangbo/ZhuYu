@@ -383,15 +383,30 @@ pub fn loadIcon(path: Path, handle: u64, handler: IconHandler) void {
     }.callback, .{ .kind = .image });
 }
 
-const ZlibHandler = fn (u64, []const u8) void;
+const BytesHandler = fn (u64, []const u8) void;
+
+/// 异步加载原始字节，字节仅在回调期间有效。
+pub fn loadBytes(path: Path, handle: u64, handler: BytesHandler) void {
+    fetch.load(path, handle, struct {
+        fn callback(index: u64, resp: Response) void {
+            handler(index, resp.content.bytes);
+        }
+    }.callback, .{});
+}
 
 /// 异步加载并解压 zlib；字节仅在回调期间有效，需要保留时自行复制。
-pub fn loadZlib(path: Path, handle: u64, handler: ZlibHandler) void {
+pub fn loadZlib(path: Path, handle: u64, handler: BytesHandler) void {
     fetch.load(path, handle, struct {
         fn callback(index: u64, resp: Response) void {
             handler(index, resp.content.zlib);
         }
     }.callback, .{ .kind = .zlib });
+}
+
+/// 加载文件，解压以 .zlib 结尾的数据，字节仅在回调期间有效。
+pub fn load(path: Path, handle: u64, handler: BytesHandler) void {
+    if (std.mem.endsWith(u8, path, ".zlib")) return loadZlib(path, handle, handler);
+    loadBytes(path, handle, handler);
 }
 
 fn loadImageHandler(index: u64, resp: Response) void {

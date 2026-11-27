@@ -7,8 +7,8 @@ pub const Options = struct {
     assets: []const u8 = "assets", // 相对于游戏项目的资源目录。
     include: []const []const u8 = &.{}, // 相对于 assets，为空时包含全部。
     exclude: []const []const u8 = &.{}, // 相对于 assets；文件精确匹配，目录以 / 结尾。
-    output: []const u8 = "assets.pack", // 独立资源包的输出名称。
-    metadata: ?[]const u8 = null, // 设置路径时额外输出 ZON 索引。
+    output: []const u8 = "assets.pack", // 相对于 assets 的资源包输出路径。
+    metadata: ?[]const u8 = null, // 相对于项目根目录的 ZON 索引路径。
     zlib: bool = false,
 };
 
@@ -18,9 +18,20 @@ pub fn addStep(
     dep: *std.Build.Dependency,
     options: Options,
 ) ?std.Build.LazyPath {
+    std.debug.assert(!std.fs.path.isAbsolute(options.output));
+    const dest = b.pathResolve(&.{ options.assets, options.output });
+    const name = std.fs.path.basename(dest);
+    const outputPath = relativeAssetPath(b, options.assets, dest);
+    var exclude: std.ArrayList([]const u8) = .empty;
+    exclude.appendSlice(b.allocator, options.exclude) catch @panic("OOM");
+    exclude.append(b.allocator, outputPath) catch @panic("OOM");
+    if (options.metadata) |metadata| {
+        const indexPath = relativeAssetPath(b, options.assets, metadata);
+        exclude.append(b.allocator, indexPath) catch @panic("OOM");
+    }
     const config = b.addOptions();
     config.addOption([]const []const u8, "include", options.include);
-    config.addOption([]const []const u8, "exclude", options.exclude);
+    config.addOption([]const []const u8, "exclude", exclude.items);
     const tool = b.addExecutable(.{
         .name = "zhuyu-pack",
         .root_module = b.createModule(.{
@@ -34,13 +45,17 @@ pub fn addStep(
     // 打包命令每次读取当前资源，不登记资源变化依赖。
     pack.has_side_effects = true;
     pack.addDirectoryArg(b.path(options.assets));
-    const output = pack.addOutputFileArg(options.output);
-    pack.addArg(options.metadata orelse "");
-    pack.addArg(options.output);
+    const output = pack.addOutputFileArg2(name, .{});
+    const update = b.addUpdateSourceFiles();
+    update.addCopyFileToSource(output, dest);
+    if (options.metadata) |metadata| {
+        const index = pack.addOutputFileArg2("metadata/pack.zon", .{});
+        update.addCopyFileToSource(index, metadata);
+    } else pack.addArg("");
+    pack.addArg(outputPath);
     pack.addArg(if (options.zlib) "true" else "false");
-    const install = b.addInstallFile(output, options.output);
-    b.step("pack", "Pack assets")
-        .dependOn(&install.step);
+
+    b.step("pack", "Pack assets").dependOn(&update.step);
 
     const exe = options.exe orelse return null;
 
@@ -68,10 +83,18 @@ pub fn addStep(
     // 文件参数自动建立依赖：先编译程序、生成 pack，再执行追加。
     append.addArtifactArg(exe);
     append.addFileArg(output);
-    const name = b.fmt("{s}-packed{s}", .{
+    const exeName = b.fmt("{s}-packed{s}", .{
         exe.name, target.exeFileExt(),
     });
-    return append.addOutputFileArg(name);
+    return append.addOutputFileArg(exeName);
+}
+
+fn relativeAssetPath(b: *std.Build, assets: []const u8, path: []const u8) []const u8 {
+    const gpa = b.allocator;
+    const root = b.root.joinString(gpa, ".") catch @panic("OOM");
+    const relative = std.fs.path.relativeAlloc(gpa, root, null, assets, path) catch
+        @panic("OOM");
+    return core.resourcePath(gpa, relative) catch @panic("OOM");
 }
 
 const Metadata = struct {
