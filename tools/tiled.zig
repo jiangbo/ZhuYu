@@ -14,6 +14,7 @@ pub const Options = struct {
     format: enum { zon, bin, zlib } = .zon,
     terrain: bool = false, // 是否导出 Wang 地形规则。
     mergeTileSets: bool = true, // 合并为 tileSet；关闭时保留 TSJ 相对路径。
+    tileSetDir: []const u8 = "", // 合并瓦片集相对于 output 的目录。
 };
 
 // 路径按调用项目解析，其余配置直接注入工具模块。
@@ -107,7 +108,8 @@ pub fn main(init: std.process.Init) !void {
         if (i != 0) std.debug.assert(tileSets.items[i - 1].id < set.id);
     }
     if (options.mergeTileSets) {
-        try writeOutput(io, gpa, options, "tileSet", tileSets.items);
+        const base = try std.fs.path.join(gpa, &.{ options.tileSetDir, "tileSet" });
+        try writeOutput(io, gpa, options, base, tileSets.items);
     }
 
     for (maps.items) |relative| {

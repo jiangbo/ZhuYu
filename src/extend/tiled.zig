@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const assets = @import("../assets.zig");
+const codec = @import("../internal/codec.zig");
 const graphics = @import("../graphics.zig");
 const math = @import("../math.zig");
 const Grid = @import("spatial.zig").Grid;
@@ -109,6 +110,28 @@ pub fn bind(comptime ts: []const TileSet, comptime list: Maps) Maps {
         break :blk result;
     };
     return &result;
+}
+
+/// 解码单张地图的原始字节。建议用 arena 统一释放解码分配。
+pub fn decodeMap(bytes: []const u8, gpa: std.mem.Allocator) !Map {
+    return decode(Map, bytes, gpa);
+}
+
+/// 解码拆分输出的单个瓦片集。建议用 arena 统一释放解码分配。
+pub fn decodeTileSet(bytes: []const u8, gpa: std.mem.Allocator) !TileSet {
+    return decode(TileSet, bytes, gpa);
+}
+
+/// 解码合并输出的瓦片集。建议用 arena 统一释放解码分配。
+pub fn decodeTileSets(bytes: []const u8, gpa: std.mem.Allocator) ![]const TileSet {
+    return decode([]const TileSet, bytes, gpa);
+}
+
+fn decode(comptime T: type, bytes: []const u8, gpa: std.mem.Allocator) !T {
+    var reader: std.Io.Reader = .fixed(bytes);
+    const result = try codec.decode(&reader, T, gpa);
+    if (reader.bufferedLen() != 0) return error.InvalidData;
+    return result;
 }
 
 pub const LayerEnum = enum { image, tile, object };
