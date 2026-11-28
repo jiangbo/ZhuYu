@@ -244,8 +244,7 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
         fontImages = font.images;
     }
 
-    // 图集输出目录由生成工具独占，整目录重建以移除旧页面。
-    try cwd.deleteTree(io, output.directory);
+    // PNG 优化工具在输出目录内使用临时文件。
     try cwd.createDirPath(io, output.directory);
     const pixelCount = std.math.mul(
         usize,
@@ -273,10 +272,10 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
     if (pageCount > 256) return error.AtlasLayerLimitExceeded;
     const imagePaths = try gpa.alloc([]const u8, pageCount);
     var useOxipng = true;
-    for (pages, 0..) |page, index| {
-        if (output.options.pngquant == null) core.premultiply(page);
+    for (pages, 0..) |*page, index| {
+        if (output.options.pngquant == null) core.premultiply(page.*);
         var bytes = try core.encodePng(gpa, .{
-            .pixels = page,
+            .pixels = page.*,
             .width = layout.width,
             .height = layout.height,
         }, false);
@@ -300,16 +299,31 @@ fn writeAtlas(io: std.Io, gpa: std.mem.Allocator, output: AtlasOutput) !void {
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         const hash = std.fmt.bytesToHex(digest[0..8].*, .lower);
         const name = try std.fmt.allocPrint(gpa, "{s}.png", .{hash});
-        const path = try std.fs.path.join(gpa, &.{ output.directory, name });
-        try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
         const resource = try std.fs.path.join(gpa, &.{ output.options.images, name });
         std.mem.replaceScalar(u8, resource, '\\', '/');
         imagePaths[index] = resource;
-        std.log.info("atlas image {s}: {} bytes", .{ resource, bytes.len });
+        page.* = bytes;
     }
 
     // 仅追加原字体图片路径，保持字体页顺序，不修改图片及字形坐标。
     @memcpy(imagePaths[layout.pageCount..], fontImages);
+    for (imagePaths, 0..) |path, i| {
+        for (imagePaths[0..i], 0..) |other, first| {
+            if (!std.mem.eql(u8, path, other)) continue;
+            std.log.err("atlas pages {} and {} share path {s}", .{ first, i, path });
+            return error.DuplicateAtlasPage;
+        }
+    }
+
+    // 页路径校验通过后再重建独占目录，移除旧页面。
+    try cwd.deleteTree(io, output.directory);
+    try cwd.createDirPath(io, output.directory);
+    for (pages, imagePaths[0..pages.len]) |bytes, resource| {
+        const name = std.fs.path.basename(resource);
+        const path = try std.fs.path.join(gpa, &.{ output.directory, name });
+        try cwd.writeFile(io, .{ .sub_path = path, .data = bytes });
+        std.log.info("atlas image {s}: {} bytes", .{ resource, bytes.len });
+    }
     const images = try gpa.alloc(Image, sources.len);
     for (images, sources, layout.placements) |*image, source, placement| {
         image.* = .{
