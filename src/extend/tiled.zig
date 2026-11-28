@@ -34,6 +34,19 @@ pub const Map = struct {
         return self.getProperty(name, ClassProperty);
     }
 
+    /// 在本地图已导出的对象层中查找，找不到时返回 null。
+    pub fn getObject(self: Map, id: ObjectId) ?*const Object {
+        const value = @backingInt(id);
+        if (value == 0) return null;
+        for (self.layers) |layer| {
+            if (layer.type != .object) continue;
+            for (layer.objects) |*object| {
+                if (object.id == value) return object;
+            }
+        }
+        return null;
+    }
+
     /// 查找 GID 对应的瓦片引用；要求瓦片集已提供，查找失败时报错。
     fn findTileRef(self: Map, raw: u32) struct { *const TileSet, u32 } {
         // 查询定义时清除最高四位；原始 GID 仍保留方向信息，供加载时解析。
@@ -181,18 +194,24 @@ pub const PropertyEnum = enum {
     class,
 };
 
+pub const ObjectId = enum(u32) { _ };
+
 pub const PropertyValue = union(PropertyEnum) {
     string: []const u8, // 字符串值
     int: i32, // 整数值
     float: f32, // 浮点数值
     bool: bool, // 布尔值
-    object: i32, // 引用物体 ID
+    object: u32, // 引用物体 ID，0 表示未设置。
     class: ClassProperty, // Tiled 1.8+ 类属性
 
     pub fn get(self: PropertyValue, comptime T: type) ?T {
         if (T == []const u8) return self.string;
         if (T == bool) return self.bool;
         if (T == ClassProperty) return self.class;
+        if (T == ObjectId) {
+            const id = self.object;
+            return if (id == 0) null else @fromBackingInt(id);
+        }
         if (@typeInfo(T) == .int) return @intCast(self.int);
         if (@typeInfo(T) == .float) return @floatCast(self.float);
         @compileError("unsupported property type: " ++ @typeName(T));

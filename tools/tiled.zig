@@ -401,7 +401,10 @@ const Convert = struct {
                 else => @panic("Expected a number type for .float"),
             },
             .bool => .{ .bool = property.value.bool },
-            .object => .{ .object = @intCast(property.value.integer) },
+            .object => .{ .object = switch (property.value) {
+                .integer => |id| std.math.cast(u32, id),
+                else => null,
+            } orelse return error.InvalidObjectId },
             .class => .{ .class = .{
                 .type = property.propertytype orelse return error.MissingClassType,
                 .properties = try self.parseClassProperties(property.value),
