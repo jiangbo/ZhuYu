@@ -80,11 +80,9 @@ pub const Map = struct {
             return if (tile.imageRect) |rect| image.sub(rect) else image;
         }
         if (tileSet.image == 0) return null;
-        const x: f32 = @floatFromInt(localId % tileSet.columns);
-        const y: f32 = @floatFromInt(localId / tileSet.columns);
-        const position = tileSet.tileSize.mul(.xy(x, y));
         const image = assets.getImage(tileSet.image) orelse return null;
-        return image.sub(.init(position, tileSet.tileSize));
+        const offset = tileSet.tileOffset(localId);
+        return image.sub(.init(offset, tileSet.tileSize));
     }
 
     pub fn getAnimation(self: Map, gid: u32) ?graphics.Animation {
@@ -232,8 +230,20 @@ pub const TileSet = struct {
     tileCount: i32,
     image: u32,
     tileSize: Vector2,
+    margin: u32 = 0,
+    spacing: u32 = 0,
     tiles: []const Tile,
     wangSets: []const WangSet = &.{},
+
+    pub fn tileOffset(self: TileSet, localId: u32) Vector2 {
+        std.debug.assert(self.columns != 0);
+        const col: f32 = @floatFromInt(localId % self.columns);
+        const row: f32 = @floatFromInt(localId / self.columns);
+        const margin: f32 = @floatFromInt(self.margin);
+        const spacing: f32 = @floatFromInt(self.spacing);
+        const stride = self.tileSize.add(.all(spacing));
+        return stride.mul(.xy(col, row)).add(.all(margin));
+    }
 
     pub fn getWangSet(self: TileSet, name: []const u8) ?*const WangSet {
         for (self.wangSets) |*set| {

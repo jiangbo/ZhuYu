@@ -199,7 +199,20 @@ const Convert = struct {
 
     // 单图瓦片集保留局部 ID，图片集合按局部 ID 索引图片资源。
     fn parseTileSet(self: Convert, id: u32, value: JsonTileSet) !tiled.TileSet {
-        var tiles: []tiled.Tile = &.{};
+        var set: tiled.TileSet = .{
+            .id = id,
+            .columns = value.columns,
+            .tileCount = @intCast(value.tilecount),
+            .image = if (value.image) |image| try self.fileId(image) else 0,
+            .tileSize = .{
+                .x = @floatFromInt(value.tilewidth),
+                .y = @floatFromInt(value.tileheight),
+            },
+            .margin = value.margin,
+            .spacing = value.spacing,
+            .tiles = &.{},
+            .wangSets = try self.parseWangSets(value.wangsets orelse &.{}),
+        };
         if (value.tiles) |definitions| {
             var count: usize = definitions.len;
             if (value.columns == 0) {
@@ -207,7 +220,7 @@ const Convert = struct {
                 count = 0;
                 for (definitions) |tile| count = @max(count, tile.id + 1);
             }
-            tiles = try self.gpa.alloc(tiled.Tile, count);
+            const tiles = try self.gpa.alloc(tiled.Tile, count);
             if (value.columns == 0) @memset(tiles, std.mem.zeroes(tiled.Tile));
             for (definitions, 0..) |tile, index| {
                 var group: ?tiled.ObjectGroup = null;
@@ -224,22 +237,12 @@ const Convert = struct {
                     .imageRect = if (tile.image != null) tile.imageRect() else null,
                     .objectGroup = group,
                     .properties = try self.parseProperties(tile.properties orelse &.{}),
-                    .animation = try self.parseAnimation(tile.animation, value),
+                    .animation = try self.parseAnimation(tile.animation, set),
                 };
             }
+            set.tiles = tiles;
         }
-        return .{
-            .id = id,
-            .columns = value.columns,
-            .tileCount = @intCast(value.tilecount),
-            .image = if (value.image) |image| try self.fileId(image) else 0,
-            .tileSize = .{
-                .x = @floatFromInt(value.tilewidth),
-                .y = @floatFromInt(value.tileheight),
-            },
-            .tiles = tiles,
-            .wangSets = try self.parseWangSets(value.wangsets orelse &.{}),
-        };
+        return set;
     }
 
     fn parseWangSets(self: Convert, input: []const JsonWangSet) ![]const tiled.WangSet {
@@ -265,18 +268,14 @@ const Convert = struct {
         return sets;
     }
 
-    // 动画帧使用当前瓦片集的列数和瓦片尺寸，时间换算成秒。
     fn parseAnimation(
         self: Convert,
         frames: []const JsonFrame,
-        set: JsonTileSet,
+        set: tiled.TileSet,
     ) ![]zhu.graphics.Frame {
         const result = try self.gpa.alloc(zhu.graphics.Frame, frames.len);
         for (result, frames) |*frame, old| frame.* = .{
-            .offset = .{
-                .x = @floatFromInt((old.tileid % set.columns) * set.tilewidth),
-                .y = @floatFromInt((old.tileid / set.columns) * set.tileheight),
-            },
+            .offset = set.tileOffset(old.tileid),
             .duration = @as(f32, @floatFromInt(old.duration)) / 1000.0,
         };
         return result;
@@ -675,7 +674,7 @@ const JsonTileSet = struct {
     /// 源图像的宽度 (像素)
     imagewidth: ?i32 = null,
     /// 图像边缘与第一个瓦片之间的间距 (像素)
-    margin: i32 = 0,
+    margin: u32 = 0,
     /// 瓦片集名称
     name: []const u8 = &.{},
     /// 瓦片物体的对齐方式 (默认 unspecified)
@@ -685,7 +684,7 @@ const JsonTileSet = struct {
     /// 包含此瓦片集数据的外部文件路径
     source: ?[]const u8 = null,
     /// 图像中相邻瓦片之间的间距 (像素)
-    spacing: i32 = 0,
+    spacing: u32 = 0,
     /// 地形定义数组 (可选)
     terrains: ?[]const JsonTerrain = null,
     /// 此瓦片集中的瓦片数量
