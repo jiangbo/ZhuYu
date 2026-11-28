@@ -23,6 +23,8 @@ pub const action = window.action;
 pub const music = struct {
     pub const State = audio.MusicState;
     pub const Option = audio.MusicOption;
+    pub const Decoder = audio.MusicDecoder;
+    pub const CustomSource = audio.MusicSource.Custom;
     pub const play = audio.playMusic;
     pub const pause = audio.pauseMusic;
     pub const unpause = audio.resumeMusic;
@@ -46,6 +48,7 @@ pub const sound = struct {
 
 pub const extend = struct {
     pub const debug = @import("extend/debug.zig");
+    pub const midi = @import("extend/midi.zig");
     pub const widget = @import("extend/widget.zig");
     pub const bag = @import("extend/bag.zig");
     pub const touch = @import("extend/touch.zig");
@@ -164,6 +167,7 @@ test "compile zhu modules" {
     std.testing.refAllDecls(math);
     std.testing.refAllDecls(text);
     std.testing.refAllDecls(extend.debug);
+    std.testing.refAllDecls(extend.midi);
     std.testing.refAllDecls(extend.widget);
     std.testing.refAllDecls(extend.bag);
     std.testing.refAllDecls(storage);

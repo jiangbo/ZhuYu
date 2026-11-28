@@ -4,10 +4,49 @@
 //! FM 包络、波形参考 Opal，Win9x 音高和音量模型参考 libADLMIDI。
 //! 来源、版权和 MIT 许可见 src/licenses/midi.txt。
 const std = @import("std");
+const audio = @import("../audio.zig");
+const Allocator = std.mem.Allocator;
+
+pub const decoder: audio.MusicDecoder = .{
+    .extensions = &.{ ".mid", ".midi" },
+    .open = open,
+};
+
+fn open(gpa: Allocator, data: []const u8, rate: u32) !audio.MusicSource.Custom {
+    const player = try gpa.create(Player);
+    errdefer gpa.destroy(player);
+    player.* = try Player.init(gpa, data, rate);
+    return .{
+        .ptr = player,
+        .vtable = &.{
+            .fillSamples = fillSamples,
+            .reset = resetPlayer,
+            .deinit = deinit,
+        },
+    };
+}
+
+fn toPlayer(ptr: *anyopaque) *Player {
+    return @ptrCast(@alignCast(ptr));
+}
+
+fn fillSamples(ptr: *anyopaque, buffer: []f32, channels: i32) i32 {
+    return toPlayer(ptr).fillSamples(buffer, channels);
+}
+
+fn resetPlayer(ptr: *anyopaque) void {
+    toPlayer(ptr).reset();
+}
+
+fn deinit(ptr: *anyopaque, gpa: Allocator) void {
+    const player = toPlayer(ptr);
+    player.deinit();
+    gpa.destroy(player);
+}
 
 /// 已解析的音乐和播放状态。init 后调用 fillSamples，结束后调用 deinit。
 pub const Player = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     events: []Event,
     sampleRate: u32,
     frame: u64 = 0,
@@ -23,11 +62,7 @@ pub const Player = struct {
     masterVolume: u32 = 127,
 
     /// 解析全部轨道并转换事件时间；不保留输入数据，音频线程不分配内存。
-    pub fn init(
-        allocator: std.mem.Allocator,
-        data: []const u8,
-        sampleRate: u32,
-    ) !Player {
+    pub fn init(gpa: Allocator, data: []const u8, sampleRate: u32) !Player {
         std.debug.assert(sampleRate > 0);
         var reader: Reader = .{ .data = data };
         if (!std.mem.eql(u8, try reader.take(4), "MThd")) {
@@ -49,7 +84,7 @@ pub const Player = struct {
         _ = try reader.take(headerSize - 6);
 
         var events: std.ArrayList(Event) = .empty;
-        errdefer events.deinit(allocator);
+        errdefer events.deinit(gpa);
         var endTick: u64 = 0;
         for (0..tracks) |_| {
             if (!std.mem.eql(u8, try reader.take(4), "MTrk")) {
@@ -105,14 +140,14 @@ pub const Player = struct {
                         event.a = bytes[5];
                     } else continue;
                 } else return error.InvalidMidi;
-                try events.append(allocator, event);
+                try events.append(gpa, event);
             }
             if (!ended) return error.InvalidMidi;
             endTick = @max(endTick, tick);
         }
         // 稳定排序保留同一时刻原有的事件顺序，尤其是换乐器和音符事件。
         std.mem.sort(Event, events.items, {}, Event.lessThan);
-        try events.append(allocator, .{ .time = endTick, .status = 0xfe });
+        try events.append(gpa, .{ .time = endTick, .status = 0xfe });
         var tick: u64 = 0;
         var frame: u64 = 0;
         var remainder: u64 = 0;
@@ -128,8 +163,8 @@ pub const Player = struct {
             if (event.status == 0xff) tempo = event.value;
         }
         return .{
-            .allocator = allocator,
-            .events = try events.toOwnedSlice(allocator),
+            .allocator = gpa,
+            .events = try events.toOwnedSlice(gpa),
             .sampleRate = sampleRate,
         };
     }

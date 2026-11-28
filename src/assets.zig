@@ -479,7 +479,7 @@ pub const music = struct {
             fn callback(index: u64, resp: Response) void {
                 const rate: u32 = @intCast(sk.audio.sampleRate());
                 const bytes = resp.content.bytes;
-                const source = Source.init(gpa, bytes, rate) catch |err|
+                const source = Source.init(gpa, resp.path, bytes, rate) catch |err|
                     panicFmt("music init failed: {s}: {}", .{ resp.path, err });
                 const loadedId: Id = @intCast(index);
                 cache.getPtr(loadedId).?.* = source;
@@ -495,6 +495,7 @@ pub const music = struct {
             if (value.*) |source| source.deinit(gpa);
         }
         cache.deinit(gpa);
+        cache = .empty;
     }
 };
 

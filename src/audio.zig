@@ -1,6 +1,5 @@
 const std = @import("std");
 const sk = @import("sokol");
-const options = @import("options");
 
 const assets = @import("assets.zig");
 const vorbis = @import("internal/vorbis.zig");
@@ -10,25 +9,30 @@ const Allocator = std.mem.Allocator;
 var mutex: std.Io.Mutex = .init;
 pub var paused: std.atomic.Value(bool) = .init(false);
 
-/// 使用 Sokol 配置初始化音频，num_channels 为 0 时使用双声道。
-/// 未提供回调、日志或分配器时使用引擎默认值；自定义回调接管音频输出。
-pub fn init(soundBuffer: []Sound, option: sk.audio.Desc) void {
-    var desc = option;
-    if (desc.num_channels == 0) desc.num_channels = 2;
-    std.debug.assert(desc.num_channels == 1 or desc.num_channels == 2);
+pub const InitOption = struct {
+    sampleRate: i32 = 0, // 0 使用后端默认采样率。
+    channels: i32 = 2,
+    bufferFrames: i32 = 0, // 0 使用后端默认缓冲大小。
+    // 自定义回调接管音频输出。
+    streamCallback: ?*const fn ([*c]f32, i32, i32) callconv(.c) void = null,
+    // 音频运行期间保持列表和后缀有效且不可修改。
+    decoders: []const MusicDecoder = &.{},
+};
+
+pub fn init(soundBuffer: []Sound, comptime option: InitOption) void {
+    std.debug.assert(option.channels == 1 or option.channels == 2);
     sounds = soundBuffer;
     for (sounds) |*sound| sound.* = .{};
 
-    if (desc.stream_cb == null and desc.stream_userdata_cb == null) {
-        desc.stream_cb = audioCallback;
-    }
-    if (desc.logger.func == null) desc.logger.func = sk.log.func;
-    if (desc.allocator.alloc_fn == null and desc.allocator.free_fn == null) {
-        desc.allocator = assets.sokolAllocator(sk.audio.Allocator);
-    }
-
-    // 启动音频线程
-    sk.audio.setup(desc);
+    sk.audio.setup(.{
+        .sample_rate = option.sampleRate,
+        .num_channels = option.channels,
+        .buffer_frames = option.bufferFrames,
+        .stream_cb = option.streamCallback orelse audioCallback,
+        .logger = .{ .func = sk.log.func },
+        .allocator = assets.sokolAllocator(sk.audio.Allocator),
+    });
+    if (sk.audio.isvalid()) musicDecoders = option.decoders;
 }
 
 pub fn deinit() void {
@@ -36,6 +40,7 @@ pub fn deinit() void {
     stopMusic(0);
     stopSounds();
     sk.audio.shutdown();
+    musicDecoders = &.{};
 }
 
 pub fn setVolume(volume: f32) void {
@@ -83,58 +88,81 @@ var music: struct {
 
 pub const MusicState = enum { pending, playing, paused, stopped };
 
-/// 统一管理音乐解码器，格式选择和编译期开关只在此处处理。
-pub const MusicSource = struct {
-    const midi = if (options.midi) @import("extend/midi.zig") else void;
+pub const MusicDecoder = struct {
+    extensions: []const []const u8,
+    // 文件字节仅在 open 调用期间借用。
+    open: *const fn (Allocator, []const u8, u32) anyerror!MusicSource.Custom,
+};
 
-    decoder: if (options.midi) union(enum) {
-        vorbis: *vorbis.Player,
-        midi: *midi.Player,
-    } else union(enum) {
-        vorbis: *vorbis.Player,
-    },
+var musicDecoders: []const MusicDecoder = &.{};
 
-    /// 按文件头创建播放器；只有 MIDI 使用输出采样率。
-    /// Ogg 不做重采样，资源采样率需与实际输出一致，否则速度和音高会改变。
-    pub fn init(gpa: Allocator, data: []const u8, sampleRate: u32) !MusicSource {
-        if (std.mem.startsWith(u8, data, "MThd")) {
-            if (options.midi) {
-                const player = try gpa.create(midi.Player);
-                errdefer gpa.destroy(player);
-                player.* = try midi.Player.init(gpa, data, sampleRate);
-                return .{ .decoder = .{ .midi = player } };
-            } else @panic("MIDI music requires the midi build option");
+pub const MusicSource = union(enum) {
+    vorbis: *vorbis.Player,
+    custom: Custom,
+
+    pub const Custom = struct {
+        ptr: *anyopaque,
+        vtable: *const VTable,
+
+        pub const VTable = struct {
+            // 生成交错 PCM，返回帧数。缓冲区未写满表示曲目结束。
+            fillSamples: *const fn (*anyopaque, []f32, i32) i32,
+            // 复位后，非空缓冲区必须能读到至少一帧。
+            reset: *const fn (*anyopaque) void,
+            deinit: *const fn (*anyopaque, Allocator) void,
+        };
+    };
+
+    /// Vorbis 资源采样率需与实际输出一致。
+    pub fn init(
+        gpa: Allocator,
+        path: []const u8,
+        data: []const u8,
+        rate: u32,
+    ) !MusicSource {
+        const ext = std.fs.path.extension(path);
+        if (std.ascii.eqlIgnoreCase(ext, ".ogg")) {
+            const player = try gpa.create(vorbis.Player);
+            errdefer gpa.destroy(player);
+            try player.init(gpa, data);
+            // 音乐必须包含可播放的帧。
+            std.debug.assert(player.sampleCount > 0);
+            return .{ .vorbis = player };
         }
 
-        const player = try gpa.create(vorbis.Player);
-        errdefer gpa.destroy(player);
-        try player.init(gpa, data);
-        // 音乐必须包含可播放的帧。
-        std.debug.assert(player.sampleCount > 0);
-        return .{ .decoder = .{ .vorbis = player } };
+        for (musicDecoders) |decoder| {
+            for (decoder.extensions) |extension| {
+                if (!std.ascii.eqlIgnoreCase(ext, extension)) continue;
+                return .{ .custom = try decoder.open(gpa, data, rate) };
+            }
+        }
+        return error.UnsupportedMusicFormat;
     }
 
     /// 释放播放器及其持有的数据；使用创建时的同一个分配器。
     pub fn deinit(self: MusicSource, gpa: Allocator) void {
-        switch (self.decoder) {
-            inline else => |player| {
+        switch (self) {
+            .vorbis => |player| {
                 player.deinit();
                 gpa.destroy(player);
             },
+            .custom => |source| source.vtable.deinit(source.ptr, gpa),
         }
     }
 
     /// 将当前格式的解码器复位到音乐开头。
     pub fn reset(self: MusicSource) void {
-        switch (self.decoder) {
-            inline else => |player| player.reset(),
+        switch (self) {
+            .vorbis => |player| player.reset(),
+            .custom => |source| source.vtable.reset(source.ptr),
         }
     }
 
-    /// 生成交错 PCM，两种解码器均返回实际填充的帧数。
+    /// 生成交错 PCM，返回实际填充的帧数。
     pub fn fillSamples(self: MusicSource, buffer: []f32, channels: i32) i32 {
-        return switch (self.decoder) {
-            inline else => |player| player.fillSamples(buffer, channels),
+        return switch (self) {
+            .vorbis => |player| player.fillSamples(buffer, channels),
+            .custom => |src| src.vtable.fillSamples(src.ptr, buffer, channels),
         };
     }
 };
@@ -453,11 +481,16 @@ fn readMusic(track: *Music, buffer: []f32, channels: usize) usize {
     const source = track.source;
     const countChannels: i32 = @intCast(channels);
     var len: usize = 0;
+    var afterReset = false;
     while (track.playing) {
         const frames = source.fillSamples(buffer[len..], countChannels);
+        std.debug.assert(!afterReset or frames != 0);
         len += @as(usize, @intCast(frames)) * channels;
         if (len == buffer.len) break;
-        if (track.loop) source.reset() else track.playing = false;
+        if (track.loop) {
+            source.reset();
+            afterReset = true;
+        } else track.playing = false;
     }
     return len;
 }

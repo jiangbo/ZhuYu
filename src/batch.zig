@@ -138,7 +138,7 @@ pub fn useScissor(rect: ?zhu.Rect) void {
 }
 
 // 在命令队列当前位置插入自定义 GPU 操作，ctx 必须保持有效直到 endDraw() 完成。
-pub fn addCustom(ctx: ?*anyopaque, func: CustomFn) void {
+pub fn addCustomCommand(ctx: ?*anyopaque, func: CustomFn) void {
     endDrawCommand();
     appendCommand(.{ .custom = .{ .ctx = ctx, .func = func } });
 }

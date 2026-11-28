@@ -20,8 +20,6 @@ pub fn build(b: *std.Build) !void {
     // 仅切换 Linux 桌面后端，Android 和 Web 继续使用各自的默认后端。
     const gles = b.option(bool, "gles3", "Use GLES3 on Linux") orelse false;
     const append = b.option(bool, "append", "Append asset pack") orelse false;
-    // 不使用 MIDI 的应用不编译播放器和内置音色。
-    const midi = b.option(bool, "midi", "Enable MIDI music") orelse false;
     // 默认按纹理绑定一个采样器，开启后允许实例分别选择过滤方式。
     const samplers = b.option(bool, "samplers", "Use two samplers") orelse false;
     const imgui = b.option(bool, "imgui", "Enable ImGui") orelse false;
@@ -35,7 +33,6 @@ pub fn build(b: *std.Build) !void {
         .linux => append and !target.result.abi.isAndroid(),
         else => false,
     });
-    options.addOption(bool, "midi", midi);
     options.addOption(bool, "samplers", samplers);
 
     // 参数读取完成后，统一计算平台和构建方式。
