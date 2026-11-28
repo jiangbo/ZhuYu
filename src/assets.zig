@@ -7,7 +7,7 @@ const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
-pub const fetch = @import("internal/fetch.zig");
+const fetch = @import("internal/fetch.zig");
 const core = @import("internal/core.zig");
 
 const oom = core.oom;
@@ -499,7 +499,7 @@ pub const music = struct {
     }
 };
 
-pub const Response = fetch.Response;
+const Response = fetch.Response;
 
 // 本帧处理的字符数和顶点数。
 pub const FrameStats = struct {

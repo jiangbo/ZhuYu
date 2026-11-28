@@ -9,11 +9,11 @@ pub const audio = @import("audio.zig");
 pub const graphics = @import("graphics.zig");
 pub const batch = @import("batch.zig");
 pub const camera = @import("camera.zig");
-pub const math = @import("math.zig");
 pub const text = @import("text.zig");
 pub const codec = @import("internal/codec.zig");
 pub const storage = platform.storage;
 const core = @import("internal/core.zig");
+const math = @import("internal/math.zig");
 const platform = @import("internal/platform.zig");
 
 pub const key = window.key;

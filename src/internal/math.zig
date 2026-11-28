@@ -438,7 +438,7 @@ pub const Rect = extern struct {
 
     /// self 沿 offset 平移，other 固定。
     /// 允许沿边滑动和相切。重叠时允许朝最近的边界退开。
-    pub fn sweep(self: Rect, other: anytype, offset: Vector2) ?Hit {
+    pub fn sweep(self: Rect, other: anytype, offset: Vector2) ?Shape.Hit {
         const T = @TypeOf(other);
         if (T == Rect) {
             // 目标向左上扩张后，只需扫移动矩形的左上角。
@@ -540,7 +540,7 @@ pub const Circle = struct {
 
     /// self 沿 offset 平移，other 固定。
     /// 允许沿边滑动和相切。重叠时允许朝最近的边界退开。
-    pub fn sweep(self: Circle, other: anytype, offset: Vector2) ?Hit {
+    pub fn sweep(self: Circle, other: anytype, offset: Vector2) ?Shape.Hit {
         const T = @TypeOf(other);
         if (T == Rect) return castRoundRect(self, offset, other);
         if (T == Circle) {
@@ -623,6 +623,15 @@ pub const Shape = union(enum) {
     rect: Rect,
     circle: Circle,
 
+    pub const Hit = struct {
+        /// 首次接触占请求位移的比例，范围为 [0, 1]。
+        fraction: f32,
+        /// 从目标表面垂直朝外的单位向量。
+        normal: Vector2,
+        /// 两个轴对齐矩形之间的接触可按轴约束位移。
+        rectPair: bool = false,
+    };
+
     // 返回形状的中心位置。
     pub fn center(self: Shape) Vector2 {
         return switch (self) {
@@ -687,15 +696,6 @@ pub const Shape = union(enum) {
     }
 };
 
-pub const Hit = struct {
-    /// 首次接触占请求位移的比例，范围为 [0, 1]。
-    fraction: f32,
-    /// 从目标表面垂直朝外的单位向量。
-    normal: Vector2,
-    /// 两个轴对齐矩形之间的接触可按轴约束位移。
-    rectPair: bool = false,
-};
-
 // 求线段在矩形两轴区间内的共同时间范围。
 fn castRect(
     start: Vector2,
@@ -703,7 +703,7 @@ fn castRect(
     min: Vector2,
     max: Vector2,
     comptime touch: bool,
-) ?Hit {
+) ?Shape.Hit {
     const within = start.x >= min.x and start.x <= max.x and
         start.y >= min.y and start.y <= max.y;
     if (touch and within) return .{ .fraction = 0, .normal = .zero };
@@ -746,7 +746,7 @@ fn castRect(
     return .{ .fraction = @floatCast(enter), .normal = normal };
 }
 
-fn castCircle(start: Vector2, offset: Vector2, circle: Circle, touch: bool) ?Hit {
+fn castCircle(start: Vector2, offset: Vector2, circle: Circle, touch: bool) ?Shape.Hit {
     const x = @as(f64, start.x) - circle.center.x;
     const y = @as(f64, start.y) - circle.center.y;
     const dx: f64, const dy: f64 = .{ offset.x, offset.y };
@@ -781,7 +781,7 @@ fn castCircle(start: Vector2, offset: Vector2, circle: Circle, touch: bool) ?Hit
     return .{ .fraction = @floatCast(fraction), .normal = normal };
 }
 
-fn castRoundRect(circle: Circle, offset: Vector2, rect: Rect) ?Hit {
+fn castRoundRect(circle: Circle, offset: Vector2, rect: Rect) ?Shape.Hit {
     const start = circle.center;
     const min, const max = .{ rect.min, rect.max() };
     const radius = circle.radius;
@@ -835,7 +835,7 @@ fn exitNormal(start: Vector2, offset: Vector2, min: Vector2, max: Vector2) Vecto
     return normal;
 }
 
-fn overlapHit(normal: Vector2, offset: Vector2) ?Hit {
+fn overlapHit(normal: Vector2, offset: Vector2) ?Shape.Hit {
     if (offset.dot(normal) >= 0) return null;
     return .{ .fraction = 0, .normal = normal };
 }

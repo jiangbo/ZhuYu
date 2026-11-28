@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const math = @import("../math.zig");
+const math = @import("../internal/math.zig");
 
 const Allocator = std.mem.Allocator;
 const BitSet = std.DynamicBitSetUnmanaged;
@@ -192,7 +192,7 @@ pub const Contact = struct {
     faces: Vector2 = .zero,
 
     /// 用单次 Shape.sweep 的命中更新最近接触，并合并同刻轴向面。
-    pub fn record(best: *?Contact, hit: math.Hit) void {
+    pub fn record(best: *?Contact, hit: Shape.Hit) void {
         if (best.* == null or hit.fraction < best.*.?.fraction) {
             best.* = .{
                 .fraction = hit.fraction,
