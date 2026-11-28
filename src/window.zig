@@ -4,11 +4,14 @@ const sk = @import("sokol");
 const options = @import("options");
 
 const platform = @import("internal/platform.zig");
-const zhu = @import("zhu.zig");
+const core = @import("internal/core.zig");
+const math = @import("internal/math.zig");
 const assets = @import("assets.zig");
 const audio = @import("audio.zig");
 const camera = @import("camera.zig");
 const text = @import("text.zig");
+
+const Vector = math.Vector;
 
 pub const Event = sk.app.Event;
 
@@ -23,22 +26,22 @@ pub const ScaleEnum = enum {
 
 pub const Option = struct {
     pack: ?assets.Pack = null,
-    logicSize: ?zhu.Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
+    logicSize: ?Vector = null, // 默认游戏逻辑尺寸，省略时使用请求的窗口尺寸。
     scaleEnum: ScaleEnum = .stretch, // 缩放模式
     disableIME: bool = true, // 禁用输入法
-    alignment: zhu.Vector = .center, // 对齐方式
+    alignment: Vector = .center, // 对齐方式
     init: ?fn (std.mem.Allocator) void = null,
     event: fn (*const Event) void = handleEvent,
     frame: fn (f32) void,
     deinit: ?fn (std.mem.Allocator) void = null,
 };
 
-pub var size: zhu.Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
+pub var size: Vector = .zero; // 实际窗口渲染像素尺寸，包含黑边，随窗口变化。
 // 默认游戏画面在窗口中的像素区域，由缩放模式计算，不随绘制切换而改变。
-pub var viewRect: zhu.Rect = undefined;
-pub var scale: zhu.Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
+pub var viewRect: math.Rect = undefined;
+pub var scale: Vector = .one; // 默认游戏画面从逻辑坐标到窗口像素的比例。
 var scaleEnum: ScaleEnum = undefined;
-var alignment: zhu.Vector = undefined;
+var alignment: Vector = undefined;
 
 var allocator: std.mem.Allocator = undefined;
 
@@ -48,7 +51,7 @@ pub fn setup(gpa: std.mem.Allocator) void {
 }
 
 // 请求的窗口尺寸在高 DPI 下不等于实际渲染像素。
-pub fn run(title: [:0]const u8, size_: zhu.Vector, comptime option: Option) void {
+pub fn run(title: [:0]const u8, size_: Vector, comptime option: Option) void {
     sk.time.setup();
     scaleEnum = option.scaleEnum;
     alignment = option.alignment;
@@ -104,7 +107,7 @@ fn windowInit(pack: ?assets.Pack) void {
         .allocator = assets.sokolAllocator(sk.gfx.Allocator),
     });
     assets.init(pack);
-    zhu.random.init(sk.time.now());
+    core.random.init(sk.time.now());
 }
 
 fn beginFrame() f32 {
@@ -188,7 +191,7 @@ pub fn handleEvent(ev: *const Event) void {
             for (ev.touches[0..@intCast(ev.num_touches)]) |point| {
                 if (!point.changed) continue;
                 touch.moved = true;
-                const raw: zhu.Vector = .xy(point.pos_x, point.pos_y);
+                const raw: Vector = .xy(point.pos_x, point.pos_y);
                 if (ev.type == .TOUCHES_BEGAN) {
                     press.pressed = true;
                     // 真实触点不使用鼠标槽位，ID 不作为数组索引。
@@ -501,9 +504,9 @@ pub const action = struct {
 pub const mouse = struct {
     // 当前帧收到移动事件，或逻辑位置因视口变化而改变。
     pub var moved: bool = false;
-    pub var raw: zhu.Vector = zhu.Vector.inf.neg(); // 原始像素坐标。
+    pub var raw: Vector = Vector.inf.neg(); // 原始像素坐标。
     // 帧开始时更新的游戏逻辑坐标；事件回调中仍为上一帧的值。
-    pub var pos: zhu.Vector = zhu.Vector.inf.neg();
+    pub var pos: Vector = Vector.inf.neg();
     pub var scrollY: f32 = 0;
     /// 鼠标捕获标记，由应用读写，引擎仅提供该字段。
     pub var captured: bool = false;
@@ -522,10 +525,10 @@ pub const touch = struct {
 
     pub const Point = struct {
         id: usize, // 真实触点使用系统标识，鼠标固定为 0。
-        start: zhu.Vector, // 按下时的原始像素坐标，后续保持不变。
-        raw: zhu.Vector, // 原始像素坐标。
+        start: Vector, // 按下时的原始像素坐标，后续保持不变。
+        raw: Vector, // 原始像素坐标。
         // 帧开始时更新的游戏逻辑坐标，新触点在换算前不命中 UI。
-        pos: zhu.Vector = zhu.Vector.inf.neg(),
+        pos: Vector = Vector.inf.neg(),
         state: enum { held, ended, cancelled } = .held, // 当前触点状态。
         began: bool = true, // 本帧是否按下。
         /// 捕获保留到触点移除，避免松手那一帧被下层控件读到。

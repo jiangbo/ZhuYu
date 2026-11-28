@@ -99,6 +99,11 @@ pub const getImage = assets.getImageByPath;
 pub const localTime = platform.localTime;
 pub const panic = std.debug.panic;
 pub const oom = core.oom;
+pub const format = core.format;
+pub const formatZ = core.formatZ;
+pub const toIndex = core.toIndex;
+pub const reinterpret = core.reinterpret;
+pub const readInt = core.readInt;
 
 /// 获取当前 Unix 时间戳；需要先调用 zhu.setup。
 pub fn timestamp() std.Io.Timestamp {
@@ -110,33 +115,6 @@ pub fn now() DateTime {
     return localTime(timestamp());
 }
 
-// 按内存布局重新解释值，调用方保证字段布局相符。
-pub fn reinterpret(comptime T: type, value: anytype) T {
-    const Value = @TypeOf(value);
-    if (@sizeOf(T) != @sizeOf(Value)) {
-        @compileError("types must have the same size");
-    }
-    // 本地副本满足两种类型的对齐，转换后返回值而非指针。
-    const source: Value align(@max(@alignOf(T), @alignOf(Value))) = value;
-    return @as(*const T, @ptrCast(&source)).*;
-}
-
-// 按小端字节序读取整数。
-pub fn readInt(comptime T: type, bytes: anytype) T {
-    return std.mem.readInt(T, bytes, .little);
-}
-
-// 格式化到缓冲区，空间不足时直接终止。
-pub fn format(buf: []u8, comptime fmt: []const u8, args: anytype) []u8 {
-    return std.mem.print(buf, fmt, args) catch @panic("buffer too small");
-}
-
-// 格式化为以零结尾的字符串，缓冲区不足时直接终止。
-pub fn formatZ(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]u8 {
-    return std.mem.printSentinel(buf, fmt, args, 0) catch
-        @panic("buffer too small");
-}
-
 pub const SetupOption = struct {
     storage: ?[]const u8 = null, // 应用数据名称；为空时不初始化存档。
 };
@@ -146,14 +124,6 @@ pub fn setup(info: std.process.Init, option: SetupOption) void {
     const gpa = assets.setup(info.io, info.gpa);
     platform.setup(info, gpa, option.storage);
     window.setup(gpa);
-}
-
-pub fn toIndex(T: type, value: anytype) T {
-    return switch (@typeInfo(@TypeOf(value))) {
-        .@"enum" => @intCast(@backingInt(value)),
-        .int, .comptime_int => @intCast(value),
-        else => @compileError("index must be enum or int"),
-    };
 }
 
 test "compile zhu modules" {

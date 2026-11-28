@@ -1,7 +1,7 @@
 //! Windows 平台接口，字体实现放在内部模块中。
 const std = @import("std");
 
-const zhu = @import("../zhu.zig");
+const core = @import("core.zig");
 const system = @import("../text.zig").system;
 const DateTime = @import("platform.zig").DateTime;
 
@@ -23,7 +23,7 @@ pub fn dataPath(_: Init, name: []const u8, buf: []u8) []const u8 {
     const wide = std.mem.span(path.?);
     if (std.unicode.calcWtf8Len(wide) > buf.len) @panic("buffer too small");
     const len = std.unicode.wtf16LeToWtf8(buf, wide);
-    const tail = zhu.format(buf[len..], "\\{s}", .{name});
+    const tail = core.format(buf[len..], "\\{s}", .{name});
     return buf[0 .. len + tail.len];
 }
 

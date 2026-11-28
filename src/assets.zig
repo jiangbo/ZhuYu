@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const options = @import("options");
 const sk = @import("sokol");
 
-const zhu = @import("zhu.zig");
 const graphics = @import("graphics.zig");
 const audio = @import("audio.zig");
 const decoder = @import("internal/image.zig");
@@ -13,7 +12,7 @@ const core = @import("internal/core.zig");
 const oom = core.oom;
 const panicFmt = std.debug.panic;
 const Image = graphics.Image;
-const Vector2 = zhu.Vector2;
+const Vector2 = @import("internal/math.zig").Vector2;
 const Filter = graphics.Filter;
 const Path = []const u8;
 const HashMap = std.AutoHashMapUnmanaged;

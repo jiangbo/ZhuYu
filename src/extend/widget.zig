@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const zhu = @import("../zhu.zig");
+const core = @import("../internal/core.zig");
+const math = @import("../internal/math.zig");
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
 const batch = @import("../batch.zig");
@@ -9,14 +10,15 @@ const text = @import("../text.zig");
 const audio = @import("../audio.zig");
 const assets = @import("../assets.zig");
 
-const Vector2 = zhu.Vector2;
+const Vector2 = math.Vector2;
+const Rect = math.Rect;
 
 /// 管理画面淡出和淡入；遮罩绘制使用调用方的相机和渲染目标。
 pub const Fade = struct {
     pub const Event = enum { covered, clear };
     const State = enum { clear, out, covered, in };
 
-    timer: zhu.Timer,
+    timer: core.Timer,
     state: State = .clear,
 
     pub fn init(duration: f32) Fade {
@@ -63,7 +65,7 @@ pub const Fade = struct {
         };
     }
 
-    pub fn draw(self: Fade, rect: zhu.Rect, color: graphics.Color) void {
+    pub fn draw(self: Fade, rect: Rect, color: graphics.Color) void {
         const opacity = self.alpha();
         if (opacity == 0) return;
         batch.drawRect(rect, .{ .color = color.scaleAlpha(opacity) });
@@ -76,11 +78,11 @@ pub const Button = struct {
     pub const Style = struct {
         color: ?graphics.Color = null,
         image: ?graphics.ImageId = null,
-        source: ?zhu.Rect = null,
+        source: ?Rect = null,
         text: text.Option = .{},
     };
 
-    shape: zhu.Shape, // 命中和绘制共用的矩形或圆形区域。
+    shape: math.Shape, // 命中和绘制共用的矩形或圆形区域。
     event: u16,
     label: []const u8 = "",
     patch: ?graphics.NineImage.Patch = null,
@@ -162,7 +164,7 @@ pub const Click = struct {
 
     // 每帧调用一次，区域内按下并释放才算点击。
     // 移出或取消即失效，再移回也不恢复。
-    pub fn update(self: *Click, rect: zhu.Rect) bool {
+    pub fn update(self: *Click, rect: Rect) bool {
         var state = if (self.touchPress) |*press| pressState(press, rect) else null;
         if (state == null) {
             self.touchPress = capturePress(rect);
@@ -252,17 +254,17 @@ pub const Menu = struct {
         wrap: bool = true,
     };
 
-    position: zhu.Vector2 = .zero,
+    position: Vector2 = .zero,
     overlay: ?graphics.Color = null,
     panel: struct {
-        size: zhu.Vector2 = .zero,
+        size: Vector2 = .zero,
         color: ?graphics.Color = null,
         image: ?graphics.ImageId = null,
-        source: ?zhu.Rect = null,
+        source: ?Rect = null,
     } = .{},
     title: struct {
         text: []const u8 = "",
-        position: zhu.Vector2 = .zero,
+        position: Vector2 = .zero,
         option: text.Option = .{ .anchor = .center },
     } = .{},
     buttons: []const Button = &.{},
@@ -277,7 +279,7 @@ pub const Menu = struct {
     pressed: ?usize = null, // 菜单内按下的按钮编号。
     touchPress: ?window.touch.Capture = null,
 
-    pub fn init(position: zhu.Vector2, menu: Menu) Menu {
+    pub fn init(position: Vector2, menu: Menu) Menu {
         var result = menu;
         result.position = position;
         result.reset();
@@ -364,7 +366,7 @@ pub const Menu = struct {
     pub fn updateEnum(self: *Menu, E: type, option: Option) ?E {
         const event = self.update(option) orelse return null;
         const Tag = @typeInfo(E).@"enum".tag_type;
-        return @fromBackingInt(zhu.toIndex(Tag, event));
+        return @fromBackingInt(core.toIndex(Tag, event));
     }
 
     fn defaultNav(self: Menu) Nav {
@@ -393,7 +395,7 @@ pub const Menu = struct {
     // 绘制遮罩、面板和按钮等非文字内容。
     pub fn drawImage(self: Menu) void {
         if (self.overlay) |overlay| {
-            const rect: zhu.Rect = .init(.zero, camera.size);
+            const rect: Rect = .init(.zero, camera.size);
             batch.drawRect(rect, .{ .color = overlay });
         }
         self.drawPanel();
@@ -423,7 +425,7 @@ pub const Menu = struct {
     }
 
     fn drawPanel(self: Menu) void {
-        const rect = zhu.Rect.init(self.position, self.panel.size);
+        const rect = Rect.init(self.position, self.panel.size);
         if (self.panel.color) |color| {
             batch.drawRect(rect, .{ .color = color });
         }

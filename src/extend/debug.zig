@@ -1,7 +1,8 @@
 const std = @import("std");
 const sk = @import("sokol");
 
-const zhu = @import("../zhu.zig");
+const core = @import("../internal/core.zig");
+const math = @import("../internal/math.zig");
 const assets = @import("../assets.zig");
 const audio = @import("../audio.zig");
 const batch = @import("../batch.zig");
@@ -11,8 +12,8 @@ const text = @import("../text.zig");
 const window = @import("../window.zig");
 
 const Color = graphics.Color;
-const Vector2 = zhu.Vector2;
-const Rect = zhu.Rect;
+const Vector2 = math.Vector2;
+const Rect = math.Rect;
 
 // 是否启用调试面板绘制。
 pub var enabled: bool = false;
@@ -45,7 +46,7 @@ const Columns = struct {
 //         std.debug.panic("zon load failed: {s}", .{path});
 //     }
 //     const result = zonMap.getOrPut(allocator, path) //
-//         catch zhu.oom();
+//         catch core.oom();
 //     if (!result.found_existing) {
 //         result.value_ptr.* = .{
 //             .path = path,
@@ -291,8 +292,8 @@ fn writeFormatLine(
 ) void {
     var leftBuffer: [80]u8 = undefined;
     var rightBuffer: [80]u8 = undefined;
-    const left = zhu.format(&leftBuffer, leftFormat, leftArgs);
-    const right = zhu.format(&rightBuffer, rightFormat, rightArgs);
+    const left = core.format(&leftBuffer, leftFormat, leftArgs);
+    const right = core.format(&rightBuffer, rightFormat, rightArgs);
     writeLine(&columns.label, label);
     writeLine(&columns.left, left);
     writeLine(&columns.right, right);

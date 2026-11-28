@@ -4,14 +4,15 @@ const sk = @import("sokol");
 
 const platform = @import("internal/platform.zig");
 const assets = @import("assets.zig");
-const zhu = @import("zhu.zig");
+const core = @import("internal/core.zig");
+const math = @import("internal/math.zig");
 const graphics = @import("graphics.zig");
 const batch = @import("batch.zig");
 const window = @import("window.zig");
 
 const Image = graphics.Image;
-const Vector2 = zhu.Vector2;
-const Rect = zhu.Rect;
+const Vector2 = math.Vector2;
+const Rect = math.Rect;
 const Color = graphics.Color;
 pub const String = []const u8;
 
@@ -57,7 +58,7 @@ pub fn drawNumber(number: anytype, pos: Vector2, option: Option) void {
 
 pub fn drawFmt(comptime fmt: String, args: anytype, pos: Vector2, o: Option) void {
     var buffer: [1024]u8 = undefined;
-    draw(zhu.format(&buffer, fmt, args), pos, o);
+    draw(core.format(&buffer, fmt, args), pos, o);
 }
 
 const Utf8View = std.unicode.Utf8View;
@@ -246,7 +247,7 @@ pub const static = if (options.font == .static) struct {
     };
 
     pub const Page = struct { min: u32, max: u32, chars: []const Char };
-    pub const Char = struct { id: u32, rect: zhu.Rect, offset: Vector2, advance: f32 };
+    pub const Char = struct { id: u32, rect: Rect, offset: Vector2, advance: f32 };
     const Entry = struct { page: usize, char: *const Char };
 
     pub var size: f32 = undefined;
@@ -339,7 +340,7 @@ pub const system = if (options.font == .system) struct {
     // 平台接口使用像素度量，公共层统一换算为逻辑单位。
     pub const Metrics = extern struct { ascent: f32, descent: f32, height: f32 };
     // 单个码位的字形度量；矩形相对基线，使用像素单位，不含透明边框。
-    pub const Char = extern struct { rect: zhu.Rect, advance: f32 };
+    pub const Char = extern struct { rect: Rect, advance: f32 };
 
     const backend = platform.backend.font;
     var nameBuffer: [1024]u8 = undefined; // 持有平台查询到的 UTF-8 名称。

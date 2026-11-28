@@ -2,7 +2,7 @@
 //! FreeType 对象由库分配；这里只声明读取字段所需的结构体前缀。
 const std = @import("std");
 
-const zhu = @import("../zhu.zig");
+const core = @import("core.zig");
 const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
@@ -11,10 +11,10 @@ const Init = std.process.Init;
 pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     if (info.environ_map.get("XDG_DATA_HOME")) |base| {
         if (std.Io.Dir.path.isAbsolute(base))
-            return zhu.format(buf, "{s}/{s}", .{ base, name });
+            return core.format(buf, "{s}/{s}", .{ base, name });
     }
     const home = info.environ_map.get("HOME") orelse @panic("HOME not set");
-    return zhu.format(buf, "{s}/.local/share/{s}", .{ home, name });
+    return core.format(buf, "{s}/.local/share/{s}", .{ home, name });
 }
 
 pub fn setup(_: std.mem.Allocator) void {}

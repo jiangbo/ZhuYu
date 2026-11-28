@@ -1,7 +1,7 @@
 //! 浏览器宿主接口，JavaScript 实现位于 web.js，通过 --js-library 注入。
 const std = @import("std");
 
-const zhu = @import("../zhu.zig");
+const core = @import("core.zig");
 const DateTime = @import("platform.zig").DateTime;
 const system = @import("../text.zig").system;
 
@@ -11,7 +11,7 @@ pub fn setup(_: std.mem.Allocator) void {}
 
 // 应用名称作为浏览器存储键前缀，借用公共层持有的路径缓冲。
 pub fn dataPath(_: std.process.Init, name: []const u8, buf: []u8) []const u8 {
-    storage.dataName = zhu.format(buf, "{s}", .{name});
+    storage.dataName = core.format(buf, "{s}", .{name});
     return storage.dataName;
 }
 
@@ -107,7 +107,7 @@ pub const storage = struct {
 
     fn key(buf: []u8, path: []const u8) [:0]u8 {
         if (dataName.len == 0) @panic("set a storage name in zhu.setup");
-        return zhu.formatZ(buf, "{s}/{s}", .{ dataName, path });
+        return core.formatZ(buf, "{s}/{s}", .{ dataName, path });
     }
 
     const Load = union(enum) { loaded: []u8, tooSmall: usize };

@@ -1,7 +1,7 @@
 //! macOS 与 iOS 共用系统字体，公共层负责缓存和图集。
 const std = @import("std");
 
-const zhu = @import("../zhu.zig");
+const core = @import("core.zig");
 const system = @import("../text.zig").system;
 
 const Init = std.process.Init;
@@ -10,8 +10,8 @@ const Init = std.process.Init;
 pub fn dataPath(info: Init, name: []const u8, buf: []u8) []const u8 {
     const home = info.environ_map.get("HOME") orelse @panic("HOME not set");
     if (@import("builtin").os.tag == .ios)
-        return zhu.format(buf, "{s}/Library/Application Support", .{home});
-    return zhu.format(buf, "{s}/Library/Application Support/{s}", .{ home, name });
+        return core.format(buf, "{s}/Library/Application Support", .{home});
+    return core.format(buf, "{s}/Library/Application Support/{s}", .{ home, name });
 }
 
 pub fn setup(_: std.mem.Allocator) void {}

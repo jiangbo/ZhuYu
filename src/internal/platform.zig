@@ -3,7 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sk = @import("sokol");
 
-const zhu = @import("../zhu.zig");
+const core = @import("core.zig");
 const codec = @import("codec.zig");
 const web = @import("web.zig");
 const android = @import("android.zig");
@@ -11,7 +11,7 @@ const android = @import("android.zig");
 const Init = std.process.Init;
 const Io = std.Io;
 const assert = std.debug.assert;
-const print = zhu.format;
+const print = core.format;
 
 var io: Io = undefined;
 

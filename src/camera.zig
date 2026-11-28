@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const zhu = @import("zhu.zig");
+const math = @import("internal/math.zig");
 const key = @import("window.zig").key;
 
-const Vector2 = zhu.Vector2;
+const Vector2 = math.Vector2;
 
 pub const Camera = struct {
     position: Vector2 = .zero,
@@ -50,7 +50,7 @@ pub const State = struct {
     camera: Camera, // 当前批次的基准相机，记录时保存快照。
     snap: bool, // 当前批次是否将投影平移对齐到实际像素。
     size: Vector2, // 当前绘制的逻辑尺寸。
-    viewRect: zhu.Rect, // 当前绘制使用的实际像素视口。
+    viewRect: math.Rect, // 当前绘制使用的实际像素视口。
 };
 
 pub var state: State = undefined;
@@ -91,7 +91,7 @@ pub fn toWorld(point: Vector2) Vector2 {
 }
 
 // 返回主相机在世界坐标中的可见矩形，供地图裁剪使用。
-pub fn mainWorldRect() zhu.Rect {
+pub fn mainWorldRect() math.Rect {
     return .init(main.position, size.div(main.scale));
 }
 
@@ -135,13 +135,13 @@ pub fn smoothFollow(pos: Vector2, speed: f32, delta: f32) void {
 
     if (@abs(distance.x) < 1) main.position.x = target.x else {
         var moved = distance.x * smooth;
-        if (@abs(moved) < 1) moved = zhu.ceilAway(moved);
+        if (@abs(moved) < 1) moved = math.ceilAway(moved);
         main.position.x += moved;
     }
 
     if (@abs(distance.y) < 1) main.position.y = target.y else {
         var moved = distance.y * smooth;
-        if (@abs(moved) < 1) moved = zhu.ceilAway(moved);
+        if (@abs(moved) < 1) moved = math.ceilAway(moved);
         main.position.y += moved;
     }
     clampBound();

@@ -5,6 +5,40 @@ pub fn oom() noreturn {
     @panic("out of memory");
 }
 
+/// 格式化到缓冲区，空间不足时终止。
+pub fn format(buf: []u8, comptime fmt: []const u8, args: anytype) []u8 {
+    return std.mem.print(buf, fmt, args) catch @panic("buffer too small");
+}
+
+/// 格式化为以零结尾的字符串，缓冲区不足时终止。
+pub fn formatZ(buf: []u8, comptime fmt: []const u8, args: anytype) [:0]u8 {
+    return std.mem.printSentinel(buf, fmt, args, 0) catch @panic("buffer too small");
+}
+
+pub fn toIndex(T: type, value: anytype) T {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .@"enum" => @intCast(@backingInt(value)),
+        .int, .comptime_int => @intCast(value),
+        else => @compileError("index must be enum or int"),
+    };
+}
+
+// 按内存布局重新解释值，调用方保证字段布局相符。
+pub fn reinterpret(comptime T: type, value: anytype) T {
+    const Value = @TypeOf(value);
+    if (@sizeOf(T) != @sizeOf(Value)) {
+        @compileError("types must have the same size");
+    }
+    // 本地副本满足两种类型的对齐，转换后返回值而非指针。
+    const source: Value align(@max(@alignOf(T), @alignOf(Value))) = value;
+    return @as(*const T, @ptrCast(&source)).*;
+}
+
+// 按小端字节序读取整数。
+pub fn readInt(comptime T: type, bytes: anytype) T {
+    return std.mem.readInt(T, bytes, .little);
+}
+
 pub const Counter = struct {
     child: std.mem.Allocator,
     // 各项独立统计，不要求读取时属于同一个瞬间。

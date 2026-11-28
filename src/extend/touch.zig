@@ -2,7 +2,7 @@ const std = @import("std");
 
 const window = @import("../window.zig");
 const camera = @import("../camera.zig");
-const zhu = @import("../zhu.zig");
+const math = @import("../internal/math.zig");
 const batch = @import("../batch.zig");
 const text = @import("../text.zig");
 const Color = @import("../graphics.zig").Color;
@@ -17,7 +17,7 @@ pub const Option = struct {
     button: Button,
     key: ?window.key.Code = null,
     label: ?[]const u8 = null, // 空切片表示不显示文字。
-    shape: ?zhu.Shape = null, // 未指定时沿用默认布局。
+    shape: ?math.Shape = null, // 未指定时沿用默认布局。
     hidden: bool = false, // 同时控制输入和绘制，不修改形状。
 
     // 将菜单按钮改为返回键。
@@ -171,13 +171,13 @@ fn initButtons() void {
 fn layoutButtons() void {
     buttonCamera = .windowDpi();
     const size = buttonCamera.toWorld(window.size);
-    const confirm: zhu.Circle = .init(size.addXY(-100, -84), 44);
+    const confirm: math.Circle = .init(size.addXY(-100, -84), 44);
     // 菜单贴齐确定键的底边，功能键贴齐确定键的右边。
     const bottom = confirm.center.y + confirm.radius;
     const right = confirm.center.x + confirm.radius;
     const menuY = bottom - 32;
     const extraX = right - 32;
-    const circles: std.EnumArray(Button, zhu.Circle) = .init(.{
+    const circles: std.EnumArray(Button, math.Circle) = .init(.{
         .enter = confirm,
         // 与确定键的圆形边缘间距约 10。
         .menu = .init(.xy(size.x - 185.2, menuY), 32),
@@ -301,7 +301,7 @@ fn drawButtons() void {
 }
 
 // 根据按住状态选择颜色，绘制单个按钮的形状。
-fn drawShape(shape: zhu.Shape, down: bool) void {
+fn drawShape(shape: math.Shape, down: bool) void {
     // 黑白配色：普通状态为半透明黑底，按住时使用深灰底和明亮白边。
     const normalBorder = Color.gray(255, 102);
     const pressedBorder = Color.gray(255, 242);
@@ -350,11 +350,11 @@ pub const stick = struct {
     pub const end = endControls;
 
     // 摇杆启动区域，使用 DPI 坐标，布局默认设置为屏幕最左侧四分之一。
-    pub var area: zhu.Rect = undefined;
+    pub var area: math.Rect = undefined;
     // 摇杆只跟踪一个触点，中心在本次操作中保持不变。
     var touchPress: ?window.touch.Capture = null;
-    var center: zhu.Vector2 = .zero;
-    var offset: ?zhu.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
+    var center: math.Vector2 = .zero;
+    var offset: ?math.Vector2 = null; // 原始位移，null 表示没有摇杆操作。
     // 记录摇杆产生的上、下、左、右按键，只在状态变化时发送事件。
     var held: [4]bool = @splat(false);
 
@@ -374,7 +374,7 @@ pub const stick = struct {
     }
 
     // 更新功能按钮并返回摇杆原始位移，每帧与 update 二选一调用。
-    pub fn updateOffset() ?zhu.Vector2 {
+    pub fn updateOffset() ?math.Vector2 {
         pad.update();
         if (window.resized) layout();
         offset = updateStick();
@@ -384,7 +384,7 @@ pub const stick = struct {
     // 更新摇杆和功能按钮，将位移转换为四方向按键，下一帧生效。
     // 每帧与 updateOffset 二选一调用，位移未超过 12 个界面单位时不触发方向键。
     pub fn update() void {
-        const value = updateOffset() orelse zhu.Vector2.zero;
+        const value = updateOffset() orelse math.Vector2.zero;
         const deadZone = 12; // 摇杆中心不触发方向键的范围，使用界面单位。
         // 只取偏移较大的轴，一次仅产生一个方向。
         const horizontal = @abs(value.x) > @abs(value.y);
@@ -403,7 +403,7 @@ pub const stick = struct {
     }
 
     // 空闲时捕获区域内新按下的触点，之后持续跟踪同一槽位。
-    fn updateStick() ?zhu.Vector2 {
+    fn updateStick() ?math.Vector2 {
         if (touchPress) |*press| {
             if (press.get()) |point| if (point.state == .held) {
                 return buttonCamera.toWorld(point.raw).sub(center);
