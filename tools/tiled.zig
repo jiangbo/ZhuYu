@@ -394,7 +394,7 @@ const Convert = struct {
         const tag = std.meta.stringToEnum(tiled.PropertyEnum, property.type).?;
         return switch (tag) {
             .string => .{ .string = property.value.string },
-            .int => .{ .int = @intCast(property.value.integer) },
+            .int => .{ .int = property.value.integer },
             .float => switch (property.value) {
                 .float => |value| .{ .float = @floatCast(value) },
                 .integer => |value| .{ .float = @floatFromInt(value) },
@@ -412,7 +412,7 @@ const Convert = struct {
         };
     }
 
-    // 类属性沿用现有格式，数字成员统一保存为浮点数。
+    // 类成员按 JSON 值保存，由读取方指定类型。
     fn parseClassProperties(self: Convert, value: std.json.Value) ![]tiled.Property {
         var object = switch (value) {
             .object => |object| object,
@@ -426,7 +426,7 @@ const Convert = struct {
                 .name = entry.key_ptr.*,
                 .value = switch (entry.value_ptr.*) {
                     .string => |v| .{ .string = v },
-                    .integer => |v| .{ .float = @floatFromInt(v) },
+                    .integer => |v| .{ .int = v },
                     .float => |v| .{ .float = @floatCast(v) },
                     .bool => |v| .{ .bool = v },
                     else => return error.InvalidClassMemberValue,

@@ -194,11 +194,17 @@ pub const PropertyEnum = enum {
     class,
 };
 
-pub const ObjectId = enum(u32) { _ };
+pub const ObjectId = enum(u32) {
+    _,
+
+    fn fromInt(id: u32) ?ObjectId {
+        return if (id == 0) null else @fromBackingInt(id);
+    }
+};
 
 pub const PropertyValue = union(PropertyEnum) {
     string: []const u8, // 字符串值
-    int: i32, // 整数值
+    int: i64, // 整数值
     float: f32, // 浮点数值
     bool: bool, // 布尔值
     object: u32, // 引用物体 ID，0 表示未设置。
@@ -208,10 +214,7 @@ pub const PropertyValue = union(PropertyEnum) {
         if (T == []const u8) return self.string;
         if (T == bool) return self.bool;
         if (T == ClassProperty) return self.class;
-        if (T == ObjectId) {
-            const id = self.object;
-            return if (id == 0) null else @fromBackingInt(id);
-        }
+        if (T == ObjectId) return ObjectId.fromInt(self.object);
         if (@typeInfo(T) == .int) return @intCast(self.int);
         if (@typeInfo(T) == .float) return @floatCast(self.float);
         @compileError("unsupported property type: " ++ @typeName(T));
@@ -228,7 +231,13 @@ pub const ClassProperty = struct {
 
     pub fn get(self: ClassProperty, name: []const u8, T: type) ?T {
         for (self.properties) |property| {
-            if (property.is(name)) return property.value.get(T);
+            if (!property.is(name)) continue;
+            const value = property.value;
+            if (value == .int) {
+                if (T == ObjectId) return ObjectId.fromInt(@intCast(value.int));
+                if (@typeInfo(T) == .float) return @floatFromInt(value.int);
+            }
+            return value.get(T);
         }
         return null;
     }
