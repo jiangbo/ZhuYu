@@ -13,6 +13,7 @@ pub const Options = struct {
     name: []const u8 = "tiled",
     format: enum { zon, bin, zlib } = .zon,
     terrain: bool = false, // 是否导出 Wang 地形规则。
+    includeHiddenLayers: bool = false, // 是否导出隐藏层。
     mergeTileSets: bool = true, // 合并为 tileSet；关闭时保留 TSJ 相对路径。
     tileSetDir: []const u8 = "", // 合并瓦片集相对于 output 的目录。
 };
@@ -118,6 +119,7 @@ pub fn main(init: std.process.Init) !void {
             .gpa = gpa,
             .root = root,
             .directory = std.fs.path.dirname(path).?,
+            .includeHiddenLayers = options.includeHiddenLayers,
         };
         const content = try dir.readFileAlloc(io, relative, gpa, .unlimited);
         const value = try std.json.parseFromSliceLeaky(
@@ -177,6 +179,7 @@ const Convert = struct {
     root: []const u8,
     directory: []const u8,
     terrain: bool = false,
+    includeHiddenLayers: bool = false,
 
     // 图片和瓦片集统一使用根目录相对路径，图片 ID 与 atlas 保持一致。
     fn fileId(self: Convert, file: []const u8) !u32 {
@@ -317,17 +320,18 @@ const Convert = struct {
         };
     }
 
-    // 可见层按源文件顺序紧密写入，隐藏层不占输出位置。
+    // 保留源文件的图层顺序和可见性。
     fn parseLayers(self: Convert, layers: []const JsonLayer) ![]tiled.Layer {
         const result = try self.gpa.alloc(tiled.Layer, layers.len);
         var count: usize = 0;
         for (layers) |old| {
-            if (!old.visible) continue;
+            if (!old.visible and !self.includeHiddenLayers) continue;
             var layer: tiled.Layer = .{
                 .id = old.id,
                 .name = old.name,
                 .image = 0,
                 .type = .tile,
+                .visible = old.visible,
                 .width = 0,
                 .height = 0,
                 .offset = .{ .x = old.offsetx, .y = old.offsety },
